@@ -13,7 +13,7 @@
 GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert any GitHub repository into an interactive, intelligent flowchart. Ask questions about code structure and how to use the repository with an AI chatbot. (Made with Claude Code)
 
 <div align="center">
-  <img src="./public/logo.png" alt="Rassam Agent Logo" width="200" height="200" />
+  <a href="https://rassam.dev" target="_blank"><img src="./public/logo.png" alt="Rassam Agent Logo" width="220" height="220" /></a>
 </div>
 
 ---
