@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+@theme {
+  --color-slate-950: #020617;
+  --color-slate-900: #0f172a;
+  --color-slate-800: #1e293b;
+  --color-slate-700: #334155;
+  --color-slate-600: #475569;
+  --color-slate-500: #64748b;
+  --color-slate-400: #94a3b8;
+  --color-slate-300: #cbd5e1;
+  --color-slate-200: #e2e8f0;
+  --color-slate-100: #f1f5f9;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-900: #1e3a8a;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-purple-400: #c084fc;
+  --color-purple-500: #a855f7;
+  --animate-spin: spin 1s linear infinite;
+  --animate-bounce: bounce 1s infinite;
+  --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+:root {
+  --background: #020617;
+  --foreground: #f1f5f9;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #1b222d;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* React Flow customizations */
+.react-flow__handle {
+  transition: transform 0.15s ease;
+}
+
+.react-flow__handle:hover {
+  transform: scale(1.3);
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 3;
+}
+
+/* Remove React Flow default selection outline - we handle this in our node components */
+.react-flow__node {
+  /* Remove transition for better drag performance */
+}
+
+.react-flow__node.selected {
+  /* Remove default box-shadow - handled by node component */
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.react-flow__node:focus {
+  outline: none !important;
+}
+
+.react-flow__node.selected > div {
+  /* Single border is handled by the node component itself */
+}
+
+.react-flow__minimap {
+  border-radius: 12px !important;
+  overflow: hidden;
+}
+
+.react-flow__controls {
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.3);
+}
+
+.react-flow__controls-button {
+  transition: all 0.15s ease;
+}
+
+/* Syntax highlighter overrides */
+pre code.hljs {
+  padding: 0 !important;
+}
+
+/* Prose styling for markdown */
+.prose pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.prose code {
+  background: transparent;
+  padding: 0;
+}
+
+/* Animation keyframes */
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(-25%);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+  }
+  50% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(8, 10, 17, 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(42, 54, 71, 0.5);
+}
+
+/* Focus ring */
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px #020617, 0 0 0 4px #3b82f6;
+}
+
+/* Resize handle styling */
+.resize-handle {
+  touch-action: none;
+  user-select: none;
+}
+
+/* React Flow performance optimizations */
+.react-flow__renderer {
+  will-change: transform;
+}
+
+.react-flow__node {
+  /* Use GPU acceleration for dragging */
+  will-change: transform;
+  contain: layout style paint;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.react-flow__edge {
+  contain: layout style;
+}
+
+/* Disable pointer events on pane during drag for performance */
+.react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+/* Optimize edge rendering */
+.react-flow__edges {
+  contain: layout style;
+}
+
+/* Smooth transitions */
+.transition-smooth {
+  transition: all 0.15s ease-out;
+}
+
+/* No select during resize */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
