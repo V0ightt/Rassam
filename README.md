@@ -104,12 +104,13 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 
 ## ❤️ Special Thanks
 
--   **GitHub Student Pack**: Thanks to GitHub for their amazing Student Developer Pack!
--   **Claude Opus 4.5**: This project was made with the help of **Claude Opus 4.5**.
+-   **GitHub Student Pack**: Thanks to Github for their amazing Student Developer Pack!
+-   **Anthropic**: This project was made with the help of **Claude Opus 4.5**.
 
 ## 📬 Contact
 
 -   **Discord**: `v0ight_`
 -   **LinkedIn**: [Momen Saeb](https://www.linkedin.com/in/momen-saeb-b88183283/)
+-   **Mail**: `contact@rassam.dev`
 
 
