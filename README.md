@@ -9,6 +9,8 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
 [![Website](https://img.shields.io/badge/Website-rassam.dev-blue?style=for-the-badge&logo=google-chrome&logoColor=white)](https://rassam.dev)
+![AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=for-the-badge)
+
 
 GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert any GitHub repository into an interactive, intelligent flowchart. Ask questions about code structure and how to use the repository with an AI chatbot. (Made with Claude Code)
 
