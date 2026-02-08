@@ -5,6 +5,8 @@
 >Latest Updates:
 >Improved AI prompts for better architecture understanding. Enhanced chatbot context awareness.
 
+>[!Tip]
+>Why Rassam? Rassam (رسّام) means painter in arabic.
 # Rassam Agent
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
