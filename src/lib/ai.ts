@@ -1,11 +1,5 @@
-import OpenAI from "openai";
 import { NodeCategory } from "@/types";
-
-// Initialize OpenAI client with DeepSeek configuration
-export const deepseek = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY || "sk-placeholder",
-  baseURL: "https://api.deepseek.com",
-});
+import { getProvider } from "@/lib/llm";
 
 // Category detection based on file paths
 export function detectCategory(files: string[]): NodeCategory {
@@ -90,21 +84,15 @@ Return JSON in this exact format:
 }`;
 
   try {
-    const response = await deepseek.chat.completions.create({
-      model: "deepseek-reasoner",
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a helpful assistant that analyzes codebases and outputs valid JSON only. No markdown, no explanations, just JSON." 
-        },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
+    const provider = getProvider();
+    const content = await provider.generateStructure({
+      system: "You are a helpful assistant that analyzes codebases and outputs valid JSON only. No markdown, no explanations, just JSON.",
+      prompt,
       temperature: 0.3,
+      json: true,
     });
 
-    const content = response.choices[0].message.content || "{}";
-    const result = JSON.parse(content);
+    const result = JSON.parse(content || "{}");
     
     // Post-process to ensure categories are valid and add complexity if missing
     if (result.nodes) {
@@ -214,17 +202,15 @@ INSTRUCTIONS:
 9. When file content is provided, analyze it directly to answer questions`;
 
   try {
-    const response = await deepseek.chat.completions.create({
-      model: "deepseek-reasoner",
-      messages: [
-        { role: "system", content: systemMessage },
-        { role: "user", content: message }
-      ],
+    const provider = getProvider();
+    const response = await provider.chat({
+      system: systemMessage,
+      message,
       temperature: 0.7,
-      max_tokens: 2000,
+      maxTokens: 2000,
     });
 
-    return response.choices[0].message.content;
+    return response;
   } catch (error) {
     console.error("Chat Error:", error);
     throw error;

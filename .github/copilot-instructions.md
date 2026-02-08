@@ -49,7 +49,7 @@
 - [x] Ensure Documentation is Complete
 	<!--
 	Verify that all previous steps have been completed.
-	Verify that README.md and the copilot-instructions.md file in the .github directory exists and contains current project information.
+	Verify that agents.md and README.md and the copilot-instructions.md file in the .github directory exists and contains current project information.
 	Clean up the copilot-instructions.md file in the .github directory by removing all HTML comments.
 	 -->
 
@@ -105,4 +105,4 @@ Before starting a new task in the above plan, update progress in the plan.
 - Work through each checklist item systematically.
 - Keep communication concise and focused.
 - Follow development best practices.
-- When you are done ensure agents.md is up to date.
+- When you are done ensure agents.md is up to date with the changes you made.

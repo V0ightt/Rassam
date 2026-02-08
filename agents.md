@@ -15,7 +15,7 @@ This document is designed to help future coding agents understand the architectu
 -   **Styling**: Tailwind CSS v4 (Dark Theme with Cyan accents)
 -   **Visualization**: React Flow (Graph/Node rendering)
 -   **Layout Engine**: Dagre (Auto-layout with improved spacing for system design)
--   **AI**: DeepSeek API (via OpenAI SDK compatibility) - Model: deepseek-reasoner
+-   **AI**: LLM provider abstraction (DeepSeek, OpenAI, Anthropic, Google, Ollama) via adapters
 -   **GitHub API**: Octokit
 -   **Markdown**: React Markdown + React Syntax Highlighter
 -   **Export**: html-to-image
@@ -29,7 +29,7 @@ This document is designed to help future coding agents understand the architectu
     -   Filters for relevant file types (blobs).
     -   Supports fetching file content (used by chat for README.md and specific file queries).
 4.  **AI Analysis** (`src/lib/ai.ts`):
-    -   Sends the file list to DeepSeek.
+  -   Sends the file list to the selected LLM provider adapter.
     -   Prompt asks strictly for a JSON output containing `nodes` (with category, complexity, dependencies) and `edges` (with type, direction, and strength).
     -   Supports system design categories for architectural diagrams.
 5.  **Graph Layout** (`src/app/api/repo/route.ts`):
@@ -120,6 +120,7 @@ interface EdgeData {
 -   Edit the prompt in `src/lib/ai.ts` in the `analyzeRepoStructure` function.
 -   Ensure the prompt explicitly enforces JSON format with the expected schema.
 -   Use `detectCategory` and `estimateComplexity` helpers for post-processing.
+-   Provider selection is env-driven via `LLM_PROVIDER` (deepseek, openai, anthropic, google, ollama).
 
 ### Adding New Node Categories
 1.  Add the category to `NodeCategory` type in `src/types/index.ts`.
@@ -143,5 +144,10 @@ interface EdgeData {
 
 ## Environment Variables
 Ensure these are set in `.env.local` for local development:
--   `DEEPSEEK_API_KEY`: Required for analysis and chat.
+-   `DEEPSEEK_API_KEY`: Required when using the DeepSeek provider.
+-   `OPENAI_API_KEY`: Required when using the OpenAI provider.
+-   `ANTHROPIC_API_KEY`: Required when using the Anthropic provider.
+-   `GOOGLE_API_KEY`: Required when using the Google provider.
+-   `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`.
+-   `OLLAMA_API_KEY`: Optional, defaults to `ollama`.
 -   `GITHUB_TOKEN`: Recommended to avoid rate limits on repo fetching.
