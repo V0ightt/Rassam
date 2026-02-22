@@ -29,13 +29,16 @@ import {
 import { cn } from '@/lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Node } from 'reactflow';
-import { ChatSession, ChatMessage } from '@/types';
+import { Edge, Node } from 'reactflow';
+import { CanvasSyncSnapshot, ChatSession, ChatMessage } from '@/types';
 
 interface ChatbotProps {
   selectedNode: any | null;
   repoDetails?: { owner: string; repo: string } | null;
   allNodes?: Node[];
+  allEdges?: Edge[];
+  projectName?: string;
+  syncedCanvasContext?: CanvasSyncSnapshot | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
   onUpdateMessages: (messages: ChatMessage[]) => void;
@@ -63,7 +66,7 @@ const globalQuickActions = [
 const defaultMessages: ChatMessage[] = [{
   id: '1',
   role: 'assistant', 
-  content: "👋 Hi! I'm **Rassam**, your AI assistant for understanding code.\n\n**Quick tips:**\n- Enter a GitHub URL to analyze a repository\n- Click on any node to ask questions about it\n- Use the quick actions for common queries\n\nLet's explore some code together!",
+  content: "👋 Hi! I'm **Rassam**, your AI assistant for understanding code and flowcharts.\n\n**Quick tips:**\n- Create a project from GitHub URL or start with an empty canvas\n- Click on any node to ask questions about it\n- Use the canvas **Sync** button before chat for the latest graph context\n\nLet's explore your architecture together!",
   timestamp: new Date()
 }];
 
@@ -71,6 +74,9 @@ export default function EnhancedChatbot({
   selectedNode, 
   repoDetails, 
   allNodes,
+  allEdges,
+  projectName,
+  syncedCanvasContext,
   chatSessions,
   activeChatSessionId,
   onUpdateMessages,
@@ -121,15 +127,50 @@ export default function EnhancedChatbot({
     setShowQuickActions(false);
 
     try {
-      // Prepare all nodes context for full project understanding
-      const allNodesContext = allNodes?.map(n => ({
-        label: n.data.label,
-        category: n.data.category,
-        description: n.data.description,
-        files: n.data.files,
-        complexity: n.data.complexity,
-        dependencies: n.data.dependencies,
-      })) || [];
+      const liveCanvasContext: CanvasSyncSnapshot = {
+        syncedAt: new Date().toISOString(),
+        project: {
+          id: 'live-canvas',
+          name: projectName || (repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : 'Untitled Project'),
+          source: repoDetails ? 'github' : 'empty',
+          repo: repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : undefined,
+        },
+        layoutDirection: 'TB',
+        selectedNodeId: selectedNode?.id || null,
+        selectedNodeLabel: selectedNode?.data?.label || null,
+        nodes: (allNodes || []).map(n => ({
+          id: n.id,
+          label: n.data?.label,
+          category: n.data?.category,
+          description: n.data?.description,
+          files: n.data?.files,
+          complexity: n.data?.complexity,
+          dependencies: n.data?.dependencies,
+          exports: n.data?.exports,
+          position: n.position,
+        })),
+        edges: (allEdges || []).map(e => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          label: (e.data as any)?.label || e.label,
+          type: (e.data as any)?.type || e.type,
+          strength: (e.data as any)?.strength,
+          direction: (e.data as any)?.direction,
+        })),
+      };
+
+      const canvasContext = syncedCanvasContext || liveCanvasContext;
+
+      const allNodesContext = canvasContext.nodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        category: n.category,
+        description: n.description,
+        files: n.files,
+        complexity: n.complexity,
+        dependencies: n.dependencies,
+      }));
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -138,6 +179,7 @@ export default function EnhancedChatbot({
           message: text, 
           context: selectedNode ? selectedNode.data : null,
           repoDetails: repoDetails,
+          canvasContext,
           allNodesContext: allNodesContext,
         })
       });

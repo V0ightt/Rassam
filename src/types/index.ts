@@ -35,6 +35,47 @@ export interface EdgeData {
   label?: string;
   type?: 'dependency' | 'import' | 'calls' | 'extends' | 'implements';
   strength?: 'weak' | 'normal' | 'strong';
+  direction?: 'one-way' | 'two-way';
+  labelOffset?: { x: number; y: number };
+}
+
+export type ProjectSource = 'github' | 'empty';
+
+export interface SyncedCanvasNode {
+  id: string;
+  label: string;
+  description?: string;
+  category?: NodeCategory;
+  files?: string[];
+  complexity?: 'low' | 'medium' | 'high';
+  dependencies?: string[];
+  exports?: string[];
+  position: { x: number; y: number };
+}
+
+export interface SyncedCanvasEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+  type?: string;
+  strength?: 'weak' | 'normal' | 'strong';
+  direction?: 'one-way' | 'two-way';
+}
+
+export interface CanvasSyncSnapshot {
+  syncedAt: string;
+  project: {
+    id: string;
+    name: string;
+    source: ProjectSource;
+    repo?: string;
+  };
+  layoutDirection: 'TB' | 'LR';
+  selectedNodeId?: string | null;
+  selectedNodeLabel?: string | null;
+  nodes: SyncedCanvasNode[];
+  edges: SyncedCanvasEdge[];
 }
 
 export interface RepoDetails {
@@ -72,9 +113,13 @@ export interface Project {
   id: string;
   name: string;
   repoUrl: string;
+  source: ProjectSource;
   repoDetails: RepoDetails | null;
   nodes: any[];
   edges: any[];
+  layoutDirection: 'TB' | 'LR';
+  aiContextSnapshot: CanvasSyncSnapshot | null;
+  lastSyncedAt: string | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
   createdAt: Date;

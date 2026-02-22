@@ -18,7 +18,8 @@ import {
   Grid,
   MousePointer,
   Move,
-  Copy
+  Copy,
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -35,6 +36,9 @@ interface FlowControlsProps {
   onToggleSnapToGrid?: () => void;
   onSelectAll?: () => void;
   onDuplicateSelected?: () => void;
+  onSyncCanvas?: () => void;
+  isSyncing?: boolean;
+  lastSyncedAt?: string | null;
 }
 
 // Keyboard shortcuts helper
@@ -64,6 +68,9 @@ export default memo(function FlowControls({
   onToggleSnapToGrid,
   onSelectAll,
   onDuplicateSelected,
+  onSyncCanvas,
+  isSyncing = false,
+  lastSyncedAt = null,
 }: FlowControlsProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
@@ -253,6 +260,22 @@ export default memo(function FlowControls({
         >
           <Map size={16} />
         </button>
+
+        {/* Sync Canvas Context */}
+        {onSyncCanvas && (
+          <button
+            onClick={onSyncCanvas}
+            className={cn(
+              "p-2 rounded-lg transition-colors",
+              isSyncing
+                ? "bg-cyan-500/20 text-cyan-400"
+                : "text-slate-300 hover:text-white hover:bg-slate-700"
+            )}
+            title={lastSyncedAt ? `Sync canvas context (Last sync: ${new Date(lastSyncedAt).toLocaleTimeString()})` : 'Sync canvas context with AI'}
+          >
+            <RefreshCw size={16} className={cn(isSyncing && 'animate-spin')} />
+          </button>
+        )}
 
         <div className="h-px w-5 bg-slate-700" />
 

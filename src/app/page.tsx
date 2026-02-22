@@ -41,7 +41,7 @@ import EnhancedChatbot from '@/components/sidebar/EnhancedChatbot';
 import ExportPanel from '@/components/canvas/ExportPanel';
 import EditToolbar from '@/components/canvas/EditToolbar';
 import FlowControls, { StyledMiniMap } from '@/components/canvas/FlowControls';
-import { Project, ChatSession, RepoDetails } from '@/types';
+import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails } from '@/types';
 import { cn } from '@/lib/utils';
 
 // Storage keys
@@ -55,11 +55,23 @@ const STORAGE_KEYS = {
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 // Create a new project
-const createNewProject = (repoUrl: string, repoDetails: RepoDetails | null, nodes: any[], edges: any[]): Project => {
+const createNewProject = (
+    repoUrl: string,
+    repoDetails: RepoDetails | null,
+    nodes: any[],
+    edges: any[],
+    options?: {
+        name?: string;
+        source?: ProjectSource;
+        layoutDirection?: 'TB' | 'LR';
+        snapshot?: CanvasSyncSnapshot | null;
+    }
+): Project => {
     const now = new Date();
-    const projectName = repoDetails 
+    const source = options?.source || (repoDetails ? 'github' : 'empty');
+    const projectName = options?.name || (repoDetails 
         ? `${repoDetails.owner}/${repoDetails.repo}`
-        : repoUrl || 'New Project';
+        : repoUrl || 'New Project');
     
     const initialChatSession: ChatSession = {
         id: generateId(),
@@ -67,7 +79,7 @@ const createNewProject = (repoUrl: string, repoDetails: RepoDetails | null, node
         messages: [{
             id: '1',
             role: 'assistant',
-            content: "👋 Hi! I'm **Rassam** (رسّام), your AI assistant for understanding code.\n\n**Quick tips:**\n- Click on any node to ask questions about it\n- Use the quick actions for common queries\n\nLet's explore this codebase together!",
+            content: "👋 Hi! I'm **Rassam** (رسّام), your AI assistant for understanding code and flowcharts.\n\n**Quick tips:**\n- Add or edit nodes/edges on the canvas\n- Use the **Sync** button to update my project context\n- Ask questions about selected nodes or the whole architecture\n\nLet's explore this project together!",
             timestamp: now
         }],
         createdAt: now,
@@ -78,9 +90,13 @@ const createNewProject = (repoUrl: string, repoDetails: RepoDetails | null, node
         id: generateId(),
         name: projectName,
         repoUrl,
+        source,
         repoDetails,
         nodes,
         edges,
+        layoutDirection: options?.layoutDirection || 'TB',
+        aiContextSnapshot: options?.snapshot || null,
+        lastSyncedAt: options?.snapshot?.syncedAt || null,
         chatSessions: [initialChatSession],
         activeChatSessionId: initialChatSession.id,
         createdAt: now,
@@ -97,6 +113,10 @@ function FlowCanvas() {
     const [projects, setProjects] = useState<Project[]>([]);
     const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
     const [showProjectList, setShowProjectList] = useState(false);
+    const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+    const [createProjectMode, setCreateProjectMode] = useState<ProjectSource>('github');
+    const [newProjectUrl, setNewProjectUrl] = useState('');
+    const [newProjectName, setNewProjectName] = useState('');
     
     // State for UI
     const [repoUrl, setRepoUrl] = useState("");
@@ -108,6 +128,8 @@ function FlowCanvas() {
     const [searchQuery, setSearchQuery] = useState('');
     const [history, setHistory] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
     const [snapToGrid, setSnapToGrid] = useState(true);
+    const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
+    const [isSyncingCanvas, setIsSyncingCanvas] = useState(false);
     
     // Resizable chat state
     const [chatWidth, setChatWidth] = useState(400);
@@ -139,6 +161,10 @@ function FlowCanvas() {
                 // Restore dates
                 const restored = parsed.map((p: any) => ({
                     ...p,
+                    source: p.source || (p.repoDetails ? 'github' : 'empty'),
+                    layoutDirection: p.layoutDirection || 'TB',
+                    aiContextSnapshot: p.aiContextSnapshot || null,
+                    lastSyncedAt: p.lastSyncedAt || null,
                     createdAt: new Date(p.createdAt),
                     updatedAt: new Date(p.updatedAt),
                     chatSessions: p.chatSessions.map((s: any) => ({
@@ -161,6 +187,7 @@ function FlowCanvas() {
                         setEdges(project.edges);
                         setRepoDetails(project.repoDetails);
                         setRepoUrl(project.repoUrl);
+                        setLayoutDirection(project.layoutDirection || 'TB');
                         setTimeout(() => fitView({ padding: 0.2 }), 200);
                     }
                 }
@@ -176,7 +203,9 @@ function FlowCanvas() {
     useEffect(() => {
         if (projects.length > 0) {
             localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
+            return;
         }
+        localStorage.removeItem(STORAGE_KEYS.PROJECTS);
     }, [projects]);
     
     // Save active project ID
@@ -188,14 +217,14 @@ function FlowCanvas() {
     
     // Update project when nodes/edges change
     useEffect(() => {
-        if (activeProjectId && nodes.length > 0) {
+        if (activeProjectId) {
             setProjects(prev => prev.map(p => 
                 p.id === activeProjectId 
-                    ? { ...p, nodes, edges, updatedAt: new Date() }
+                    ? { ...p, nodes, edges, layoutDirection, updatedAt: new Date() }
                     : p
             ));
         }
-    }, [nodes, edges, activeProjectId]);
+    }, [nodes, edges, activeProjectId, layoutDirection]);
     
     useEffect(() => {
         localStorage.setItem(STORAGE_KEYS.CHAT_WIDTH, chatWidth.toString());
@@ -253,8 +282,8 @@ function FlowCanvas() {
     }, [history, setNodes, setEdges]);
 
     // Repo Fetch Handler
-    const handleVisualize = async () => {
-        if (!repoUrl) return;
+    const createProjectFromGitHub = useCallback(async (url: string) => {
+        if (!url) return;
         setLoading(true);
         setError(null);
         saveToHistory();
@@ -263,7 +292,7 @@ function FlowCanvas() {
             const res = await fetch('/api/repo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: repoUrl })
+                body: JSON.stringify({ url })
             });
 
             if (!res.ok) {
@@ -275,11 +304,17 @@ function FlowCanvas() {
             setNodes(data.nodes);
             setEdges(data.edges);
             setRepoDetails(data.repoDetails);
+            setRepoUrl(url);
+            setLayoutDirection('TB');
             
             // Create new project
-            const newProject = createNewProject(repoUrl, data.repoDetails, data.nodes, data.edges);
+            const newProject = createNewProject(url, data.repoDetails, data.nodes, data.edges, {
+                source: 'github',
+                layoutDirection: 'TB',
+            });
             setProjects(prev => [...prev, newProject]);
             setActiveProjectId(newProject.id);
+            setNewProjectUrl('');
             
             // Fit view after a short delay to ensure nodes are rendered
             setTimeout(() => fitView({ padding: 0.2 }), 100);
@@ -288,7 +323,35 @@ function FlowCanvas() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [fitView, saveToHistory, setEdges, setNodes]);
+
+    const handleVisualize = useCallback(async () => {
+        if (!repoUrl.trim()) return;
+        await createProjectFromGitHub(repoUrl.trim());
+    }, [createProjectFromGitHub, repoUrl]);
+
+    const handleCreateEmptyProject = useCallback(() => {
+        const nowName = newProjectName.trim();
+        const projectName = nowName || `Project ${projects.length + 1}`;
+        const newProject = createNewProject('', null, [], [], {
+            name: projectName,
+            source: 'empty',
+            layoutDirection,
+        });
+
+        setProjects(prev => [...prev, newProject]);
+        setActiveProjectId(newProject.id);
+        setNodes([]);
+        setEdges([]);
+        setRepoDetails(null);
+        setRepoUrl('');
+        setSelectedNode(null);
+        setShowCreateProjectModal(false);
+        setShowProjectList(false);
+        setNewProjectName('');
+        setNewProjectUrl('');
+        setError(null);
+    }, [layoutDirection, newProjectName, projects.length, setEdges, setNodes]);
     
     // Switch to a project
     const switchToProject = useCallback((projectId: string) => {
@@ -299,6 +362,7 @@ function FlowCanvas() {
             setEdges(project.edges);
             setRepoDetails(project.repoDetails);
             setRepoUrl(project.repoUrl);
+            setLayoutDirection(project.layoutDirection || 'TB');
             setSelectedNode(null);
             setShowProjectList(false);
             setTimeout(() => fitView({ padding: 0.2 }), 100);
@@ -317,12 +381,14 @@ function FlowCanvas() {
                     setEdges(nextProject.edges);
                     setRepoDetails(nextProject.repoDetails);
                     setRepoUrl(nextProject.repoUrl);
+                    setLayoutDirection(nextProject.layoutDirection || 'TB');
                 } else {
                     setActiveProjectId(null);
                     setNodes([]);
                     setEdges([]);
                     setRepoDetails(null);
                     setRepoUrl('');
+                    setLayoutDirection('TB');
                     localStorage.removeItem(STORAGE_KEYS.PROJECTS);
                     localStorage.removeItem(STORAGE_KEYS.ACTIVE_PROJECT_ID);
                 }
@@ -330,6 +396,63 @@ function FlowCanvas() {
             return filtered;
         });
     }, [activeProjectId, setNodes, setEdges]);
+
+    const handleSyncCanvas = useCallback(() => {
+        if (!activeProjectId) {
+            setError('Create or select a project before syncing the canvas.');
+            return;
+        }
+
+        setIsSyncingCanvas(true);
+        const syncedAt = new Date().toISOString();
+
+        setProjects(prev => prev.map(p => {
+            if (p.id !== activeProjectId) return p;
+
+            const snapshot: CanvasSyncSnapshot = {
+                syncedAt,
+                project: {
+                    id: p.id,
+                    name: p.name,
+                    source: p.source,
+                    repo: p.repoDetails ? `${p.repoDetails.owner}/${p.repoDetails.repo}` : undefined,
+                },
+                layoutDirection,
+                selectedNodeId: selectedNode?.id || null,
+                selectedNodeLabel: selectedNode?.data?.label || null,
+                nodes: nodes.map(n => ({
+                    id: n.id,
+                    label: n.data?.label,
+                    description: n.data?.description,
+                    category: n.data?.category,
+                    files: n.data?.files,
+                    complexity: n.data?.complexity,
+                    dependencies: n.data?.dependencies,
+                    exports: n.data?.exports,
+                    position: n.position,
+                })),
+                edges: edges.map(e => ({
+                    id: e.id,
+                    source: e.source,
+                    target: e.target,
+                    label: (e.data as any)?.label || e.label,
+                    type: (e.data as any)?.type || e.type,
+                    strength: (e.data as any)?.strength,
+                    direction: (e.data as any)?.direction,
+                })),
+            };
+
+            return {
+                ...p,
+                aiContextSnapshot: snapshot,
+                lastSyncedAt: syncedAt,
+                updatedAt: new Date(),
+            };
+        }));
+
+        setError(null);
+        setTimeout(() => setIsSyncingCanvas(false), 250);
+    }, [activeProjectId, edges, layoutDirection, nodes, selectedNode]);
     
     // Update chat session messages
     const updateChatMessages = useCallback((messages: any[]) => {
@@ -439,6 +562,7 @@ function FlowCanvas() {
     // Re-layout handler
     const handleLayoutChange = async (direction: 'TB' | 'LR') => {
         if (nodes.length === 0) return;
+        setLayoutDirection(direction);
         
         try {
             const res = await fetch('/api/repo', {
@@ -622,14 +746,7 @@ function FlowCanvas() {
                             </h2>
                             <div className="flex items-center gap-1">
                                 <button
-                                    onClick={() => {
-                                        const url = prompt('Enter GitHub repository URL:');
-                                        if (url && url.trim()) {
-                                            setRepoUrl(url.trim());
-                                            setShowProjectList(false);
-                                            setTimeout(() => handleVisualize(), 100);
-                                        }
-                                    }}
+                                    onClick={() => setShowCreateProjectModal(true)}
                                     className="p-1.5 text-slate-500 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors"
                                     title="Add new project"
                                 >
@@ -648,7 +765,7 @@ function FlowCanvas() {
                             {projects.length === 0 ? (
                                 <div className="text-center text-slate-500 text-sm py-8">
                                     No projects yet.<br />
-                                    Visualize a repository to create one.
+                                    Create from GitHub or start empty.
                                 </div>
                             ) : (
                                 projects.map(project => (
@@ -690,6 +807,131 @@ function FlowCanvas() {
                                 ))
                             )}
                         </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Create Project Modal */}
+            <AnimatePresence>
+                {showCreateProjectModal && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute inset-0 z-[60] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 8 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 8 }}
+                            className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
+                        >
+                            <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                                <h3 className="text-sm font-semibold text-slate-100">Create Project</h3>
+                                <button
+                                    onClick={() => setShowCreateProjectModal(false)}
+                                    className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+
+                            <div className="p-4 space-y-4">
+                                <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-800/60 border border-slate-700">
+                                    <button
+                                        onClick={() => setCreateProjectMode('github')}
+                                        className={cn(
+                                            'px-3 py-2 text-xs rounded-lg transition-colors',
+                                            createProjectMode === 'github'
+                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                                : 'text-slate-300 hover:bg-slate-700'
+                                        )}
+                                    >
+                                        From GitHub URL
+                                    </button>
+                                    <button
+                                        onClick={() => setCreateProjectMode('empty')}
+                                        className={cn(
+                                            'px-3 py-2 text-xs rounded-lg transition-colors',
+                                            createProjectMode === 'empty'
+                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                                : 'text-slate-300 hover:bg-slate-700'
+                                        )}
+                                    >
+                                        Empty Project
+                                    </button>
+                                </div>
+
+                                {createProjectMode === 'github' ? (
+                                    <div className="space-y-3">
+                                        <label className="text-xs text-slate-400 block">GitHub repository URL</label>
+                                        <input
+                                            value={newProjectUrl}
+                                            onChange={(e) => setNewProjectUrl(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && newProjectUrl.trim() && !loading) {
+                                                    setShowCreateProjectModal(false);
+                                                    setShowProjectList(false);
+                                                    setRepoUrl(newProjectUrl.trim());
+                                                    createProjectFromGitHub(newProjectUrl.trim());
+                                                }
+                                            }}
+                                            placeholder="https://github.com/owner/repo"
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        <label className="text-xs text-slate-400 block">Project name (optional)</label>
+                                        <input
+                                            value={newProjectName}
+                                            onChange={(e) => setNewProjectName(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    handleCreateEmptyProject();
+                                                }
+                                            }}
+                                            placeholder="My Custom Flowchart"
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
+                                        />
+                                        <p className="text-xs text-slate-500">
+                                            Start from a blank canvas, then add custom nodes and connections.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="p-4 border-t border-slate-800 flex items-center justify-end gap-2">
+                                <button
+                                    onClick={() => setShowCreateProjectModal(false)}
+                                    className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+                                >
+                                    Cancel
+                                </button>
+                                {createProjectMode === 'github' ? (
+                                    <button
+                                        onClick={() => {
+                                            if (!newProjectUrl.trim() || loading) return;
+                                            setShowCreateProjectModal(false);
+                                            setShowProjectList(false);
+                                            setRepoUrl(newProjectUrl.trim());
+                                            createProjectFromGitHub(newProjectUrl.trim());
+                                        }}
+                                        disabled={!newProjectUrl.trim() || loading}
+                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {loading ? 'Analyzing...' : 'Create from GitHub'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={handleCreateEmptyProject}
+                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
+                                    >
+                                        Create Empty Project
+                                    </button>
+                                )}
+                            </div>
+                        </motion.div>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -800,7 +1042,8 @@ function FlowCanvas() {
                         onDeleteNode={handleDeleteNode}
                         onUpdateNode={handleUpdateNode}
                         onUndo={history.length > 0 ? handleUndo : undefined}
-                    />                    <FlowControls
+                    />
+                    <FlowControls
                         onSearch={handleSearch}
                         onZoomIn={() => zoomIn()}
                         onZoomOut={() => zoomOut()}
@@ -812,7 +1055,11 @@ function FlowCanvas() {
                         onToggleSnapToGrid={handleToggleSnapToGrid}
                         onSelectAll={handleSelectAll}
                         onDuplicateSelected={handleDuplicateSelected}
-                    />                </div>
+                        onSyncCanvas={handleSyncCanvas}
+                        isSyncing={isSyncingCanvas}
+                        lastSyncedAt={activeProject?.lastSyncedAt || null}
+                    />
+                </div>
 
                 {/* Empty State */}
                 <AnimatePresence>
@@ -828,10 +1075,10 @@ function FlowCanvas() {
                                     <Github size={40} className="text-blue-400/50" />
                                 </div>
                                 <h2 className="text-xl font-semibold text-slate-400 mb-2">
-                                    Enter a GitHub URL to start
+                                    Create from GitHub or start empty
                                 </h2>
                                 <p className="text-sm text-slate-500 max-w-md">
-                                    Paste a repository URL above to visualize its architecture as an interactive flowchart
+                                    Use the Projects panel (+) to create a GitHub project or an empty canvas, then edit nodes and sync context with AI
                                 </p>
                             </div>
                         </motion.div>
@@ -907,6 +1154,9 @@ function FlowCanvas() {
                     selectedNode={selectedNode} 
                     repoDetails={repoDetails}
                     allNodes={nodes}
+                    allEdges={edges}
+                    projectName={activeProject?.name}
+                    syncedCanvasContext={activeProject?.aiContextSnapshot || null}
                     chatSessions={activeProject?.chatSessions || []}
                     activeChatSessionId={activeProject?.activeChatSessionId || null}
                     onUpdateMessages={updateChatMessages}

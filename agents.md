@@ -23,6 +23,9 @@ This document is designed to help future coding agents understand the architectu
 ## Architecture & Data Flow
 
 1.  **User Input**: User enters a GitHub URL on the client (`src/app/page.tsx`) or via Projects sidebar.
+  -   New project creation supports **two modes** from Projects sidebar `+`: 
+    - **From GitHub URL** (repo analysis + auto-generated nodes/edges)
+    - **Empty Project** (blank editable canvas for custom architecture design)
 2.  **API Request**: Application sends POST request to `/api/repo`.
 3.  **Data Fetching** (`src/lib/github.ts`):
     -   Fetches the recursive file tree using GitHub API.
@@ -41,6 +44,9 @@ This document is designed to help future coding agents understand the architectu
     -   Custom FlowControls (no legacy +/- buttons).
 7.  **Interaction**:
     -   Clicking a node sets it as `selectedNode`.
+    -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
+    -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
+    -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat API (`/api/chat`) fetches README.md and file content for context-aware answers.
 
@@ -48,6 +54,8 @@ This document is designed to help future coding agents understand the architectu
 
 ### `src/app`
 -   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider`.
+  -   Owns project lifecycle state (`github`/`empty` source), per-project synced AI context snapshots, and canvas sync handler.
+  -   Persists projects (including empty projects and sync snapshots) in localStorage.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Supports PUT for re-layout.
 -   `api/chat/route.ts`: Endpoint for the chatbot. Detects file queries, fetches README.md or specific files for context.
@@ -66,9 +74,12 @@ This document is designed to help future coding agents understand the architectu
 -   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON.
 -   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms.
 -   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
+  -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.
 
 ### `src/components/sidebar`
 -   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.
+  -   Sends `canvasContext` payload (synced snapshot preferred, live graph fallback) to `/api/chat`.
+  -   Includes both node-level context and graph-level relationships to improve architectural responses.
 -   `MarkdownRenderer.tsx`: Custom markdown renderer with syntax highlighting and file path detection.
 
 ## Data Models
@@ -85,6 +96,42 @@ interface NodeData {
   dependencies?: string[];
   exports?: string[];
   isExpanded?: boolean;
+}
+```
+
+### Synced Canvas Snapshot (AI Context)
+```typescript
+interface CanvasSyncSnapshot {
+  syncedAt: string;
+  project: {
+    id: string;
+    name: string;
+    source: 'github' | 'empty';
+    repo?: string;
+  };
+  layoutDirection: 'TB' | 'LR';
+  selectedNodeId?: string | null;
+  selectedNodeLabel?: string | null;
+  nodes: Array<{
+    id: string;
+    label: string;
+    description?: string;
+    category?: NodeCategory;
+    files?: string[];
+    complexity?: 'low' | 'medium' | 'high';
+    dependencies?: string[];
+    exports?: string[];
+    position: { x: number; y: number };
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    label?: string;
+    type?: string;
+    strength?: 'weak' | 'normal' | 'strong';
+    direction?: 'one-way' | 'two-way';
+  }>;
 }
 ```
 
@@ -137,6 +184,7 @@ interface EdgeData {
 -   Modify the system prompt in `chatWithContext` function in `src/lib/ai.ts`.
 -   Add new quick actions in `EnhancedChatbot.tsx`.
 -   Extend `MarkdownRenderer.tsx` for new formatting needs.
+-   Keep `canvasContext` + `allNodesContext` payload contract aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
 
 ### Adding Export Formats
 -   Extend `ExportPanel.tsx` with new export options.

@@ -3,7 +3,7 @@
 
 >[!IMPORTANT]
 >Latest Updates:
->Improved AI prompts for better architecture understanding. Enhanced chatbot context awareness.
+>Dual project creation flow (GitHub URL or Empty Project) and manual Canvas Sync for AI context snapshots.
 
 >[!Tip]
 >Why Rassam? Rassam (رسّام) means painter in arabic.
@@ -23,6 +23,11 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ---
 
 ## Features
+
+### Project Creation Modes
+- **From GitHub URL**: Analyze repository structure and generate nodes/edges automatically
+- **Empty Project**: Start with a blank, editable canvas to design custom architecture
+- **Project Sidebar**: Manage multiple projects and switch between them
 
 ### Multiple Node Types
 - **Category-based nodes**: API, Component, Database, Auth, Service, Hook, and more
@@ -46,6 +51,12 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **Create connections**: Draw edges between nodes by dragging
 - **Undo support**: Revert recent changes
 
+### AI Context Sync
+- **Manual Sync button**: Capture a canonical snapshot of your current canvas
+- **Snapshot includes**: nodes, edges, node positions, selected node, and layout direction
+- **Chat-aware context**: AI uses the latest synced snapshot first, then falls back to live canvas if needed
+- **Future-ready prompting**: Keeps architecture context accurate for richer AI interactions and exports
+
 
 
 ### Export Options
@@ -59,6 +70,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 
 ### AI-Powered Chatbot
 - **Context-aware responses**: Understands the selected node's context
+- **Canvas-aware responses**: Understands graph relationships and architecture flow from synced snapshots
 - **Markdown support**: Code blocks with syntax highlighting
 - **File path formatting**: Special rendering for file references
 - **Quick actions**: Pre-built prompts for common questions
@@ -91,6 +103,16 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
     ```
 5.  **Open Browser**:
     Navigate to `http://localhost:3000`
+
+6.  **Create a Project**:
+  - Open **Projects** from the left sidebar
+  - Click `+` and choose:
+    - **From GitHub URL** to auto-generate architecture
+    - **Empty Project** to start from scratch
+
+7.  **Sync Before Chatting**:
+  - Use the **Sync** button in canvas controls after editing nodes/edges
+  - Then ask Rassam questions so replies reflect your latest flowchart state
 ---
 ## Tech Stack
 

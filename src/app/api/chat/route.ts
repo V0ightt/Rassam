@@ -49,7 +49,7 @@ function detectFileQueryIntent(message: string): { needsReadme: boolean; specifi
 
 export async function POST(req: NextRequest) {
     try {
-        const { message, context, repoDetails, allNodesContext } = await req.json();
+        const { message, context, repoDetails, allNodesContext, canvasContext } = await req.json();
 
         if (!message) {
             return NextResponse.json({ error: "Message is required" }, { status: 400 });
@@ -92,6 +92,7 @@ export async function POST(req: NextRequest) {
             context, 
             repoDetails, 
             allNodesContext,
+            canvasContext,
             readmeContent,
             specificFile ? { path: specificFile, content: fileContent } : null
         );

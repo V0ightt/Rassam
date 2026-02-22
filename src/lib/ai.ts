@@ -144,13 +144,31 @@ export async function chatWithContext(
   context: any | null, 
   repoDetails?: { owner: string; repo: string } | null,
   allNodesContext?: any[] | null,
+  canvasContext?: any | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null
 ) {
-  // Build project overview from all nodes
-  const projectOverview = allNodesContext && allNodesContext.length > 0
-    ? `\n\nPROJECT OVERVIEW (${allNodesContext.length} components):
-${allNodesContext.map(node => `- **${node.label}** (${node.category}): ${node.description || 'No description'} - ${node.files?.length || 0} files`).join('\n')}`
+  const snapshotNodes = canvasContext?.nodes || [];
+  const normalizedNodes = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
+
+  // Build project overview from synced snapshot (preferred) or live nodes fallback
+  const projectOverview = normalizedNodes.length > 0
+    ? `\n\nPROJECT OVERVIEW (${normalizedNodes.length} components):
+${normalizedNodes.map((node: any) => `- **${node.label}** (${node.category || 'default'}): ${node.description || 'No description'} - ${node.files?.length || 0} files`).join('\n')}`
+    : '';
+
+  const snapshotEdges = canvasContext?.edges || [];
+  const canvasStructure = canvasContext
+    ? `\n\nCANVAS STRUCTURE:
+- Project: ${canvasContext.project?.name || 'Untitled'}${canvasContext.project?.source ? ` (${canvasContext.project.source})` : ''}
+- Layout: ${canvasContext.layoutDirection || 'TB'}
+- Nodes: ${snapshotNodes.length}
+- Edges: ${snapshotEdges.length}
+- Selected Node: ${canvasContext.selectedNodeLabel || 'None'}
+- Last Sync: ${canvasContext.syncedAt || 'Unknown'}
+
+GRAPH RELATIONSHIPS:
+${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: any) => `- ${edge.source} -> ${edge.target}${edge.label ? ` (${edge.label})` : ''}${edge.type ? ` [${edge.type}]` : ''}`).join('\n') : '- No edges defined yet.'}`
     : '';
 
   // README content section
@@ -197,6 +215,7 @@ ${context.complexity ? `- Complexity: ${context.complexity}` : ''}
 ${context.dependencies ? `- Dependencies: ${context.dependencies.join(', ')}` : ''}
 ${repoDetails ? `- Repository: ${repoDetails.owner}/${repoDetails.repo}` : ''}
 ${projectOverview}
+${canvasStructure}
 ${readmeSection}
 ${fileSection}
 ${runInstructions}
@@ -215,6 +234,7 @@ INSTRUCTIONS:
 
 ${repoDetails ? `The user is exploring the repository: ${repoDetails.owner}/${repoDetails.repo}` : 'The user is exploring a codebase.'}
 ${projectOverview}
+${canvasStructure}
 ${readmeSection}
 ${fileSection}
 ${runInstructions}
