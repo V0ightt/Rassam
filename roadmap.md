@@ -1,7 +1,7 @@
 # Feature Roadmap: Rassam - The System Design Coding Environment
 
 > [!IMPORTANT]
-> **Vision**: Move from a passive repository visualizer to a bidirectional system design coding environment where graphs and code evolve together. This is the new age of coding: deliberate system planning, rapid iteration, and real execution with AI assistance.
+> **Vision**: Move from a passive repository visualizer to a bidirectional system design coding environment where graphs and code evolve together. This is the new age of coding: deliberate system planning, rapid iteration, and real execution with AI assistance. With smooth User Experience and Easy to use. 
 
 ## Guiding Decisions (Locked In)
 - **Local Agent Service (LAS)**: A local companion service provides filesystem, git, and terminal access.

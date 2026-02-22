@@ -1,6 +1,35 @@
 import { NodeCategory } from "@/types";
 import { getProvider } from "@/lib/llm";
 
+const VALID_NODE_CATEGORIES: NodeCategory[] = [
+  'api',
+  'component',
+  'config',
+  'database',
+  'auth',
+  'utility',
+  'test',
+  'style',
+  'asset',
+  'documentation',
+  'core',
+  'service',
+  'hook',
+  'context',
+  'middleware',
+  'model',
+  'route',
+  'default',
+];
+
+function normalizeCategory(rawCategory: unknown, files: string[]): NodeCategory {
+  if (typeof rawCategory === 'string' && VALID_NODE_CATEGORIES.includes(rawCategory as NodeCategory)) {
+    return rawCategory as NodeCategory;
+  }
+
+  return detectCategory(files);
+}
+
 // Category detection based on file paths
 export function detectCategory(files: string[]): NodeCategory {
   const pathPatterns: { pattern: RegExp; category: NodeCategory }[] = [
@@ -98,7 +127,7 @@ Return JSON in this exact format:
     if (result.nodes) {
       result.nodes = result.nodes.map((node: any) => ({
         ...node,
-        category: node.category || detectCategory(node.files || []),
+        category: normalizeCategory(node.category, node.files || []),
         complexity: node.complexity || estimateComplexity(node.files || []),
       }));
     }

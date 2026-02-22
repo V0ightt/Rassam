@@ -171,8 +171,8 @@ FileList.displayName = 'FileList';
 export const EnhancedNode = memo(({ data, selected, id }: NodeProps<NodeData>) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const category = data.category || 'default';
-  const colors = categoryColors[category];
-  const Icon = categoryIcons[category];
+  const colors = categoryColors[category] ?? categoryColors.default;
+  const Icon = categoryIcons[category] ?? categoryIcons.default;
 
   const toggleExpand = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -266,8 +266,8 @@ EnhancedNode.displayName = 'EnhancedNode';
 // Compact Node for dense layouts - optimized
 export const CompactNode = memo(({ data, selected }: NodeProps<NodeData>) => {
   const category = data.category || 'default';
-  const colors = categoryColors[category];
-  const Icon = categoryIcons[category];
+  const colors = categoryColors[category] ?? categoryColors.default;
+  const Icon = categoryIcons[category] ?? categoryIcons.default;
 
   return (
     <div
@@ -295,7 +295,7 @@ CompactNode.displayName = 'CompactNode';
 // Group Node for containing related nodes - optimized
 export const GroupNode = memo(({ data, selected }: NodeProps<NodeData>) => {
   const category = data.category || 'default';
-  const colors = categoryColors[category];
+  const colors = categoryColors[category] ?? categoryColors.default;
 
   return (
     <div
