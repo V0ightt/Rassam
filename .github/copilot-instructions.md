@@ -1,4 +1,13 @@
 <!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
+- Session start default behavior:
+	- Always read both `.github/copilot-instructions.md` and `agents.md` before doing implementation work.
+	- Also read `README.md` before implementation when the task may affect setup, usage, architecture, or documented behavior.
+	- If either file is missing, state that explicitly and proceed with available context.
+
+- Documentation maintenance policy for future sessions:
+	- After completing code changes, update `README.md` and `agents.md` to reflect behavior, architecture, setup, API, and workflow changes.
+	- If no documentation updates are needed, state that explicitly in the final response.
+
 - [x] Verify that the copilot-instructions.md file in the .github directory is created.
 
 - [x] Clarify Project Requirements
