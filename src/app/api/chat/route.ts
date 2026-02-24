@@ -1,6 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { chatWithContext } from "@/lib/ai";
 import { getFileContent } from "@/lib/github";
+import { getProviderAvailability } from "@/lib/llm";
+import { normalizeProviderId } from "@/lib/llm/registry";
+
+function parseNumber(value: unknown): number | undefined {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+        const parsed = Number(value);
+        if (!Number.isNaN(parsed)) return parsed;
+    }
+    return undefined;
+}
 
 // Detect if the question needs README or specific file content
 function detectFileQueryIntent(message: string): { needsReadme: boolean; specificFile: string | null } {
@@ -49,7 +60,14 @@ function detectFileQueryIntent(message: string): { needsReadme: boolean; specifi
 
 export async function POST(req: NextRequest) {
     try {
-        const { message, context, repoDetails, allNodesContext, canvasContext } = await req.json();
+        const {
+            message,
+            context,
+            repoDetails,
+            allNodesContext,
+            canvasContext,
+            modelSettings,
+        } = await req.json();
 
         if (!message) {
             return NextResponse.json({ error: "Message is required" }, { status: 400 });
@@ -87,6 +105,31 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        const providerId = normalizeProviderId(modelSettings?.providerId ?? null);
+        const model = typeof modelSettings?.model === 'string' && modelSettings.model.trim()
+            ? modelSettings.model.trim()
+            : null;
+        const maxTokens = parseNumber(modelSettings?.maxTokens);
+        const temperature = parseNumber(modelSettings?.temperature);
+
+        if (providerId) {
+            const availability = await getProviderAvailability(providerId, model || undefined);
+
+            if (!availability.models.includes(model || availability.models[0])) {
+                return NextResponse.json({
+                    error: "Selected model is not available",
+                    reply: `Selected model is not available for ${availability.label}.`,
+                }, { status: 400 });
+            }
+
+            if (!availability.available) {
+                return NextResponse.json({
+                    error: "Selected provider is unavailable",
+                    reply: availability.reason || "Selected provider is unavailable. Open Settings to fix it.",
+                }, { status: 400 });
+            }
+        }
+
         const reply = await chatWithContext(
             message, 
             context, 
@@ -94,7 +137,13 @@ export async function POST(req: NextRequest) {
             allNodesContext,
             canvasContext,
             readmeContent,
-            specificFile ? { path: specificFile, content: fileContent } : null
+            specificFile ? { path: specificFile, content: fileContent } : null,
+            {
+                providerId,
+                model,
+                maxTokens,
+                temperature,
+            }
         );
         return NextResponse.json({ reply });
 

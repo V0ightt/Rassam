@@ -17,7 +17,7 @@ export class GoogleAdapter implements LLMProvider {
   async generateStructure(input: GenerateStructureInput): Promise<string> {
     const responseFormat = input.json ? ({ type: "json_object" } as const) : undefined;
     const response = await this.client.chat.completions.create({
-      model: this.model,
+      model: input.model || this.model,
       messages: [
         { role: "system", content: input.system },
         { role: "user", content: input.prompt },
@@ -31,7 +31,7 @@ export class GoogleAdapter implements LLMProvider {
 
   async chat(input: ChatInput): Promise<string> {
     const response = await this.client.chat.completions.create({
-      model: this.model,
+      model: input.model || this.model,
       messages: [
         { role: "system", content: input.system },
         { role: "user", content: input.message },

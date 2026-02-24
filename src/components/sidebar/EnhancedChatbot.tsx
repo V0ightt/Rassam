@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { 
   Send, 
   Bot, 
@@ -31,6 +32,15 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Edge, Node } from 'reactflow';
 import { CanvasSyncSnapshot, ChatSession, ChatMessage } from '@/types';
+import { LLMProviderId } from '@/lib/llm';
+import {
+  loadModelSettings,
+  MODEL_SETTINGS_STORAGE_KEY,
+  ModelSettings,
+  ProviderStatusResponse,
+  saveModelSettings,
+  sanitizeModelSettings,
+} from '@/lib/model-settings';
 
 interface ChatbotProps {
   selectedNode: any | null;
@@ -89,6 +99,9 @@ export default function EnhancedChatbot({
   const [showQuickActions, setShowQuickActions] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null);
+  const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -109,9 +122,122 @@ export default function EnhancedChatbot({
     }
   }, [selectedNode?.id]);
 
+  const syncSettings = useCallback((statusPayload: ProviderStatusResponse) => {
+    const loaded = loadModelSettings();
+    const sanitized = sanitizeModelSettings(loaded, statusPayload);
+    setModelSettings(sanitized);
+    saveModelSettings(sanitized);
+  }, []);
+
+  const fetchModelStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/settings/models', { cache: 'no-store' });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to load model settings');
+      }
+
+      const statusPayload = payload as ProviderStatusResponse;
+      setProviderStatus(statusPayload);
+      syncSettings(statusPayload);
+      setModelError(null);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : 'Could not load model settings');
+      setModelSettings(loadModelSettings());
+    }
+  }, [syncSettings]);
+
+  useEffect(() => {
+    fetchModelStatus();
+  }, [fetchModelStatus]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== MODEL_SETTINGS_STORAGE_KEY) return;
+      const loaded = loadModelSettings();
+      const sanitized = sanitizeModelSettings(loaded, providerStatus);
+      setModelSettings(sanitized);
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [providerStatus]);
+
+  const enabledModelOptions = React.useMemo(() => {
+    if (!providerStatus || !modelSettings) return [] as Array<{ providerId: LLMProviderId; model: string; label: string }>;
+
+    const options: Array<{ providerId: LLMProviderId; model: string; label: string }> = [];
+    for (const provider of providerStatus.providers) {
+      if (!provider.available) continue;
+      const enabledModels = modelSettings.enabledModels[provider.id] || [];
+      for (const model of enabledModels) {
+        if (!provider.models.includes(model)) continue;
+        options.push({
+          providerId: provider.id,
+          model,
+          label: `${provider.label} • ${model}`,
+        });
+      }
+    }
+
+    return options;
+  }, [providerStatus, modelSettings]);
+
+  const activeModelValue = modelSettings?.selectedProvider && modelSettings?.selectedModel
+    ? `${modelSettings.selectedProvider}::${modelSettings.selectedModel}`
+    : '';
+
+  const activeModelLabel = enabledModelOptions.find(
+    (option) => `${option.providerId}::${option.model}` === activeModelValue,
+  )?.label || 'No enabled model';
+
+  const updateSelectedModel = useCallback((value: string) => {
+    if (!modelSettings) return;
+
+    const [providerIdRaw, ...rest] = value.split('::');
+    const selectedModel = rest.join('::').trim();
+    const providerId = providerIdRaw as LLMProviderId;
+
+    const next: ModelSettings = {
+      ...modelSettings,
+      selectedProvider: providerId,
+      selectedModel,
+    };
+    const sanitized = sanitizeModelSettings(next, providerStatus);
+    setModelSettings(sanitized);
+    saveModelSettings(sanitized);
+  }, [modelSettings, providerStatus]);
+
   const handleSend = async (messageText?: string) => {
     const text = messageText || input;
     if (!text.trim()) return;
+
+    if (!modelSettings || enabledModelOptions.length === 0) {
+      const unavailableMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: '❌ No enabled AI model is available. Open Settings and enable a validated model first.',
+        timestamp: new Date(),
+      };
+      onUpdateMessages([...messages, unavailableMsg]);
+      return;
+    }
+
+    const selectedOption = enabledModelOptions.find(
+      (option) => option.providerId === modelSettings.selectedProvider && option.model === modelSettings.selectedModel,
+    );
+
+    if (!selectedOption) {
+      const invalidSelectionMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: '❌ Your selected model is no longer valid. Please update it in Settings.',
+        timestamp: new Date(),
+      };
+      onUpdateMessages([...messages, invalidSelectionMsg]);
+      return;
+    }
 
     const userMsg: ChatMessage = { 
       id: Date.now().toString(),
@@ -181,9 +307,19 @@ export default function EnhancedChatbot({
           repoDetails: repoDetails,
           canvasContext,
           allNodesContext: allNodesContext,
+          modelSettings: {
+            providerId: selectedOption.providerId,
+            model: selectedOption.model,
+            maxTokens: modelSettings.maxOutputTokens,
+            temperature: modelSettings.temperature,
+          },
         })
       });
       const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.reply || data?.error || 'Failed to process chat message');
+      }
       
       const assistantMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(),
@@ -197,7 +333,7 @@ export default function EnhancedChatbot({
       const errorMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(),
         role: 'assistant', 
-        content: "❌ Error communicating with AI. Please try again.",
+        content: `❌ ${error instanceof Error ? error.message : 'Error communicating with AI. Please try again.'}`,
         timestamp: new Date()
       };
       onUpdateMessages([...updatedMessages, errorMsg]);
@@ -465,6 +601,33 @@ export default function EnhancedChatbot({
 
       {/* Input */}
       <div className="p-4 border-t border-slate-800 bg-gradient-to-t from-slate-900 to-slate-900/50">
+        <div className="mb-2 flex items-center gap-2">
+          <select
+            value={activeModelValue}
+            onChange={(e) => updateSelectedModel(e.target.value)}
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
+            disabled={enabledModelOptions.length === 0 || loading}
+          >
+            {enabledModelOptions.length === 0 ? (
+              <option value="">No enabled model</option>
+            ) : (
+              enabledModelOptions.map((option) => (
+                <option key={`${option.providerId}-${option.model}`} value={`${option.providerId}::${option.model}`}>
+                  {option.label}
+                </option>
+              ))
+            )}
+          </select>
+          <Link
+            href="/settings"
+            className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Settings
+          </Link>
+        </div>
+        {modelError && (
+          <div className="text-[10px] text-amber-300 mb-2">{modelError}</div>
+        )}
         <div className="flex gap-2">
           <div className="flex-1 relative">
             <input
@@ -485,7 +648,7 @@ export default function EnhancedChatbot({
           </button>
         </div>
         <div className="text-[9px] text-slate-600 mt-2 text-center">
-          Press Enter to send • Powered by DeepSeek AI
+          Press Enter to send • {activeModelLabel}
         </div>
       </div>
     </div>

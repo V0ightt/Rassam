@@ -27,6 +27,7 @@ This document is designed to help future coding agents understand the architectu
     - **From GitHub URL** (repo analysis + auto-generated nodes/edges)
     - **Empty Project** (blank editable canvas for custom architecture design)
 2.  **API Request**: Application sends POST request to `/api/repo`.
+  -   Settings UI sends GET request to `/api/settings/models` for provider/model availability and validation status.
 3.  **Data Fetching** (`src/lib/github.ts`):
     -   Fetches the recursive file tree using GitHub API.
     -   Filters for relevant file types (blobs).
@@ -48,7 +49,8 @@ This document is designed to help future coding agents understand the architectu
     -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
-    -   Chat API (`/api/chat`) fetches README.md and file content for context-aware answers.
+    -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
+    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, then generates response.
 
 ## Key Directories & Files
 
@@ -56,13 +58,17 @@ This document is designed to help future coding agents understand the architectu
 -   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider`.
   -   Owns project lifecycle state (`github`/`empty` source), per-project synced AI context snapshots, and canvas sync handler.
   -   Persists projects (including empty projects and sync snapshots) in localStorage.
+-   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Supports PUT for re-layout.
 -   `api/chat/route.ts`: Endpoint for the chatbot. Detects file queries, fetches README.md or specific files for context.
+-   `api/settings/models/route.ts`: Returns provider metadata and live availability checks used by Settings and chat selector.
 
 ### `src/lib`
 -   `ai.ts`: Configuration for DeepSeek API. Contains `analyzeRepoStructure` for node generation and `chatWithContext` for enhanced chat responses.
 -   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`.
+-   `model-settings.ts`: Client-side settings schema + localStorage persistence helpers for model enablement and generation controls.
+-   `llm/catalog.ts`: Provider catalog metadata, model lists, API key checks, and live provider validation helpers.
 -   `utils.ts`: `cn` helper for Tailwind class merging.
 
 ### `src/types`
@@ -185,6 +191,7 @@ interface EdgeData {
 -   Add new quick actions in `EnhancedChatbot.tsx`.
 -   Extend `MarkdownRenderer.tsx` for new formatting needs.
 -   Keep `canvasContext` + `allNodesContext` payload contract aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
+-   Keep model settings payload (`providerId`, `model`, `maxTokens`, `temperature`) aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
 
 ### Adding Export Formats
 -   Extend `ExportPanel.tsx` with new export options.
@@ -197,5 +204,5 @@ Ensure these are set in `.env.local` for local development:
 -   `ANTHROPIC_API_KEY`: Required when using the Anthropic provider.
 -   `GOOGLE_API_KEY`: Required when using the Google provider.
 -   `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`.
--   `OLLAMA_API_KEY`: Optional, defaults to `ollama`.
+-   `OLLAMA_API_KEY`: Required for enabling Ollama through Settings validation.
 -   `GITHUB_TOKEN`: Recommended to avoid rate limits on repo fetching.

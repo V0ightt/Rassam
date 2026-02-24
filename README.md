@@ -71,10 +71,17 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### AI-Powered Chatbot
 - **Context-aware responses**: Understands the selected node's context
 - **Canvas-aware responses**: Understands graph relationships and architecture flow from synced snapshots
+- **Model selector**: Choose between enabled provider/model pairs directly in chat
 - **Markdown support**: Code blocks with syntax highlighting
 - **File path formatting**: Special rendering for file references
 - **Quick actions**: Pre-built prompts for common questions
 - **Chat history**: Persistent conversation within session
+
+### AI Settings
+- **Dedicated settings page**: Open `/settings` to manage AI runtime behavior
+- **Enable/disable models**: Toggle provider models on/off and control which are usable in chat
+- **Live validation**: Providers can be enabled only when their API key is valid and a live validation call succeeds
+- **Generation controls**: Configure max output tokens and temperature
 
 ### Quality of Life Features
 - **Search nodes**: Filter nodes by name, description, or file paths
@@ -95,6 +102,10 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
     Create a `.env.local` file:
     ```
     DEEPSEEK_API_KEY=your_key
+  OPENAI_API_KEY=optional
+  ANTHROPIC_API_KEY=optional
+  GOOGLE_API_KEY=optional
+  OLLAMA_API_KEY=optional
     GITHUB_TOKEN=optional_token_for_rate_limits
     ```
 4.  **Run Development Server**:

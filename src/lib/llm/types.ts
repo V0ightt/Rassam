@@ -5,6 +5,7 @@ export interface GenerateStructureInput {
   system: string;
   temperature?: number;
   json?: boolean;
+  model?: string;
 }
 
 export interface ChatInput {
@@ -12,6 +13,7 @@ export interface ChatInput {
   message: string;
   temperature?: number;
   maxTokens?: number;
+  model?: string;
 }
 
 export interface LLMProvider {

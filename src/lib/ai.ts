@@ -1,6 +1,23 @@
 import { NodeCategory } from "@/types";
 import { getProvider } from "@/lib/llm";
 
+interface ChatRuntimeSettings {
+  providerId?: string | null;
+  model?: string | null;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+function clampMaxTokens(value?: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 2000;
+  return Math.min(8192, Math.max(64, Math.floor(value)));
+}
+
+function clampTemperature(value?: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0.7;
+  return Math.min(1, Math.max(0, value));
+}
+
 const VALID_NODE_CATEGORIES: NodeCategory[] = [
   'api',
   'component',
@@ -146,7 +163,8 @@ export async function chatWithContext(
   allNodesContext?: any[] | null,
   canvasContext?: any | null,
   readmeContent?: string | null,
-  specificFile?: { path: string; content: string | null } | null
+  specificFile?: { path: string; content: string | null } | null,
+  runtimeSettings?: ChatRuntimeSettings
 ) {
   const snapshotNodes = canvasContext?.nodes || [];
   const normalizedNodes = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
@@ -251,12 +269,13 @@ INSTRUCTIONS:
 9. When file content is provided, analyze it directly to answer questions`;
 
   try {
-    const provider = getProvider();
+    const provider = getProvider(runtimeSettings?.providerId);
     const response = await provider.chat({
       system: systemMessage,
       message,
-      temperature: 0.7,
-      maxTokens: 2000,
+      temperature: clampTemperature(runtimeSettings?.temperature),
+      maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
+      model: runtimeSettings?.model || undefined,
     });
 
     return response;

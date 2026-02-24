@@ -20,20 +20,21 @@ export class AnthropicAdapter implements LLMProvider {
   async generateStructure(input: GenerateStructureInput): Promise<string> {
     return this.sendMessage([
       { role: "user", content: input.prompt },
-    ], input.system, input.temperature ?? 0.3, input.json ? 2000 : 1200);
+    ], input.system, input.temperature ?? 0.3, input.json ? 2000 : 1200, input.model);
   }
 
   async chat(input: ChatInput): Promise<string> {
     return this.sendMessage([
       { role: "user", content: input.message },
-    ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000);
+    ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000, input.model);
   }
 
   private async sendMessage(
     messages: AnthropicMessage[],
     system: string,
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    model?: string
   ): Promise<string> {
     const response = await fetch(this.baseUrl, {
       method: "POST",
@@ -43,7 +44,7 @@ export class AnthropicAdapter implements LLMProvider {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: this.model,
+        model: model || this.model,
         system,
         messages,
         temperature,

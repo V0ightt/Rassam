@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import Link from 'next/link';
 import ReactFlow, { 
     Background, 
     useNodesState, 
@@ -32,6 +33,7 @@ import {
     ChevronLeft,
     Plus,
     X,
+    Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -985,6 +987,13 @@ function FlowCanvas() {
                             <span className="hidden sm:inline">{loading ? 'Analyzing...' : 'Visualize'}</span>
                         </button>
                         <ExportPanel repoDetails={repoDetails} />
+                        <Link
+                            href="/settings"
+                            className="bg-slate-900/90 backdrop-blur-md border border-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-slate-300 transition-all flex items-center"
+                            title="AI Settings"
+                        >
+                            <Settings size={18} />
+                        </Link>
                     </div>
                     
                     {/* Error message */}
