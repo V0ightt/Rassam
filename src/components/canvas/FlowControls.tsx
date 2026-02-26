@@ -44,6 +44,8 @@ const shortcuts = [
   { keys: ['⌘/Ctrl', '0'], action: 'Fit view' },
   { keys: ['⌘/Ctrl', 'Z'], action: 'Undo' },
   { keys: ['⌘/Ctrl', 'A'], action: 'Select all' },
+  { keys: ['⌘/Ctrl', 'C'], action: 'Copy node(s)' },
+  { keys: ['⌘/Ctrl', 'V'], action: 'Paste node(s)' },
   { keys: ['⌘/Ctrl', 'D'], action: 'Duplicate' },
   { keys: ['Delete'], action: 'Delete selected' },
   { keys: ['Escape'], action: 'Clear selection' },

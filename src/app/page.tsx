@@ -40,6 +40,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 import nodeTypes from '@/components/canvas/NodeTypes';
 import { edgeTypes } from '@/components/canvas/CustomEdge';
+import { NodeEditProvider } from '@/components/canvas/NodeEditContext';
 import EnhancedChatbot from '@/components/sidebar/EnhancedChatbot';
 import ExportPanel from '@/components/canvas/ExportPanel';
 import EditToolbar from '@/components/canvas/EditToolbar';
@@ -139,6 +140,9 @@ function FlowCanvas() {
     const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
     const [isSyncingCanvas, setIsSyncingCanvas] = useState(false);
     
+    // Clipboard state for Ctrl+C / Ctrl+V
+    const [clipboard, setClipboard] = useState<{ nodes: Node[]; edges: Edge[] } | null>(null);
+
     // Resizable chat state
     const [chatWidth, setChatWidth] = useState(400);
     const [isResizing, setIsResizing] = useState(false);
@@ -724,6 +728,11 @@ function FlowCanvas() {
         ));
     }, [setNodes, saveToHistory]);
 
+    // Stable context value for inline editing in nodes
+    const nodeEditContextValue = useMemo(() => ({
+        onUpdateNode: handleUpdateNode,
+    }), [handleUpdateNode]);
+
     // Search handler - optimized with useCallback
     const handleSearch = useCallback((query: string) => {
         setSearchQuery(query);
@@ -775,6 +784,49 @@ function FlowCanvas() {
         setSnapToGrid((prev) => !prev);
     }, []);
 
+    // Copy selected nodes to clipboard
+    const handleCopy = useCallback(() => {
+        const nodesToCopy = selectedNodes.length > 0 ? selectedNodes : (selectedNode ? [selectedNode] : []);
+        if (nodesToCopy.length === 0) return;
+        const nodeIds = new Set(nodesToCopy.map(n => n.id));
+        // Also copy edges that are fully within the selection
+        const edgesToCopy = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+        setClipboard({ nodes: nodesToCopy, edges: edgesToCopy });
+    }, [selectedNodes, selectedNode, edges]);
+
+    // Paste clipboard nodes
+    const handlePaste = useCallback(() => {
+        if (!clipboard || clipboard.nodes.length === 0) return;
+        saveToHistory();
+
+        const OFFSET = 60;
+        // Map old ID -> new ID
+        const idMap = new Map<string, string>();
+        clipboard.nodes.forEach(n => {
+            idMap.set(n.id, `node-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`);
+        });
+
+        const newNodes: Node[] = clipboard.nodes.map(n => ({
+            ...n,
+            id: idMap.get(n.id)!,
+            position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET },
+            selected: false,
+            data: { ...n.data },
+        }));
+
+        const newEdges: Edge[] = clipboard.edges.map(e => ({
+            ...e,
+            id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+            source: idMap.get(e.source) || e.source,
+            target: idMap.get(e.target) || e.target,
+            selected: false,
+            data: e.data ? { ...e.data } : undefined,
+        }));
+
+        setNodes(nds => [...nds, ...newNodes]);
+        setEdges(eds => [...eds, ...newEdges]);
+    }, [clipboard, saveToHistory, setNodes, setEdges]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -797,6 +849,14 @@ function FlowCanvas() {
                 e.preventDefault();
                 handleUndo();
             }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+                e.preventDefault();
+                handleCopy();
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+                e.preventDefault();
+                handlePaste();
+            }
             if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
                 e.preventDefault();
                 handleSelectAll();
@@ -816,7 +876,7 @@ function FlowCanvas() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid]);
+    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid, handleCopy, handlePaste]);
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -1234,6 +1294,7 @@ function FlowCanvas() {
                     )}
                 </AnimatePresence>
 
+                <NodeEditProvider value={nodeEditContextValue}>
                 <ReactFlow
                     nodes={nodes}
                     edges={edges}
@@ -1285,6 +1346,7 @@ function FlowCanvas() {
                     />
                     {showMinimap && <StyledMiniMap />}
                 </ReactFlow>
+                </NodeEditProvider>
             </div>
 
             {/* Sidebar (Right Pane) - Resizable */}

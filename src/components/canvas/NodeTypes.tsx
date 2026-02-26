@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useState, useCallback } from 'react';
+import React, { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { 
   FileCode, 
@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NodeCategory, NodeData } from '@/types';
+import { useNodeEdit } from './NodeEditContext';
 
 // Icon mapping for different node categories
 const categoryIcons: Record<NodeCategory, React.ElementType> = {
@@ -209,6 +210,108 @@ const FileList = memo(({ files, isExpanded }: { files: string[]; isExpanded: boo
 
 FileList.displayName = 'FileList';
 
+// Inline editable text component for double-click editing
+const InlineEdit = memo(({ value, nodeId, field, className, multiline }: {
+  value: string;
+  nodeId: string;
+  field: 'label' | 'description';
+  className?: string;
+  multiline?: boolean;
+}) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+  const { onUpdateNode } = useNodeEdit();
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  // Sync draft when value changes externally while not editing
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  const commit = useCallback(() => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) {
+      onUpdateNode(nodeId, { [field]: trimmed });
+    } else {
+      setDraft(value); // revert
+    }
+    setEditing(false);
+  }, [draft, value, field, nodeId, onUpdateNode]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      commit();
+    }
+    if (e.key === 'Escape') {
+      setDraft(value);
+      setEditing(false);
+    }
+    // Prevent event from reaching ReactFlow
+    e.stopPropagation();
+  }, [commit, value]);
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditing(true);
+  }, []);
+
+  if (editing) {
+    const sharedClass = cn(
+      'bg-slate-800/80 border border-cyan-500/50 rounded px-1 py-0.5 outline-none text-slate-100 w-full',
+      className
+    );
+
+    if (multiline) {
+      return (
+        <textarea
+          ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={handleKeyDown}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          className={cn(sharedClass, 'resize-none')}
+          rows={2}
+        />
+      );
+    }
+
+    return (
+      <input
+        ref={inputRef as React.RefObject<HTMLInputElement>}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={handleKeyDown}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        className={sharedClass}
+      />
+    );
+  }
+
+  return (
+    <span
+      onDoubleClick={handleDoubleClick}
+      className={cn(className, 'cursor-default select-none')}
+      title="Double-click to edit"
+    >
+      {value || (field === 'description' ? 'No description provided.' : 'Untitled')}
+    </span>
+  );
+});
+
+InlineEdit.displayName = 'InlineEdit';
+
 // Main Enhanced Node Component - optimized with memo and no framer-motion during drag
 export const EnhancedNode = memo(({ data, selected, id }: NodeProps<NodeData>) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -242,7 +345,12 @@ export const EnhancedNode = memo(({ data, selected, id }: NodeProps<NodeData>) =
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-slate-100 truncate">{data.label}</span>
+            <InlineEdit
+              value={data.label}
+              nodeId={id}
+              field="label"
+              className="text-sm font-bold text-slate-100 truncate"
+            />
             <ComplexityBadge complexity={data.complexity} />
           </div>
           <div className="flex items-center gap-2 mt-0.5">
@@ -260,8 +368,14 @@ export const EnhancedNode = memo(({ data, selected, id }: NodeProps<NodeData>) =
       </div>
 
       {/* Description */}
-      <div className="text-xs text-slate-400 mt-2 line-clamp-2">
-        {data.description || "No description provided."}
+      <div className="text-xs mt-2 line-clamp-2">
+        <InlineEdit
+          value={data.description || ''}
+          nodeId={id}
+          field="description"
+          className="text-xs text-slate-400"
+          multiline
+        />
       </div>
 
       {/* Dependencies Preview */}
