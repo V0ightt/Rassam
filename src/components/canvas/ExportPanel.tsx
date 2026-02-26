@@ -50,7 +50,11 @@ export default function ExportPanel({ repoDetails }: ExportPanelProps) {
     a.click();
   }, [repoDetails]);
 
-  const exportAsPng = useCallback(async () => {
+  const exportAsImage = useCallback(async (
+    format: 'png' | 'svg',
+    converter: (element: HTMLElement, options: any) => Promise<string>,
+    extraOptions?: Record<string, unknown>
+  ) => {
     const nodes = getNodes();
     if (nodes.length === 0) {
       alert('No nodes to export. Please visualize a repository first.');
@@ -77,15 +81,13 @@ export default function ExportPanel({ repoDetails }: ExportPanelProps) {
         throw new Error('Canvas element not found');
       }
 
-      const dataUrl = await toPng(viewportElement, {
+      const dataUrl = await converter(viewportElement, {
         backgroundColor: '#020617',
         width: imageWidth,
         height: imageHeight,
-        pixelRatio: 2,
         cacheBust: true,
         skipFonts: true,
-        filter: (node) => {
-          // Skip elements that might cause issues
+        filter: (node: Element) => {
           if (node instanceof HTMLElement) {
             const classList = node.classList;
             return !classList.contains('react-flow__minimap') && 
@@ -98,74 +100,20 @@ export default function ExportPanel({ repoDetails }: ExportPanelProps) {
           height: `${imageHeight}px`,
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
         },
+        ...extraOptions,
       });
       
-      downloadImage(dataUrl, 'png');
+      downloadImage(dataUrl, format);
     } catch (err) {
-      console.error('PNG export failed:', err);
+      console.error(`${format.toUpperCase()} export failed:`, err);
       alert(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setIsExporting(false);
     }
   }, [getNodes, downloadImage]);
 
-  const exportAsSvg = useCallback(async () => {
-    const nodes = getNodes();
-    if (nodes.length === 0) {
-      alert('No nodes to export. Please visualize a repository first.');
-      return;
-    }
-
-    setIsExporting(true);
-    setIsOpen(false);
-    
-    try {
-      const nodesBounds = getNodesBounds(nodes);
-      const viewport = getViewportForBounds(
-        nodesBounds,
-        imageWidth,
-        imageHeight,
-        0.5,
-        2,
-        0.1
-      );
-      
-      const viewportElement = document.querySelector('.react-flow__viewport') as HTMLElement;
-      
-      if (!viewportElement) {
-        throw new Error('Canvas element not found');
-      }
-
-      const dataUrl = await toSvg(viewportElement, {
-        backgroundColor: '#020617',
-        width: imageWidth,
-        height: imageHeight,
-        cacheBust: true,
-        skipFonts: true,
-        filter: (node) => {
-          // Skip elements that might cause issues
-          if (node instanceof HTMLElement) {
-            const classList = node.classList;
-            return !classList.contains('react-flow__minimap') && 
-                   !classList.contains('react-flow__controls');
-          }
-          return true;
-        },
-        style: {
-          width: `${imageWidth}px`,
-          height: `${imageHeight}px`,
-          transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
-        },
-      });
-      
-      downloadImage(dataUrl, 'svg');
-    } catch (err) {
-      console.error('SVG export failed:', err);
-      alert(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setIsExporting(false);
-    }
-  }, [getNodes, downloadImage]);
+  const exportAsPng = useCallback(() => exportAsImage('png', toPng, { pixelRatio: 2 }), [exportAsImage]);
+  const exportAsSvg = useCallback(() => exportAsImage('svg', toSvg), [exportAsImage]);
 
   const exportAsJson = useCallback(() => {
     const nodes = getNodes();

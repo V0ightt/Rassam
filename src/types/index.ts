@@ -1,5 +1,6 @@
 // Node Types
 export type NodeCategory = 
+  // Code-based categories
   | 'api'
   | 'component' 
   | 'config'
@@ -17,6 +18,20 @@ export type NodeCategory =
   | 'middleware'
   | 'model'
   | 'route'
+  // System design categories
+  | 'cache'
+  | 'queue'
+  | 'load-balancer'
+  | 'gateway'
+  | 'storage'
+  | 'cdn'
+  | 'proxy'
+  | 'firewall'
+  | 'external-api'
+  | 'message-broker'
+  | 'container'
+  | 'serverless'
+  | 'client'
   | 'default';
 
 export interface NodeData {
@@ -33,7 +48,7 @@ export interface NodeData {
 
 export interface EdgeData {
   label?: string;
-  type?: 'dependency' | 'import' | 'calls' | 'extends' | 'implements';
+  type?: 'dependency' | 'import' | 'calls' | 'extends' | 'implements' | 'sends' | 'receives' | 'reads' | 'writes';
   strength?: 'weak' | 'normal' | 'strong';
   direction?: 'one-way' | 'two-way';
   labelOffset?: { x: number; y: number };
@@ -115,8 +130,8 @@ export interface Project {
   repoUrl: string;
   source: ProjectSource;
   repoDetails: RepoDetails | null;
-  nodes: any[];
-  edges: any[];
+  nodes: FlowNode[];
+  edges: FlowEdge[];
   layoutDirection: 'TB' | 'LR';
   aiContextSnapshot: CanvasSyncSnapshot | null;
   lastSyncedAt: string | null;
@@ -126,8 +141,12 @@ export interface Project {
   updatedAt: Date;
 }
 
+// React Flow node/edge aliases with our data types
+export type FlowNode = import('reactflow').Node<NodeData>;
+export type FlowEdge = import('reactflow').Edge<EdgeData>;
+
 export interface FlowchartState {
-  nodes: any[];
-  edges: any[];
+  nodes: FlowNode[];
+  edges: FlowEdge[];
   repoDetails: RepoDetails | null;
 }

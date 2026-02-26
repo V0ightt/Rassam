@@ -11,14 +11,9 @@ import {
   Keyboard,
   LayoutGrid,
   X,
-  ArrowUp,
   ArrowDown,
-  ArrowLeft,
   ArrowRight,
   Grid,
-  MousePointer,
-  Move,
-  Copy,
   RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -331,31 +326,29 @@ export default memo(function FlowControls({
 
 // Custom styled minimap component
 export const StyledMiniMap = memo(function StyledMiniMap() {
+  const minimapCategoryStroke: Record<string, string> = {
+    api: '#10b981', component: '#3b82f6', database: '#8b5cf6',
+    auth: '#ef4444', config: '#f59e0b', service: '#8b5cf6',
+    utility: '#64748b', test: '#06b6d4', style: '#ec4899',
+    asset: '#f97316', documentation: '#14b8a6', core: '#6366f1',
+    hook: '#0ea5e9', context: '#f43f5e', middleware: '#84cc16',
+    model: '#d946ef', route: '#eab308',
+    // System design
+    cache: '#fb923c', queue: '#fbbf24', 'load-balancer': '#22d3ee',
+    gateway: '#34d399', storage: '#a78bfa', cdn: '#38bdf8',
+    proxy: '#2dd4bf', firewall: '#f87171', 'external-api': '#60a5fa',
+    'message-broker': '#f472b6', container: '#818cf8', serverless: '#facc15',
+    client: '#94a3b8',
+  };
+
   return (
     <ReactFlowMiniMap
       nodeStrokeColor={(n) => {
-        const category = n.data?.category;
-        switch (category) {
-          case 'api': return '#10b981';
-          case 'component': return '#3b82f6';
-          case 'database': return '#8b5cf6';
-          case 'auth': return '#ef4444';
-          case 'config': return '#f59e0b';
-          case 'service': return '#8b5cf6';
-          default: return '#64748b';
-        }
+        return minimapCategoryStroke[n.data?.category] || '#64748b';
       }}
       nodeColor={(n) => {
-        const category = n.data?.category;
-        switch (category) {
-          case 'api': return '#10b98133';
-          case 'component': return '#3b82f633';
-          case 'database': return '#8b5cf633';
-          case 'auth': return '#ef444433';
-          case 'config': return '#f59e0b33';
-          case 'service': return '#8b5cf633';
-          default: return '#64748b33';
-        }
+        const stroke = minimapCategoryStroke[n.data?.category] || '#64748b';
+        return stroke + '33';
       }}
       maskColor="#020617dd"
       className="!bg-slate-900 !border-slate-700 rounded-xl"

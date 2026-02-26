@@ -22,15 +22,28 @@ import {
   Route,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
   Copy,
-  Check
+  Check,
+  HardDrive,
+  ListOrdered,
+  Scale,
+  DoorOpen,
+  Archive,
+  Globe,
+  ArrowLeftRight,
+  ShieldAlert,
+  Plug,
+  Radio,
+  Container,
+  Zap,
+  Monitor
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NodeCategory, NodeData } from '@/types';
 
 // Icon mapping for different node categories
 const categoryIcons: Record<NodeCategory, React.ElementType> = {
+  // Code-based
   api: Server,
   component: Box,
   config: Wrench,
@@ -48,11 +61,26 @@ const categoryIcons: Record<NodeCategory, React.ElementType> = {
   middleware: GitBranch,
   model: Database,
   route: Route,
+  // System design
+  cache: HardDrive,
+  queue: ListOrdered,
+  'load-balancer': Scale,
+  gateway: DoorOpen,
+  storage: Archive,
+  cdn: Globe,
+  proxy: ArrowLeftRight,
+  firewall: ShieldAlert,
+  'external-api': Plug,
+  'message-broker': Radio,
+  container: Container,
+  serverless: Zap,
+  client: Monitor,
   default: Folder,
 };
 
 // Color mapping for different node categories
 const categoryColors: Record<NodeCategory, { bg: string; border: string; icon: string; glow: string }> = {
+  // Code-based
   api: { bg: 'bg-emerald-900/30', border: 'border-emerald-500', icon: 'text-emerald-400', glow: 'shadow-emerald-500/30' },
   component: { bg: 'bg-blue-900/30', border: 'border-blue-500', icon: 'text-blue-400', glow: 'shadow-blue-500/30' },
   config: { bg: 'bg-amber-900/30', border: 'border-amber-500', icon: 'text-amber-400', glow: 'shadow-amber-500/30' },
@@ -70,6 +98,20 @@ const categoryColors: Record<NodeCategory, { bg: string; border: string; icon: s
   middleware: { bg: 'bg-lime-900/30', border: 'border-lime-500', icon: 'text-lime-400', glow: 'shadow-lime-500/30' },
   model: { bg: 'bg-fuchsia-900/30', border: 'border-fuchsia-500', icon: 'text-fuchsia-400', glow: 'shadow-fuchsia-500/30' },
   route: { bg: 'bg-yellow-900/30', border: 'border-yellow-500', icon: 'text-yellow-400', glow: 'shadow-yellow-500/30' },
+  // System design
+  cache: { bg: 'bg-orange-900/30', border: 'border-orange-400', icon: 'text-orange-300', glow: 'shadow-orange-400/30' },
+  queue: { bg: 'bg-amber-900/30', border: 'border-amber-400', icon: 'text-amber-300', glow: 'shadow-amber-400/30' },
+  'load-balancer': { bg: 'bg-cyan-900/30', border: 'border-cyan-400', icon: 'text-cyan-300', glow: 'shadow-cyan-400/30' },
+  gateway: { bg: 'bg-emerald-900/30', border: 'border-emerald-400', icon: 'text-emerald-300', glow: 'shadow-emerald-400/30' },
+  storage: { bg: 'bg-violet-900/30', border: 'border-violet-400', icon: 'text-violet-300', glow: 'shadow-violet-400/30' },
+  cdn: { bg: 'bg-sky-900/30', border: 'border-sky-400', icon: 'text-sky-300', glow: 'shadow-sky-400/30' },
+  proxy: { bg: 'bg-teal-900/30', border: 'border-teal-400', icon: 'text-teal-300', glow: 'shadow-teal-400/30' },
+  firewall: { bg: 'bg-red-900/30', border: 'border-red-400', icon: 'text-red-300', glow: 'shadow-red-400/30' },
+  'external-api': { bg: 'bg-blue-900/30', border: 'border-blue-400', icon: 'text-blue-300', glow: 'shadow-blue-400/30' },
+  'message-broker': { bg: 'bg-pink-900/30', border: 'border-pink-400', icon: 'text-pink-300', glow: 'shadow-pink-400/30' },
+  container: { bg: 'bg-indigo-900/30', border: 'border-indigo-400', icon: 'text-indigo-300', glow: 'shadow-indigo-400/30' },
+  serverless: { bg: 'bg-yellow-900/30', border: 'border-yellow-400', icon: 'text-yellow-300', glow: 'shadow-yellow-400/30' },
+  client: { bg: 'bg-slate-900/30', border: 'border-slate-400', icon: 'text-slate-300', glow: 'shadow-slate-400/30' },
   default: { bg: 'bg-slate-900/30', border: 'border-slate-600', icon: 'text-slate-400', glow: 'shadow-slate-500/30' },
 };
 

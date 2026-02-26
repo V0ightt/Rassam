@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Edge, Node } from 'reactflow';
-import { CanvasSyncSnapshot, ChatSession, ChatMessage } from '@/types';
+import { CanvasSyncSnapshot, ChatSession, ChatMessage, EdgeData } from '@/types';
 import { LLMProviderId } from '@/lib/llm';
 import {
   loadModelSettings,
@@ -48,6 +48,7 @@ interface ChatbotProps {
   allNodes?: Node[];
   allEdges?: Edge[];
   projectName?: string;
+  layoutDirection?: 'TB' | 'LR';
   syncedCanvasContext?: CanvasSyncSnapshot | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
@@ -86,6 +87,7 @@ export default function EnhancedChatbot({
   allNodes,
   allEdges,
   projectName,
+  layoutDirection = 'TB',
   syncedCanvasContext,
   chatSessions,
   activeChatSessionId,
@@ -261,7 +263,7 @@ export default function EnhancedChatbot({
           source: repoDetails ? 'github' : 'empty',
           repo: repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : undefined,
         },
-        layoutDirection: 'TB',
+        layoutDirection,
         selectedNodeId: selectedNode?.id || null,
         selectedNodeLabel: selectedNode?.data?.label || null,
         nodes: (allNodes || []).map(n => ({
@@ -279,10 +281,10 @@ export default function EnhancedChatbot({
           id: e.id,
           source: e.source,
           target: e.target,
-          label: (e.data as any)?.label || e.label,
-          type: (e.data as any)?.type || e.type,
-          strength: (e.data as any)?.strength,
-          direction: (e.data as any)?.direction,
+          label: (e.data as EdgeData)?.label || (typeof e.label === 'string' ? e.label : undefined),
+          type: (e.data as EdgeData)?.type || e.type,
+          strength: (e.data as EdgeData)?.strength,
+          direction: (e.data as EdgeData)?.direction,
         })),
       };
 

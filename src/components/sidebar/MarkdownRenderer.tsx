@@ -97,9 +97,9 @@ const FilePath = ({ path }: { path: string }) => (
 );
 
 export default function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
-  // Pre-process content to detect file paths
+  // Pre-process content to detect file paths (only paths with directory separators)
   const processedContent = content.replace(
-    /`([^`]+\.(ts|tsx|js|jsx|css|json|md|py|go|rs|java|c|cpp|h|hpp))`/g,
+    /`((?:[a-zA-Z0-9_\-]+\/)+[a-zA-Z0-9_\-]+\.(ts|tsx|js|jsx|css|json|md|py|go|rs|java|c|cpp|h|hpp))`/g,
     '**FILE:$1**'
   );
 

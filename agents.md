@@ -55,7 +55,7 @@ This document is designed to help future coding agents understand the architectu
 ## Key Directories & Files
 
 ### `src/app`
--   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider`.
+-   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
   -   Owns project lifecycle state (`github`/`empty` source), per-project synced AI context snapshots, and canvas sync handler.
   -   Persists projects (including empty projects and sync snapshots) in localStorage.
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
@@ -66,19 +66,23 @@ This document is designed to help future coding agents understand the architectu
 
 ### `src/lib`
 -   `ai.ts`: Configuration for DeepSeek API. Contains `analyzeRepoStructure` for node generation and `chatWithContext` for enhanced chat responses.
--   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`.
+-   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests.
 -   `model-settings.ts`: Client-side settings schema + localStorage persistence helpers for model enablement and generation controls.
 -   `llm/catalog.ts`: Provider catalog metadata, model lists, API key checks, and live provider validation helpers.
+-   `llm/providers/OpenAICompatibleAdapter.ts`: Abstract base class for OpenAI-compatible LLM adapters. DeepSeek, Google, and Ollama adapters extend this to eliminate duplication.
 -   `utils.ts`: `cn` helper for Tailwind class merging.
 
 ### `src/types`
 -   `index.ts`: TypeScript type definitions for `NodeCategory`, `NodeData`, `EdgeData`, `ChatMessage`, etc.
 
+### `src/components`
+-   `ErrorBoundary.tsx`: React class-based error boundary wrapping the main app. Prevents component crashes from blanking the entire page.
+
 ### `src/components/canvas`
 -   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories.
--   `CustomEdge.tsx`: Custom edge component with draggable labels, direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
--   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON.
--   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms.
+-   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
+-   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Uses shared `exportAsImage` helper internally.
+-   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Categories are grouped into "Code" and "System" sections.
 -   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
   -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.
 
@@ -179,12 +183,20 @@ interface EdgeData {
 1.  Add the category to `NodeCategory` type in `src/types/index.ts`.
 2.  Add icon mapping in `categoryIcons` in `NodeTypes.tsx`.
 3.  Add color mapping in `categoryColors` in `NodeTypes.tsx`.
-4.  Update the minimap colors in `FlowControls.tsx`.
+4.  Update the minimap colors in `FlowControls.tsx` (`minimapCategoryStroke` record).
+5.  Add the category to the `categories` array in `EditToolbar.tsx` (with `group: 'Code'` or `'System'`).
+6.  Update the `VALID_NODE_CATEGORIES` array and AI prompt in `ai.ts`.
 
 ### Adding New Node Types
 1.  Create a new component in `src/components/canvas/NodeTypes.tsx`.
 2.  Export it in the `nodeTypes` object.
 3.  Update the API generation logic if the new node type requires different data.
+
+### Adding New LLM Providers
+1.  If OpenAI-compatible: extend `OpenAICompatibleAdapter` from `src/lib/llm/providers/OpenAICompatibleAdapter.ts`. Override only `providerId`, `defaultModel`, `apiKey`, and `baseURL`.
+2.  If non-OpenAI-compatible: implement `LLMAdapter` interface directly (see `AnthropicAdapter.ts`).
+3.  Register the adapter in `src/lib/llm/registry.ts`.
+4.  Add provider metadata to `src/lib/llm/catalog.ts`.
 
 ### Enhancing the Chatbot
 -   Modify the system prompt in `chatWithContext` function in `src/lib/ai.ts`.

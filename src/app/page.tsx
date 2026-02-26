@@ -43,6 +43,7 @@ import EnhancedChatbot from '@/components/sidebar/EnhancedChatbot';
 import ExportPanel from '@/components/canvas/ExportPanel';
 import EditToolbar from '@/components/canvas/EditToolbar';
 import FlowControls, { StyledMiniMap } from '@/components/canvas/FlowControls';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -1165,6 +1166,7 @@ function FlowCanvas() {
                     allNodes={nodes}
                     allEdges={edges}
                     projectName={activeProject?.name}
+                    layoutDirection={layoutDirection}
                     syncedCanvasContext={activeProject?.aiContextSnapshot || null}
                     chatSessions={activeProject?.chatSessions || []}
                     activeChatSessionId={activeProject?.activeChatSessionId || null}
@@ -1182,7 +1184,9 @@ function FlowCanvas() {
 export default function Home() {
     return (
         <ReactFlowProvider>
-            <FlowCanvas />
+            <ErrorBoundary>
+                <FlowCanvas />
+            </ErrorBoundary>
         </ReactFlowProvider>
     );
 }

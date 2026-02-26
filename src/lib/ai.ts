@@ -19,23 +19,15 @@ function clampTemperature(value?: number): number {
 }
 
 const VALID_NODE_CATEGORIES: NodeCategory[] = [
-  'api',
-  'component',
-  'config',
-  'database',
-  'auth',
-  'utility',
-  'test',
-  'style',
-  'asset',
-  'documentation',
-  'core',
-  'service',
-  'hook',
-  'context',
-  'middleware',
-  'model',
-  'route',
+  // Code-based
+  'api', 'component', 'config', 'database', 'auth',
+  'utility', 'test', 'style', 'asset', 'documentation',
+  'core', 'service', 'hook', 'context', 'middleware',
+  'model', 'route',
+  // System design
+  'cache', 'queue', 'load-balancer', 'gateway', 'storage',
+  'cdn', 'proxy', 'firewall', 'external-api', 'message-broker',
+  'container', 'serverless', 'client',
   'default',
 ];
 
@@ -92,11 +84,11 @@ Given this list of files from a GitHub repository, organize them into logical ar
 
 IMPORTANT RULES:
 1. Group related files into meaningful "Nodes" representing architectural components
-2. Use these exact category values: api, component, config, database, auth, utility, test, style, asset, documentation, core, service, hook, context, middleware, model, route, default
+2. Use these exact category values: api, component, config, database, auth, utility, test, style, asset, documentation, core, service, hook, context, middleware, model, route, cache, queue, load-balancer, gateway, storage, cdn, proxy, firewall, external-api, message-broker, container, serverless, client, default
 3. Identify connections between nodes based on common patterns (e.g., components use hooks, api calls services, etc.)
 4. Provide a clear, concise description for each node
 5. Include ALL files in exactly one node
-6. Edge types should be one of: dependency, import, calls, extends, implements
+6. Edge types should be one of: dependency, import, calls, extends, implements, sends, receives, reads, writes
 7. Edge strength: weak, normal, or strong
 
 File List (${fileStructure.length} files):

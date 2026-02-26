@@ -12,7 +12,7 @@ export class AnthropicAdapter implements LLMProvider {
   private readonly baseUrl: string;
 
   constructor() {
-    this.apiKey = process.env.ANTHROPIC_API_KEY || "sk-placeholder";
+    this.apiKey = process.env.ANTHROPIC_API_KEY || "";
     this.model = process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
     this.baseUrl = "https://api.anthropic.com/v1/messages";
   }

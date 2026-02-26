@@ -130,7 +130,8 @@ export function sanitizeModelSettings(
       continue;
     }
 
-    if (provider.available && provider.models[0]) {
+    // Only auto-enable if the user had no previous selection for this provider
+    if (provider.available && provider.models[0] && !base.enabledModels[provider.id]) {
       enabledModels[provider.id] = [provider.models[0]];
     }
   }

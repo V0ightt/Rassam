@@ -5,14 +5,10 @@ import {
   Plus,
   Trash2,
   Edit3,
-  Link2,
-  Unlink,
   RotateCcw,
   Save,
   X,
   Check,
-  Type,
-  Folder,
   FileCode
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -28,20 +24,39 @@ interface EditToolbarProps {
   onSave?: () => void;
 }
 
-const categories: { value: NodeCategory; label: string }[] = [
-  { value: 'component', label: 'Component' },
-  { value: 'api', label: 'API' },
-  { value: 'service', label: 'Service' },
-  { value: 'database', label: 'Database' },
-  { value: 'auth', label: 'Auth' },
-  { value: 'config', label: 'Config' },
-  { value: 'utility', label: 'Utility' },
-  { value: 'hook', label: 'Hook' },
-  { value: 'context', label: 'Context' },
-  { value: 'model', label: 'Model' },
-  { value: 'route', label: 'Route' },
-  { value: 'test', label: 'Test' },
-  { value: 'style', label: 'Style' },
+const categories: { value: NodeCategory; label: string; group?: string }[] = [
+  // Code-based
+  { value: 'component', label: 'Component', group: 'Code' },
+  { value: 'api', label: 'API', group: 'Code' },
+  { value: 'service', label: 'Service', group: 'Code' },
+  { value: 'database', label: 'Database', group: 'Code' },
+  { value: 'auth', label: 'Auth', group: 'Code' },
+  { value: 'config', label: 'Config', group: 'Code' },
+  { value: 'utility', label: 'Utility', group: 'Code' },
+  { value: 'hook', label: 'Hook', group: 'Code' },
+  { value: 'context', label: 'Context', group: 'Code' },
+  { value: 'model', label: 'Model', group: 'Code' },
+  { value: 'route', label: 'Route', group: 'Code' },
+  { value: 'middleware', label: 'Middleware', group: 'Code' },
+  { value: 'core', label: 'Core', group: 'Code' },
+  { value: 'test', label: 'Test', group: 'Code' },
+  { value: 'style', label: 'Style', group: 'Code' },
+  { value: 'documentation', label: 'Documentation', group: 'Code' },
+  { value: 'asset', label: 'Asset', group: 'Code' },
+  // System design
+  { value: 'cache', label: 'Cache', group: 'System' },
+  { value: 'queue', label: 'Queue', group: 'System' },
+  { value: 'load-balancer', label: 'Load Balancer', group: 'System' },
+  { value: 'gateway', label: 'Gateway', group: 'System' },
+  { value: 'storage', label: 'Storage', group: 'System' },
+  { value: 'cdn', label: 'CDN', group: 'System' },
+  { value: 'proxy', label: 'Proxy', group: 'System' },
+  { value: 'firewall', label: 'Firewall', group: 'System' },
+  { value: 'external-api', label: 'External API', group: 'System' },
+  { value: 'message-broker', label: 'Message Broker', group: 'System' },
+  { value: 'container', label: 'Container', group: 'System' },
+  { value: 'serverless', label: 'Serverless', group: 'System' },
+  { value: 'client', label: 'Client', group: 'System' },
   { value: 'default', label: 'Other' },
 ];
 

@@ -18,6 +18,10 @@ const edgeColors: Record<string, string> = {
   calls: '#10b981', // emerald
   extends: '#f59e0b', // amber
   implements: '#ec4899', // pink
+  sends: '#06b6d4', // cyan
+  receives: '#14b8a6', // teal
+  reads: '#a78bfa', // violet-light
+  writes: '#f97316', // orange
   default: '#64748b', // slate
 };
 
@@ -41,7 +45,13 @@ const CustomEdge = memo(function CustomEdge({
   const [isEditing, setIsEditing] = useState(false);
   const [labelText, setLabelText] = useState(data?.label || '');
   const dragStartRef = useRef({ x: 0, y: 0 });
+  const labelOffsetRef = useRef(labelOffset); // Track latest offset for mouseup closure
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    labelOffsetRef.current = labelOffset;
+  }, [labelOffset]);
   
   // Use stored offset from data if available
   useEffect(() => {
@@ -94,10 +104,10 @@ const CustomEdge = memo(function CustomEdge({
     
     const handleMouseUp = () => {
       setIsDraggingLabel(false);
-      // Save the offset to edge data
+      // Save the latest offset via ref to avoid stale closure
       setEdges((edges) => edges.map((edge) => 
         edge.id === id 
-          ? { ...edge, data: { ...edge.data, labelOffset: labelOffset } }
+          ? { ...edge, data: { ...edge.data, labelOffset: labelOffsetRef.current } }
           : edge
       ));
     };

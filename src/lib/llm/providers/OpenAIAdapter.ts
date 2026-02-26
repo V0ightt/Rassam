@@ -84,7 +84,7 @@ export class OpenAIAdapter implements LLMProvider {
 
   constructor() {
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY || "sk-placeholder",
+      apiKey: process.env.OPENAI_API_KEY || "",
     });
     this.model = process.env.OPENAI_MODEL || "gpt-5-nano";
   }
