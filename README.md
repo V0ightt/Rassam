@@ -47,7 +47,9 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### Flowchart Editing
 - **Add nodes**: Create new nodes with custom labels, descriptions, and categories
 - **Edit nodes**: Modify existing node properties inline
+- **Inline editing**: Double-click a node's label or description to edit it directly on the canvas
 - **Delete nodes**: Remove nodes and their connections
+- **Copy & Paste**: Ctrl+C / Ctrl+V to duplicate selected nodes (with their internal edges)
 - **Create connections**: Draw edges between nodes by dragging
 - **Undo support**: Revert recent changes
 
@@ -86,7 +88,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### Quality of Life Features
 - **Search nodes**: Filter nodes by name, description, or file paths
 - **Minimap**: Bird's-eye view of the entire flowchart
-- **Keyboard shortcuts**: Common actions accessible via keyboard
+- **Keyboard shortcuts**: Common actions accessible via keyboard (Ctrl+C/V, Ctrl+Z, Ctrl+A, Delete, etc.)
 - **Layout options**: Top-to-bottom or Left-to-right layouts
 - **Zoom controls**: Easy navigation of large flowcharts
 - **Loading states**: Clear feedback during API operations

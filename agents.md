@@ -47,6 +47,8 @@ This document is designed to help future coding agents understand the architectu
 7.  **Interaction**:
     -   Clicking a node sets it as `selectedNode`.
     -   **Multi-select**: Hold **Shift** and click nodes to add/remove from selection, or **Shift+drag** on the canvas to rubber-band select multiple nodes. The batch toolbar appears when 2+ nodes are selected, enabling bulk delete and category changes.
+    -   **Clipboard**: **Ctrl+C** copies selected node(s) (and edges fully within the selection) to an in-memory clipboard. **Ctrl+V** pastes them at a +60px offset with new IDs.
+    -   **Inline editing**: **Double-click** a node's label or description to edit it in-place. Press **Enter** to commit, **Escape** to cancel.
     -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
     -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
@@ -83,7 +85,8 @@ This document is designed to help future coding agents understand the architectu
 -   `ErrorBoundary.tsx`: React class-based error boundary wrapping the main app. Prevents component crashes from blanking the entire page.
 
 ### `src/components/canvas`
--   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories.
+-   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories. `EnhancedNode` supports **double-click inline editing** of label and description via the `InlineEdit` component.
+-   `NodeEditContext.tsx`: React context that provides `onUpdateNode` callback to node components, enabling inline editing without prop drilling.
 -   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
 -   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Import JSON from dropdown (creates new project via `onImportProject` callback). Uses shared `exportAsImage` helper internally.
 -   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Categories are grouped into "Code" and "System" sections.
