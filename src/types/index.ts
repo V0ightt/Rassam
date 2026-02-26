@@ -54,7 +54,7 @@ export interface EdgeData {
   labelOffset?: { x: number; y: number };
 }
 
-export type ProjectSource = 'github' | 'empty';
+export type ProjectSource = 'github' | 'empty' | 'imported';
 
 export interface SyncedCanvasNode {
   id: string;

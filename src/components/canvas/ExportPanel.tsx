@@ -8,22 +8,25 @@ import {
   Image, 
   FileJson, 
   FileCode,
-  ChevronDown
+  ChevronDown,
+  Upload
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ExportPanelProps {
   repoDetails?: { owner: string; repo: string } | null;
+  onImportProject?: (file: File) => void;
 }
 
 const imageWidth = 1920;
 const imageHeight = 1080;
 
-export default function ExportPanel({ repoDetails }: ExportPanelProps) {
+export default function ExportPanel({ repoDetails, onImportProject }: ExportPanelProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
   const { getNodes, getEdges } = useReactFlow();
   const exportRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Click away listener
   useEffect(() => {
@@ -154,14 +157,36 @@ export default function ExportPanel({ repoDetails }: ExportPanelProps) {
     URL.revokeObjectURL(url);
   }, [getNodes, getEdges, repoDetails]);
 
+  const handleImportClick = useCallback(() => {
+    setIsOpen(false);
+    importInputRef.current?.click();
+  }, []);
+
+  const handleImportFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onImportProject) {
+      onImportProject(file);
+    }
+    e.target.value = '';
+  }, [onImportProject]);
+
   const exportOptions = [
     { icon: Image, label: 'Export as PNG', action: exportAsPng, color: 'text-cyan-400' },
     { icon: FileCode, label: 'Export as SVG', action: exportAsSvg, color: 'text-green-400' },
     { icon: FileJson, label: 'Export as JSON', action: exportAsJson, color: 'text-amber-400' },
+    ...(onImportProject ? [{ icon: Upload, label: 'Import JSON', action: handleImportClick, color: 'text-purple-400' }] : []),
   ];
 
   return (
     <div className="relative" ref={exportRef}>
+      {/* Hidden file input for import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportFileChange}
+      />
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={isExporting}

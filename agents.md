@@ -23,9 +23,10 @@ This document is designed to help future coding agents understand the architectu
 ## Architecture & Data Flow
 
 1.  **User Input**: User enters a GitHub URL on the client (`src/app/page.tsx`) or via Projects sidebar.
-  -   New project creation supports **two modes** from Projects sidebar `+`: 
+  -   New project creation supports **three modes** from Projects sidebar `+`: 
     - **From GitHub URL** (repo analysis + auto-generated nodes/edges)
     - **Empty Project** (blank editable canvas for custom architecture design)
+    - **From JSON File** (import a previously exported JSON to create a new project)
 2.  **API Request**: Application sends POST request to `/api/repo`.
   -   Settings UI sends GET request to `/api/settings/models` for provider/model availability and validation status.
 3.  **Data Fetching** (`src/lib/github.ts`):
@@ -57,7 +58,7 @@ This document is designed to help future coding agents understand the architectu
 
 ### `src/app`
 -   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
-  -   Owns project lifecycle state (`github`/`empty` source), per-project synced AI context snapshots, and canvas sync handler.
+  -   Owns project lifecycle state (`github`/`empty`/`imported` source), per-project synced AI context snapshots, and canvas sync handler.
   -   Persists projects (including empty projects and sync snapshots) in localStorage.
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
@@ -67,7 +68,8 @@ This document is designed to help future coding agents understand the architectu
 
 ### `src/lib`
 -   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths).
--   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests.
+-   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests (validates token format before use).
+-   `import.ts`: JSON import utility. `parseAndValidateImportJson()` validates exported JSON, regenerates node/edge IDs to avoid collisions, applies defaults for missing fields, and derives project metadata.
 -   `model-settings.ts`: Client-side settings schema + localStorage persistence helpers for model enablement and generation controls.
 -   `llm/catalog.ts`: Provider catalog metadata, model lists, API key checks, and live provider validation helpers.
 -   `llm/providers/OpenAICompatibleAdapter.ts`: Abstract base class for OpenAI-compatible LLM adapters. DeepSeek, Google, and Ollama adapters extend this to eliminate duplication.
@@ -82,7 +84,7 @@ This document is designed to help future coding agents understand the architectu
 ### `src/components/canvas`
 -   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories.
 -   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
--   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Uses shared `exportAsImage` helper internally.
+-   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Import JSON from dropdown (creates new project via `onImportProject` callback). Uses shared `exportAsImage` helper internally.
 -   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Categories are grouped into "Code" and "System" sections.
 -   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
   -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.
@@ -118,7 +120,7 @@ interface CanvasSyncSnapshot {
   project: {
     id: string;
     name: string;
-    source: 'github' | 'empty';
+    source: 'github' | 'empty' | 'imported';
     repo?: string;
   };
   layoutDirection: 'TB' | 'LR';

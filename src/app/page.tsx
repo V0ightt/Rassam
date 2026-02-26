@@ -46,6 +46,7 @@ import FlowControls, { StyledMiniMap } from '@/components/canvas/FlowControls';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails } from '@/types';
 import { cn } from '@/lib/utils';
+import { parseAndValidateImportJson } from '@/lib/import';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -117,9 +118,11 @@ function FlowCanvas() {
     const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
     const [showProjectList, setShowProjectList] = useState(false);
     const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
-    const [createProjectMode, setCreateProjectMode] = useState<ProjectSource>('github');
+    const [createProjectMode, setCreateProjectMode] = useState<'github' | 'empty' | 'json'>('github');
     const [newProjectUrl, setNewProjectUrl] = useState('');
     const [newProjectName, setNewProjectName] = useState('');
+    const [importError, setImportError] = useState<string | null>(null);
+    const importFileRef = useRef<HTMLInputElement>(null);
     
     // State for UI
     const [repoUrl, setRepoUrl] = useState("");
@@ -332,6 +335,48 @@ function FlowCanvas() {
         if (!repoUrl.trim()) return;
         await createProjectFromGitHub(repoUrl.trim());
     }, [createProjectFromGitHub, repoUrl]);
+
+    // Import project from JSON file
+    const handleImportProject = useCallback((file: File) => {
+        setImportError(null);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const raw = e.target?.result as string;
+                const imported = parseAndValidateImportJson(raw, file.name);
+                const newProject = createNewProject(
+                    imported.repoDetails ? `https://github.com/${imported.repoDetails.owner}/${imported.repoDetails.repo}` : '',
+                    imported.repoDetails,
+                    imported.nodes,
+                    imported.edges,
+                    {
+                        name: imported.name,
+                        source: 'imported',
+                        layoutDirection: 'TB',
+                    }
+                );
+                setProjects(prev => [...prev, newProject]);
+                setActiveProjectId(newProject.id);
+                setNodes(imported.nodes);
+                setEdges(imported.edges);
+                setRepoDetails(imported.repoDetails);
+                setRepoUrl(newProject.repoUrl);
+                setLayoutDirection('TB');
+                setSelectedNode(null);
+                setShowCreateProjectModal(false);
+                setShowProjectList(false);
+                setError(null);
+                setImportError(null);
+                setTimeout(() => fitView({ padding: 0.2 }), 100);
+            } catch (err: any) {
+                setImportError(err.message || 'Failed to import JSON file.');
+            }
+        };
+        reader.onerror = () => {
+            setImportError('Failed to read the file.');
+        };
+        reader.readAsText(file);
+    }, [fitView, setEdges, setNodes]);
 
     const handleCreateEmptyProject = useCallback(() => {
         const nowName = newProjectName.trim();
@@ -840,9 +885,9 @@ function FlowCanvas() {
                             </div>
 
                             <div className="p-4 space-y-4">
-                                <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-800/60 border border-slate-700">
+                                <div className="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-800/60 border border-slate-700">
                                     <button
-                                        onClick={() => setCreateProjectMode('github')}
+                                        onClick={() => { setCreateProjectMode('github'); setImportError(null); }}
                                         className={cn(
                                             'px-3 py-2 text-xs rounded-lg transition-colors',
                                             createProjectMode === 'github'
@@ -850,10 +895,10 @@ function FlowCanvas() {
                                                 : 'text-slate-300 hover:bg-slate-700'
                                         )}
                                     >
-                                        From GitHub URL
+                                        From GitHub
                                     </button>
                                     <button
-                                        onClick={() => setCreateProjectMode('empty')}
+                                        onClick={() => { setCreateProjectMode('empty'); setImportError(null); }}
                                         className={cn(
                                             'px-3 py-2 text-xs rounded-lg transition-colors',
                                             createProjectMode === 'empty'
@@ -862,6 +907,17 @@ function FlowCanvas() {
                                         )}
                                     >
                                         Empty Project
+                                    </button>
+                                    <button
+                                        onClick={() => { setCreateProjectMode('json'); setImportError(null); }}
+                                        className={cn(
+                                            'px-3 py-2 text-xs rounded-lg transition-colors',
+                                            createProjectMode === 'json'
+                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                                : 'text-slate-300 hover:bg-slate-700'
+                                        )}
+                                    >
+                                        From JSON
                                     </button>
                                 </div>
 
@@ -883,7 +939,7 @@ function FlowCanvas() {
                                             className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
                                         />
                                     </div>
-                                ) : (
+                                ) : createProjectMode === 'empty' ? (
                                     <div className="space-y-3">
                                         <label className="text-xs text-slate-400 block">Project name (optional)</label>
                                         <input
@@ -899,6 +955,37 @@ function FlowCanvas() {
                                         />
                                         <p className="text-xs text-slate-500">
                                             Start from a blank canvas, then add custom nodes and connections.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        <label className="text-xs text-slate-400 block">Select a JSON file exported from Rassam</label>
+                                        <input
+                                            ref={importFileRef}
+                                            type="file"
+                                            accept=".json"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0];
+                                                if (file) handleImportProject(file);
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                        <button
+                                            onClick={() => importFileRef.current?.click()}
+                                            className="w-full flex items-center justify-center gap-2 bg-slate-800 border-2 border-dashed border-slate-600 hover:border-cyan-500/50 rounded-lg px-3 py-6 text-sm text-slate-300 hover:text-cyan-300 transition-colors cursor-pointer"
+                                        >
+                                            <FileCode size={18} />
+                                            Choose JSON file
+                                        </button>
+                                        {importError && (
+                                            <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-2">
+                                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                                                {importError}
+                                            </div>
+                                        )}
+                                        <p className="text-xs text-slate-500">
+                                            Import a previously exported JSON file as a new project.
                                         </p>
                                     </div>
                                 )}
@@ -925,12 +1012,19 @@ function FlowCanvas() {
                                     >
                                         {loading ? 'Analyzing...' : 'Create from GitHub'}
                                     </button>
-                                ) : (
+                                ) : createProjectMode === 'empty' ? (
                                     <button
                                         onClick={handleCreateEmptyProject}
                                         className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
                                     >
                                         Create Empty Project
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => importFileRef.current?.click()}
+                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
+                                    >
+                                        Choose File to Import
                                     </button>
                                 )}
                             </div>
@@ -987,7 +1081,7 @@ function FlowCanvas() {
                             )}
                             <span className="hidden sm:inline">{loading ? 'Analyzing...' : 'Visualize'}</span>
                         </button>
-                        <ExportPanel repoDetails={repoDetails} />
+                        <ExportPanel repoDetails={repoDetails} onImportProject={handleImportProject} />
                         <Link
                             href="/settings"
                             className="bg-slate-900/90 backdrop-blur-md border border-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-slate-300 transition-all flex items-center"
