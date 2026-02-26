@@ -9,7 +9,9 @@ import {
   Save,
   X,
   Check,
-  FileCode
+  FileCode,
+  Layers,
+  Tag,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NodeCategory } from '@/types';
@@ -17,9 +19,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 interface EditToolbarProps {
   selectedNode: any | null;
+  selectedNodes?: any[];
   onAddNode: (nodeData: any) => void;
   onDeleteNode: (nodeId: string) => void;
   onUpdateNode: (nodeId: string, data: any) => void;
+  onBatchDelete?: (nodeIds: string[]) => void;
+  onBatchUpdateCategory?: (nodeIds: string[], category: string) => void;
   onUndo?: () => void;
   onSave?: () => void;
 }
@@ -62,14 +67,18 @@ const categories: { value: NodeCategory; label: string; group?: string }[] = [
 
 export default function EditToolbar({ 
   selectedNode, 
+  selectedNodes = [],
   onAddNode, 
   onDeleteNode, 
   onUpdateNode,
+  onBatchDelete,
+  onBatchUpdateCategory,
   onUndo,
   onSave
 }: EditToolbarProps) {
   const [isAddingNode, setIsAddingNode] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isBatchCategoryOpen, setIsBatchCategoryOpen] = useState(false);
   const [newNodeData, setNewNodeData] = useState({
     label: '',
     description: '',
@@ -85,6 +94,10 @@ export default function EditToolbar({
   
   const addNodeRef = useRef<HTMLDivElement>(null);
   const editNodeRef = useRef<HTMLDivElement>(null);
+  const batchCategoryRef = useRef<HTMLDivElement>(null);
+
+  const isMultiSelect = selectedNodes.length > 1;
+  const multiSelectIds = selectedNodes.map((n: any) => n.id);
 
   // Click away listener
   useEffect(() => {
@@ -95,13 +108,16 @@ export default function EditToolbar({
       if (editNodeRef.current && !editNodeRef.current.contains(event.target as Node)) {
         setIsEditing(false);
       }
+      if (batchCategoryRef.current && !batchCategoryRef.current.contains(event.target as Node)) {
+        setIsBatchCategoryOpen(false);
+      }
     };
 
-    if (isAddingNode || isEditing) {
+    if (isAddingNode || isEditing || isBatchCategoryOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [isAddingNode, isEditing]);
+  }, [isAddingNode, isEditing, isBatchCategoryOpen]);
 
   const handleAddNode = () => {
     if (!newNodeData.label.trim()) return;
@@ -161,8 +177,8 @@ export default function EditToolbar({
           <Plus size={18} />
         </button>
 
-        {/* Edit Node Button (only when selected) */}
-        {selectedNode && (
+        {/* Edit Node Button (only when single selected) */}
+        {selectedNode && !isMultiSelect && (
           <button
             onClick={handleEditStart}
             className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
@@ -172,8 +188,8 @@ export default function EditToolbar({
           </button>
         )}
 
-        {/* Delete Node Button (only when selected) */}
-        {selectedNode && (
+        {/* Delete Node Button (single selection) */}
+        {selectedNode && !isMultiSelect && (
           <button
             onClick={() => onDeleteNode(selectedNode.id)}
             className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-lg transition-colors"
@@ -207,6 +223,99 @@ export default function EditToolbar({
           </button>
         )}
       </div>
+
+      {/* Multi-select batch operations bar */}
+      <AnimatePresence>
+        {isMultiSelect && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="p-2.5 bg-cyan-900/60 backdrop-blur border border-cyan-600/40 rounded-xl shadow-xl"
+          >
+            <div className="flex items-center gap-1.5 mb-2 px-1">
+              <Layers size={14} className="text-cyan-300" />
+              <span className="text-xs font-medium text-cyan-200">
+                {selectedNodes.length} nodes selected
+              </span>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {/* Batch Change Category */}
+              {onBatchUpdateCategory && (
+                <button
+                  onClick={() => setIsBatchCategoryOpen(true)}
+                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-slate-200 hover:bg-cyan-800/40 rounded-lg transition-colors"
+                  title="Change category for all selected nodes"
+                >
+                  <Tag size={14} className="text-cyan-400" />
+                  Change Category
+                </button>
+              )}
+              {/* Batch Delete */}
+              {onBatchDelete && (
+                <button
+                  onClick={() => onBatchDelete(multiSelectIds)}
+                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-red-300 hover:bg-red-900/30 rounded-lg transition-colors"
+                  title="Delete all selected nodes"
+                >
+                  <Trash2 size={14} />
+                  Delete {selectedNodes.length} Nodes
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Batch Category Picker Modal */}
+      <AnimatePresence>
+        {isBatchCategoryOpen && isMultiSelect && onBatchUpdateCategory && (
+          <motion.div
+            ref={batchCategoryRef}
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-72 max-h-[420px] flex flex-col"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-medium text-slate-200">
+                Set Category ({selectedNodes.length} nodes)
+              </h4>
+              <button
+                onClick={() => setIsBatchCategoryOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-200"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="overflow-y-auto custom-scrollbar space-y-1 pr-1">
+              {(['Code', 'System', undefined] as const).map(group => {
+                const groupCats = categories.filter(c => c.group === group);
+                if (groupCats.length === 0) return null;
+                return (
+                  <div key={group || 'other'}>
+                    {group && (
+                      <div className="text-[10px] uppercase tracking-wider text-slate-500 px-2 pt-2 pb-1">{group}</div>
+                    )}
+                    {groupCats.map(cat => (
+                      <button
+                        key={cat.value}
+                        onClick={() => {
+                          onBatchUpdateCategory(multiSelectIds, cat.value);
+                          setIsBatchCategoryOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm text-slate-300 hover:bg-cyan-800/30 hover:text-cyan-200 rounded-lg transition-colors"
+                      >
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Add Node Modal */}
       <AnimatePresence>

@@ -46,6 +46,7 @@ This document is designed to help future coding agents understand the architectu
     -   Custom FlowControls (no legacy +/- buttons).
 7.  **Interaction**:
     -   Clicking a node sets it as `selectedNode`.
+    -   **Multi-select**: Hold **Shift** and click nodes to add/remove from selection, or **Shift+drag** on the canvas to rubber-band select multiple nodes. The batch toolbar appears when 2+ nodes are selected, enabling bulk delete and category changes.
     -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
     -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
@@ -86,6 +87,7 @@ This document is designed to help future coding agents understand the architectu
 -   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
 -   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Import JSON from dropdown (creates new project via `onImportProject` callback). Uses shared `exportAsImage` helper internally.
 -   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Categories are grouped into "Code" and "System" sections.
+  -   Supports **multi-select batch operations**: when 2+ nodes are selected, shows a batch toolbar with "Delete N Nodes" and "Change Category" (applies chosen category to all selected nodes).
 -   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
   -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.
 

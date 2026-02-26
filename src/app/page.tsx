@@ -15,6 +15,7 @@ import ReactFlow, {
     ReactFlowProvider,
     Panel,
     ConnectionLineType,
+    OnSelectionChangeParams,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { 
@@ -129,6 +130,7 @@ function FlowCanvas() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+    const [selectedNodes, setSelectedNodes] = useState<Node[]>([]);
     const [repoDetails, setRepoDetails] = useState<RepoDetails | null>(null);
     const [showMinimap, setShowMinimap] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -642,12 +644,27 @@ function FlowCanvas() {
         }, eds));
     }, [setEdges, saveToHistory]);
     
+    const onSelectionChange = useCallback(({ nodes: selNodes }: OnSelectionChangeParams) => {
+        setSelectedNodes(selNodes);
+        if (selNodes.length === 1) {
+            setSelectedNode(selNodes[0]);
+        } else if (selNodes.length === 0) {
+            setSelectedNode(null);
+        } else {
+            // Multiple selected – clear single-node context
+            setSelectedNode(null);
+        }
+    }, []);
+
     const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+        // Single click without Shift – React Flow handles selection,
+        // but we also track the "primary" selected node for the sidebar.
         setSelectedNode(node);
     }, []);
 
     const onPaneClick = useCallback(() => {
         setSelectedNode(null);
+        setSelectedNodes([]);
     }, []);
 
     // Add node handler
@@ -677,6 +694,27 @@ function FlowCanvas() {
         setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
         setSelectedNode(null);
     }, [setNodes, setEdges, saveToHistory]);
+
+    // Batch delete handler – delete all selected nodes
+    const handleBatchDelete = useCallback((nodeIds: string[]) => {
+        if (nodeIds.length === 0) return;
+        saveToHistory();
+        const idSet = new Set(nodeIds);
+        setNodes((nds) => nds.filter((n) => !idSet.has(n.id)));
+        setEdges((eds) => eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
+        setSelectedNode(null);
+        setSelectedNodes([]);
+    }, [setNodes, setEdges, saveToHistory]);
+
+    // Batch category change handler
+    const handleBatchUpdateCategory = useCallback((nodeIds: string[], category: string) => {
+        if (nodeIds.length === 0) return;
+        saveToHistory();
+        const idSet = new Set(nodeIds);
+        setNodes((nds) => nds.map((n) =>
+            idSet.has(n.id) ? { ...n, data: { ...n.data, category } } : n
+        ));
+    }, [setNodes, saveToHistory]);
 
     // Update node handler
     const handleUpdateNode = useCallback((nodeId: string, data: any) => {
@@ -745,8 +783,12 @@ function FlowCanvas() {
                 return;
             }
             
-            if (e.key === 'Delete' && selectedNode) {
-                handleDeleteNode(selectedNode.id);
+            if (e.key === 'Delete') {
+                if (selectedNodes.length > 1) {
+                    handleBatchDelete(selectedNodes.map(n => n.id));
+                } else if (selectedNode) {
+                    handleDeleteNode(selectedNode.id);
+                }
             }
             if (e.key === 'Escape') {
                 setSelectedNode(null);
@@ -774,7 +816,7 @@ function FlowCanvas() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNode, handleDeleteNode, handleUndo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid]);
+    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid]);
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -1142,9 +1184,12 @@ function FlowCanvas() {
                 <div className="absolute top-20 left-4 z-10 flex flex-col gap-2">
                     <EditToolbar
                         selectedNode={selectedNode}
+                        selectedNodes={selectedNodes}
                         onAddNode={handleAddNode}
                         onDeleteNode={handleDeleteNode}
                         onUpdateNode={handleUpdateNode}
+                        onBatchDelete={handleBatchDelete}
+                        onBatchUpdateCategory={handleBatchUpdateCategory}
                         onUndo={history.length > 0 ? handleUndo : undefined}
                     />
                     <FlowControls
@@ -1197,6 +1242,7 @@ function FlowCanvas() {
                     onConnect={onConnect}
                     onNodeClick={onNodeClick}
                     onPaneClick={onPaneClick}
+                    onSelectionChange={onSelectionChange}
                     nodeTypes={memoizedNodeTypes}
                     edgeTypes={memoizedEdgeTypes}
                     fitView
@@ -1215,6 +1261,9 @@ function FlowCanvas() {
                     nodesDraggable
                     nodesConnectable
                     elementsSelectable
+                    multiSelectionKeyCode="Shift"
+                    selectionOnDrag
+                    selectionKeyCode="Shift"
                     // Performance optimizations
                     nodeExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
                     translateExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
@@ -1223,7 +1272,6 @@ function FlowCanvas() {
                     zoomOnPinch
                     panOnScroll={false}
                     panOnDrag
-                    selectionOnDrag={false}
                     selectNodesOnDrag={false}
                     nodeDragThreshold={2}
                     autoPanOnConnect
