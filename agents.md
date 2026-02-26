@@ -50,7 +50,8 @@ This document is designed to help future coding agents understand the architectu
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
-    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, then generates response.
+    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, then **streams** the response token-by-token using `ReadableStream`.
+    -   The frontend reads the stream incrementally and updates the chat UI in real time, providing a typewriter-style experience.
 
 ## Key Directories & Files
 
@@ -61,11 +62,11 @@ This document is designed to help future coding agents understand the architectu
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Supports PUT for re-layout.
--   `api/chat/route.ts`: Endpoint for the chatbot. Detects file queries, fetches README.md or specific files for context.
+-   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, fetches README.md or specific files for context. Returns a `ReadableStream` of text tokens (pre-stream validation errors still return JSON).
 -   `api/settings/models/route.ts`: Returns provider metadata and live availability checks used by Settings and chat selector.
 
 ### `src/lib`
--   `ai.ts`: Configuration for DeepSeek API. Contains `analyzeRepoStructure` for node generation and `chatWithContext` for enhanced chat responses.
+-   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths).
 -   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests.
 -   `model-settings.ts`: Client-side settings schema + localStorage persistence helpers for model enablement and generation controls.
 -   `llm/catalog.ts`: Provider catalog metadata, model lists, API key checks, and live provider validation helpers.
@@ -89,6 +90,7 @@ This document is designed to help future coding agents understand the architectu
 ### `src/components/sidebar`
 -   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.
   -   Sends `canvasContext` payload (synced snapshot preferred, live graph fallback) to `/api/chat`.
+  -   Reads the streaming response via `ReadableStream` / `TextDecoder`, updating the assistant message in real time.
   -   Includes both node-level context and graph-level relationships to improve architectural responses.
 -   `MarkdownRenderer.tsx`: Custom markdown renderer with syntax highlighting and file path detection.
 
@@ -193,17 +195,18 @@ interface EdgeData {
 3.  Update the API generation logic if the new node type requires different data.
 
 ### Adding New LLM Providers
-1.  If OpenAI-compatible: extend `OpenAICompatibleAdapter` from `src/lib/llm/providers/OpenAICompatibleAdapter.ts`. Override only `providerId`, `defaultModel`, `apiKey`, and `baseURL`.
-2.  If non-OpenAI-compatible: implement `LLMAdapter` interface directly (see `AnthropicAdapter.ts`).
+1.  If OpenAI-compatible: extend `OpenAICompatibleAdapter` from `src/lib/llm/providers/OpenAICompatibleAdapter.ts`. Override only `providerId`, `defaultModel`, `apiKey`, and `baseURL`. The `chatStream()` method is inherited automatically.
+2.  If non-OpenAI-compatible: implement `LLMAdapter` interface directly (see `AnthropicAdapter.ts`). Must implement `chatStream()` returning `AsyncIterable<string>`.
 3.  Register the adapter in `src/lib/llm/registry.ts`.
 4.  Add provider metadata to `src/lib/llm/catalog.ts`.
 
 ### Enhancing the Chatbot
--   Modify the system prompt in `chatWithContext` function in `src/lib/ai.ts`.
+-   Modify the system prompt in `buildSystemMessage()` in `src/lib/ai.ts` (shared by both streaming and non-streaming paths).
 -   Add new quick actions in `EnhancedChatbot.tsx`.
 -   Extend `MarkdownRenderer.tsx` for new formatting needs.
 -   Keep `canvasContext` + `allNodesContext` payload contract aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
 -   Keep model settings payload (`providerId`, `model`, `maxTokens`, `temperature`) aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
+-   The `LLMProvider` interface requires three methods: `generateStructure`, `chat`, and `chatStream` (returns `AsyncIterable<string>`).
 
 ### Adding Export Formats
 -   Extend `ExportPanel.tsx` with new export options.

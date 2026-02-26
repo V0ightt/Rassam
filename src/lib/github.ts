@@ -1,7 +1,11 @@
 import { Octokit } from "octokit";
 
+// Only use GITHUB_TOKEN if it looks like an actual token (starts with ghp_, gho_, ghs_, ghu_, or github_pat_)
+const githubToken = process.env.GITHUB_TOKEN;
+const isValidToken = githubToken && /^(ghp_|gho_|ghs_|ghu_|github_pat_)/i.test(githubToken);
+
 export const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN || undefined,
+  auth: isValidToken ? githubToken : undefined,
 });
 
 export interface RepoNode {

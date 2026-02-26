@@ -20,4 +20,5 @@ export interface LLMProvider {
   id: LLMProviderId;
   generateStructure(input: GenerateStructureInput): Promise<string>;
   chat(input: ChatInput): Promise<string>;
+  chatStream(input: ChatInput): AsyncIterable<string>;
 }

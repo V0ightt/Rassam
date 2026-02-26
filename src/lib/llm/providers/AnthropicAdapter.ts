@@ -29,6 +29,64 @@ export class AnthropicAdapter implements LLMProvider {
     ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000, input.model);
   }
 
+  async *chatStream(input: ChatInput): AsyncIterable<string> {
+    const response = await fetch(this.baseUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": this.apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: input.model || this.model,
+        system: input.system,
+        messages: [{ role: "user" as const, content: input.message }],
+        temperature: input.temperature ?? 0.7,
+        max_tokens: input.maxTokens ?? 2000,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Anthropic request failed: ${response.status} ${errorText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body from Anthropic");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (!payload || payload === "[DONE]") continue;
+
+          try {
+            const event = JSON.parse(payload);
+            if (event.type === "content_block_delta" && event.delta?.text) {
+              yield event.delta.text;
+            }
+          } catch {
+            // skip malformed JSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private async sendMessage(
     messages: AnthropicMessage[],
     system: string,

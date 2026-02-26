@@ -194,4 +194,26 @@ export class OpenAIAdapter implements LLMProvider {
     if (lastError) throw lastError;
     return "";
   }
+
+  async *chatStream(input: ChatInput): AsyncIterable<string> {
+    const model = input.model || this.model;
+    const temperature = input.temperature ?? 0.7;
+    const maxTokens = input.maxTokens ?? 2000;
+
+    const stream = await this.client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: input.system },
+        { role: "user", content: input.message },
+      ],
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) yield delta;
+    }
+  }
 }

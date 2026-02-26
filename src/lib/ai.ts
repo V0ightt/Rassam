@@ -148,20 +148,18 @@ Return JSON in this exact format:
   }
 }
 
-export async function chatWithContext(
-  message: string, 
-  context: any | null, 
+function buildSystemMessage(
+  context: any | null,
   repoDetails?: { owner: string; repo: string } | null,
   allNodesContext?: any[] | null,
   canvasContext?: any | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
-  runtimeSettings?: ChatRuntimeSettings
-) {
+  message?: string
+): string {
   const snapshotNodes = canvasContext?.nodes || [];
   const normalizedNodes = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
 
-  // Build project overview from synced snapshot (preferred) or live nodes fallback
   const projectOverview = normalizedNodes.length > 0
     ? `\n\nPROJECT OVERVIEW (${normalizedNodes.length} components):
 ${normalizedNodes.map((node: any) => `- **${node.label}** (${node.category || 'default'}): ${node.description || 'No description'} - ${node.files?.length || 0} files`).join('\n')}`
@@ -181,22 +179,21 @@ GRAPH RELATIONSHIPS:
 ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: any) => `- ${edge.source} -> ${edge.target}${edge.label ? ` (${edge.label})` : ''}${edge.type ? ` [${edge.type}]` : ''}`).join('\n') : '- No edges defined yet.'}`
     : '';
 
-  // README content section
   const readmeSection = readmeContent
     ? `\n\n📄 README.md CONTENT (Use this as the primary source for setup/installation instructions):\n\`\`\`markdown\n${readmeContent.slice(0, 8000)}${readmeContent.length > 8000 ? '\n... (truncated)' : ''}\n\`\`\``
     : '';
-    
-  // Specific file content section  
+
   const fileSection = specificFile?.content
     ? `\n\n📁 FILE CONTENT (${specificFile.path}):\n\`\`\`\n${specificFile.content.slice(0, 6000)}${specificFile.content.length > 6000 ? '\n... (truncated)' : ''}\n\`\`\``
-    : specificFile?.path 
+    : specificFile?.path
       ? `\n\n⚠️ Could not fetch content for file: ${specificFile.path}`
       : '';
 
-  // Detect if this is a "how to run" type question
-  const isRunQuestion = /how\s+(do\s+i|to|can\s+i)\s+(run|start|launch|execute|install|setup|set\s+up)/i.test(message);
-  
-  const runInstructions = isRunQuestion 
+  const isRunQuestion = message
+    ? /how\s+(do\s+i|to|can\s+i)\s+(run|start|launch|execute|install|setup|set\s+up)/i.test(message)
+    : false;
+
+  const runInstructions = isRunQuestion
     ? `\n\nWhen answering "how to run" questions:
 1. FIRST check the README content provided above - it contains the official instructions
 2. Extract and present the exact commands from the README
@@ -211,8 +208,8 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: any) => `- $
 6. Include common troubleshooting tips from the README if available`
     : '';
 
-  const systemMessage = context 
-    ? `You are Rassam (رسّام), an expert AI assistant specialized in explaining code and software architecture. Your name means "artist/illustrator" in Arabic, reflecting your ability to visualize and explain codebases.
+  if (context) {
+    return `You are Rassam (رسّام), an expert AI assistant specialized in explaining code and software architecture. Your name means "artist/illustrator" in Arabic, reflecting your ability to visualize and explain codebases.
 
 You are currently helping the user understand a specific component in their repository.
 
@@ -239,8 +236,10 @@ INSTRUCTIONS:
 6. Format your responses with markdown for better readability
 7. You have access to the full project structure, use it to provide context-aware answers
 8. If README content is provided, use it as the authoritative source for setup/run instructions
-9. When file content is provided, analyze it directly to answer questions`
-    : `You are Rassam (رسّام), an expert AI assistant specialized in explaining code and software architecture. Your name means "artist/illustrator" in Arabic, reflecting your ability to visualize and explain codebases.
+9. When file content is provided, analyze it directly to answer questions`;
+  }
+
+  return `You are Rassam (رسّام), an expert AI assistant specialized in explaining code and software architecture. Your name means "artist/illustrator" in Arabic, reflecting your ability to visualize and explain codebases.
 
 ${repoDetails ? `The user is exploring the repository: ${repoDetails.owner}/${repoDetails.repo}` : 'The user is exploring a codebase.'}
 ${projectOverview}
@@ -259,6 +258,22 @@ INSTRUCTIONS:
 7. When asked about running the project, ALWAYS check the README content first - it contains the official instructions
 8. If README content is provided, quote the exact commands and steps from it
 9. When file content is provided, analyze it directly to answer questions`;
+}
+
+export async function chatWithContext(
+  message: string, 
+  context: any | null, 
+  repoDetails?: { owner: string; repo: string } | null,
+  allNodesContext?: any[] | null,
+  canvasContext?: any | null,
+  readmeContent?: string | null,
+  specificFile?: { path: string; content: string | null } | null,
+  runtimeSettings?: ChatRuntimeSettings
+) {
+  const systemMessage = buildSystemMessage(
+    context, repoDetails, allNodesContext, canvasContext,
+    readmeContent, specificFile, message
+  );
 
   try {
     const provider = getProvider(runtimeSettings?.providerId);
@@ -275,4 +290,29 @@ INSTRUCTIONS:
     console.error("Chat Error:", error);
     throw error;
   }
+}
+
+export function chatStreamWithContext(
+  message: string,
+  context: any | null,
+  repoDetails?: { owner: string; repo: string } | null,
+  allNodesContext?: any[] | null,
+  canvasContext?: any | null,
+  readmeContent?: string | null,
+  specificFile?: { path: string; content: string | null } | null,
+  runtimeSettings?: ChatRuntimeSettings
+): AsyncIterable<string> {
+  const systemMessage = buildSystemMessage(
+    context, repoDetails, allNodesContext, canvasContext,
+    readmeContent, specificFile, message
+  );
+
+  const provider = getProvider(runtimeSettings?.providerId);
+  return provider.chatStream({
+    system: systemMessage,
+    message,
+    temperature: clampTemperature(runtimeSettings?.temperature),
+    maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
+    model: runtimeSettings?.model || undefined,
+  });
 }

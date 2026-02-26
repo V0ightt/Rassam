@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { chatWithContext } from "@/lib/ai";
+import { chatStreamWithContext } from "@/lib/ai";
 import { getFileContent } from "@/lib/github";
 import { getProviderAvailability } from "@/lib/llm";
 import { normalizeProviderId } from "@/lib/llm/registry";
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const reply = await chatWithContext(
+        const tokenStream = chatStreamWithContext(
             message, 
             context, 
             repoDetails, 
@@ -145,7 +145,31 @@ export async function POST(req: NextRequest) {
                 temperature,
             }
         );
-        return NextResponse.json({ reply });
+
+        const encoder = new TextEncoder();
+        const readable = new ReadableStream({
+            async start(controller) {
+                try {
+                    for await (const token of tokenStream) {
+                        controller.enqueue(encoder.encode(token));
+                    }
+                    controller.close();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : 'Streaming failed';
+                    controller.enqueue(encoder.encode(`\n\n❌ Error: ${errorMsg}`));
+                    controller.close();
+                }
+            },
+        });
+
+        return new Response(readable, {
+            headers: {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Transfer-Encoding': 'chunked',
+                'Cache-Control': 'no-cache',
+                'X-Content-Type-Options': 'nosniff',
+            },
+        });
 
     } catch (error: any) {
         console.error("Chat API Error:", error);

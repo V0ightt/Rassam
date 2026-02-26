@@ -46,4 +46,22 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
 
     return response.choices[0]?.message?.content || "";
   }
+
+  async *chatStream(input: ChatInput): AsyncIterable<string> {
+    const stream = await this.client.chat.completions.create({
+      model: input.model || this.model,
+      messages: [
+        { role: "system", content: input.system },
+        { role: "user", content: input.message },
+      ],
+      temperature: input.temperature ?? 0.7,
+      max_tokens: input.maxTokens ?? 2000,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) yield delta;
+    }
+  }
 }

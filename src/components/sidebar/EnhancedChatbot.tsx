@@ -317,20 +317,57 @@ export default function EnhancedChatbot({
           },
         })
       });
-      const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data?.reply || data?.error || 'Failed to process chat message');
+        // Non-streaming error responses come back as JSON
+        let errorMessage = 'Failed to process chat message';
+        try {
+          const data = await res.json();
+          errorMessage = data?.reply || data?.error || errorMessage;
+        } catch {
+          // body isn't JSON
+        }
+        throw new Error(errorMessage);
       }
-      
-      const assistantMsg: ChatMessage = { 
-        id: (Date.now() + 1).toString(),
-        role: 'assistant', 
-        content: data.reply || "Sorry, I couldn't process that request.",
+
+      // Stream the response
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+      const assistantMsgId = (Date.now() + 1).toString();
+      let streamedContent = '';
+
+      const assistantMsg: ChatMessage = {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: '',
         timestamp: new Date()
       };
-      
-      onUpdateMessages([...updatedMessages, assistantMsg]);
+
+      const messagesWithAssistant = [...updatedMessages, assistantMsg];
+      onUpdateMessages(messagesWithAssistant);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        streamedContent += decoder.decode(value, { stream: true });
+
+        const updated = messagesWithAssistant.map(m =>
+          m.id === assistantMsgId ? { ...m, content: streamedContent } : m
+        );
+        onUpdateMessages(updated);
+      }
+
+      if (!streamedContent.trim()) {
+        const updated = messagesWithAssistant.map(m =>
+          m.id === assistantMsgId
+            ? { ...m, content: "Sorry, I couldn't process that request." }
+            : m
+        );
+        onUpdateMessages(updated);
+      }
     } catch (error) {
       const errorMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(),
