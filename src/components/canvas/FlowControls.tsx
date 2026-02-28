@@ -43,6 +43,7 @@ const shortcuts = [
   { keys: ['⌘/Ctrl', '-'], action: 'Zoom out' },
   { keys: ['⌘/Ctrl', '0'], action: 'Fit view' },
   { keys: ['⌘/Ctrl', 'Z'], action: 'Undo' },
+  { keys: ['⌘/Ctrl', 'Shift', 'Z'], action: 'Redo' },
   { keys: ['⌘/Ctrl', 'A'], action: 'Select all' },
   { keys: ['⌘/Ctrl', 'C'], action: 'Copy node(s)' },
   { keys: ['⌘/Ctrl', 'V'], action: 'Paste node(s)' },

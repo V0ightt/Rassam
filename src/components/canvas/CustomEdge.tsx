@@ -8,7 +8,7 @@ import {
   getSmoothStepPath,
   useReactFlow,
 } from 'reactflow';
-import { X, MessageSquare, GripVertical } from 'lucide-react';
+import { X, MessageSquare, GripVertical, ArrowLeftRight, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Edge color mapping - memoized outside component
@@ -81,6 +81,18 @@ const CustomEdge = memo(function CustomEdge({
 
   const edgeColor = edgeColors[data?.type || 'default'] || edgeColors.default;
   const strokeWidth = data?.strength === 'strong' ? 3 : data?.strength === 'weak' ? 1 : 2;
+  const isTwoWay = data?.direction === 'two-way';
+
+  // Toggle direction between one-way and two-way
+  const onToggleDirection = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    const newDirection = isTwoWay ? 'one-way' : 'two-way';
+    setEdges((edges) => edges.map((edge) =>
+      edge.id === id
+        ? { ...edge, data: { ...edge.data, direction: newDirection } }
+        : edge
+    ));
+  }, [id, isTwoWay, setEdges]);
   
   // Handle label dragging
   const handleLabelMouseDown = useCallback((e: React.MouseEvent) => {
@@ -146,16 +158,47 @@ const CustomEdge = memo(function CustomEdge({
     }
   }, [handleSaveComment, data?.label]);
 
+  // Build marker IDs unique to this edge for correct per-edge coloring
+  const markerEndId = `marker-end-${id}`;
+  const markerStartId = `marker-start-${id}`;
+
   return (
     <>
+      {/* SVG marker definitions for this edge */}
+      <defs>
+        <marker
+          id={markerEndId}
+          markerWidth="12"
+          markerHeight="12"
+          refX="10"
+          refY="6"
+          orient="auto"
+          markerUnits="userSpaceOnUse"
+        >
+          <path d="M2,2 L10,6 L2,10 L4,6 Z" fill={edgeColor} />
+        </marker>
+        {isTwoWay && (
+          <marker
+            id={markerStartId}
+            markerWidth="12"
+            markerHeight="12"
+            refX="2"
+            refY="6"
+            orient="auto"
+            markerUnits="userSpaceOnUse"
+          >
+            <path d="M10,2 L2,6 L10,10 L8,6 Z" fill={edgeColor} />
+          </marker>
+        )}
+      </defs>
       <BaseEdge 
         path={edgePath} 
-        markerEnd={markerEnd} 
+        markerEnd={`url(#${markerEndId})`}
+        markerStart={isTwoWay ? `url(#${markerStartId})` : undefined}
         style={{
           ...style,
           stroke: edgeColor,
           strokeWidth: selected ? strokeWidth + 1 : strokeWidth,
-          // No animation or dashes for performance
         }} 
       />
       <EdgeLabelRenderer>
@@ -209,6 +252,18 @@ const CustomEdge = memo(function CustomEdge({
                   <MessageSquare size={12} />
                 </button>
               )}
+              <button
+                className={cn(
+                  "flex items-center justify-center w-6 h-6 rounded-full shadow-lg transition-all",
+                  isTwoWay
+                    ? "bg-cyan-500/80 hover:bg-cyan-500 text-white"
+                    : "bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-slate-200"
+                )}
+                onClick={onToggleDirection}
+                title={isTwoWay ? 'Switch to one-way' : 'Switch to two-way'}
+              >
+                {isTwoWay ? <ArrowLeftRight size={12} /> : <ArrowRight size={12} />}
+              </button>
               <button
                 className="flex items-center justify-center w-6 h-6 rounded-full bg-red-500/80 hover:bg-red-500 text-white shadow-lg transition-all"
                 onClick={onEdgeDelete}

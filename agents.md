@@ -48,6 +48,7 @@ This document is designed to help future coding agents understand the architectu
     -   Clicking a node sets it as `selectedNode`.
     -   **Multi-select**: Hold **Shift** and click nodes to add/remove from selection, or **Shift+drag** on the canvas to rubber-band select multiple nodes. The batch toolbar appears when 2+ nodes are selected, enabling bulk delete and category changes.
     -   **Clipboard**: **Ctrl+C** copies selected node(s) (and edges fully within the selection) to an in-memory clipboard. **Ctrl+V** pastes them at a +60px offset with new IDs.
+    -   **Undo / Redo**: **Ctrl+Z** undoes the last canvas change (up to 10 steps). **Ctrl+Shift+Z** or **Ctrl+Y** redoes. Any new edit clears the redo (future) stack.
     -   **Inline editing**: **Double-click** a node's label or description to edit it in-place. Press **Enter** to commit, **Escape** to cancel.
     -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
     -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
@@ -91,7 +92,7 @@ This document is designed to help future coding agents understand the architectu
 -   `NodeEditContext.tsx`: React context that provides `onUpdateNode` callback to node components, enabling inline editing without prop drilling.
 -   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
 -   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Import JSON from dropdown (creates new project via `onImportProject` callback). Uses shared `exportAsImage` helper internally.
--   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Categories are grouped into "Code" and "System" sections.
+-   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Undo/Redo buttons. Categories are grouped into "Code" and "System" sections.
   -   Supports **multi-select batch operations**: when 2+ nodes are selected, shows a batch toolbar with "Delete N Nodes" and "Change Category" (applies chosen category to all selected nodes).
 -   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
   -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.

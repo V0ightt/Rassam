@@ -6,6 +6,7 @@ import {
   Trash2,
   Edit3,
   RotateCcw,
+  RotateCw,
   Save,
   X,
   Check,
@@ -26,6 +27,7 @@ interface EditToolbarProps {
   onBatchDelete?: (nodeIds: string[]) => void;
   onBatchUpdateCategory?: (nodeIds: string[], category: string) => void;
   onUndo?: () => void;
+  onRedo?: () => void;
   onSave?: () => void;
 }
 
@@ -74,6 +76,7 @@ export default function EditToolbar({
   onBatchDelete,
   onBatchUpdateCategory,
   onUndo,
+  onRedo,
   onSave
 }: EditToolbarProps) {
   const [isAddingNode, setIsAddingNode] = useState(false);
@@ -209,6 +212,17 @@ export default function EditToolbar({
             title="Undo"
           >
             <RotateCcw size={18} />
+          </button>
+        )}
+
+        {/* Redo Button */}
+        {onRedo && (
+          <button
+            onClick={onRedo}
+            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+            title="Redo"
+          >
+            <RotateCw size={18} />
           </button>
         )}
 

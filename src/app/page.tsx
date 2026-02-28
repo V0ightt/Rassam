@@ -136,6 +136,7 @@ function FlowCanvas() {
     const [showMinimap, setShowMinimap] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [history, setHistory] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
+    const [future, setFuture] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
     const [snapToGrid, setSnapToGrid] = useState(true);
     const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
     const [isSyncingCanvas, setIsSyncingCanvas] = useState(false);
@@ -278,20 +279,33 @@ function FlowCanvas() {
     const memoizedNodeTypes = useMemo(() => nodeTypes, []);
     const memoizedEdgeTypes = useMemo(() => edgeTypes, []);
 
-    // Save to history for undo
+    // Save to history for undo (clears redo stack)
     const saveToHistory = useCallback(() => {
         setHistory(prev => [...prev.slice(-10), { nodes: [...nodes], edges: [...edges] }]);
+        setFuture([]);
     }, [nodes, edges]);
 
     // Undo
     const handleUndo = useCallback(() => {
         if (history.length > 0) {
             const lastState = history[history.length - 1];
+            setFuture(prev => [...prev, { nodes: [...nodes], edges: [...edges] }]);
             setNodes(lastState.nodes);
             setEdges(lastState.edges);
             setHistory(prev => prev.slice(0, -1));
         }
-    }, [history, setNodes, setEdges]);
+    }, [history, nodes, edges, setNodes, setEdges]);
+
+    // Redo
+    const handleRedo = useCallback(() => {
+        if (future.length > 0) {
+            const nextState = future[future.length - 1];
+            setHistory(prev => [...prev, { nodes: [...nodes], edges: [...edges] }]);
+            setNodes(nextState.nodes);
+            setEdges(nextState.edges);
+            setFuture(prev => prev.slice(0, -1));
+        }
+    }, [future, nodes, edges, setNodes, setEdges]);
 
     // Repo Fetch Handler
     const createProjectFromGitHub = useCallback(async (url: string) => {
@@ -845,9 +859,13 @@ function FlowCanvas() {
             if (e.key === 'Escape') {
                 setSelectedNode(null);
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
                 e.preventDefault();
                 handleUndo();
+            }
+            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+                e.preventDefault();
+                handleRedo();
             }
             if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
                 e.preventDefault();
@@ -876,7 +894,7 @@ function FlowCanvas() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid, handleCopy, handlePaste]);
+    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleRedo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid, handleCopy, handlePaste]);
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -1251,6 +1269,7 @@ function FlowCanvas() {
                         onBatchDelete={handleBatchDelete}
                         onBatchUpdateCategory={handleBatchUpdateCategory}
                         onUndo={history.length > 0 ? handleUndo : undefined}
+                        onRedo={future.length > 0 ? handleRedo : undefined}
                     />
                     <FlowControls
                         onSearch={handleSearch}

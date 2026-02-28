@@ -51,7 +51,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **Delete nodes**: Remove nodes and their connections
 - **Copy & Paste**: Ctrl+C / Ctrl+V to duplicate selected nodes (with their internal edges)
 - **Create connections**: Draw edges between nodes by dragging
-- **Undo support**: Revert recent changes
+- **Undo / Redo support**: Revert and replay recent changes
 
 ### AI Context Sync
 - **Manual Sync button**: Capture a canonical snapshot of your current canvas
