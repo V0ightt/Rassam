@@ -8,9 +8,15 @@ export interface GenerateStructureInput {
   model?: string;
 }
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatInput {
   system: string;
   message: string;
+  history?: ChatHistoryMessage[];
   temperature?: number;
   maxTokens?: number;
   model?: string;

@@ -1,5 +1,6 @@
 import { NodeCategory } from "@/types";
 import { getProvider } from "@/lib/llm";
+import type { ChatHistoryMessage } from "@/lib/llm/types";
 
 interface ChatRuntimeSettings {
   providerId?: string | null;
@@ -268,7 +269,8 @@ export async function chatWithContext(
   canvasContext?: any | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
-  runtimeSettings?: ChatRuntimeSettings
+  runtimeSettings?: ChatRuntimeSettings,
+  history?: ChatHistoryMessage[]
 ) {
   const systemMessage = buildSystemMessage(
     context, repoDetails, allNodesContext, canvasContext,
@@ -280,6 +282,7 @@ export async function chatWithContext(
     const response = await provider.chat({
       system: systemMessage,
       message,
+      history,
       temperature: clampTemperature(runtimeSettings?.temperature),
       maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
       model: runtimeSettings?.model || undefined,
@@ -300,7 +303,8 @@ export function chatStreamWithContext(
   canvasContext?: any | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
-  runtimeSettings?: ChatRuntimeSettings
+  runtimeSettings?: ChatRuntimeSettings,
+  history?: ChatHistoryMessage[]
 ): AsyncIterable<string> {
   const systemMessage = buildSystemMessage(
     context, repoDetails, allNodesContext, canvasContext,
@@ -311,6 +315,7 @@ export function chatStreamWithContext(
   return provider.chatStream({
     system: systemMessage,
     message,
+    history,
     temperature: clampTemperature(runtimeSettings?.temperature),
     maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
     model: runtimeSettings?.model || undefined,

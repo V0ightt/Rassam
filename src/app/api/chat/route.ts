@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
             allNodesContext,
             canvasContext,
             modelSettings,
+            history,
         } = await req.json();
 
         if (!message) {
@@ -130,6 +131,18 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // Sanitize history: keep last 20 messages, validate shape
+        const MAX_HISTORY = 20;
+        const sanitizedHistory = Array.isArray(history)
+            ? history
+                .filter((m: any) => 
+                    m && typeof m.content === 'string' && 
+                    (m.role === 'user' || m.role === 'assistant')
+                )
+                .map((m: any) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+                .slice(-MAX_HISTORY)
+            : undefined;
+
         const tokenStream = chatStreamWithContext(
             message, 
             context, 
@@ -143,7 +156,8 @@ export async function POST(req: NextRequest) {
                 model,
                 maxTokens,
                 temperature,
-            }
+            },
+            sanitizedHistory
         );
 
         const encoder = new TextEncoder();

@@ -24,7 +24,12 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   async chat(input: ChatInput): Promise<string> {
+    const historyMessages: AnthropicMessage[] = (input.history || []).map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
     return this.sendMessage([
+      ...historyMessages,
       { role: "user", content: input.message },
     ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000, input.model);
   }
@@ -40,7 +45,10 @@ export class AnthropicAdapter implements LLMProvider {
       body: JSON.stringify({
         model: input.model || this.model,
         system: input.system,
-        messages: [{ role: "user" as const, content: input.message }],
+        messages: [
+          ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+          { role: "user" as const, content: input.message },
+        ],
         temperature: input.temperature ?? 0.7,
         max_tokens: input.maxTokens ?? 2000,
         stream: true,

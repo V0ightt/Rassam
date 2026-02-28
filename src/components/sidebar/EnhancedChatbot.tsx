@@ -315,6 +315,10 @@ export default function EnhancedChatbot({
             maxTokens: modelSettings.maxOutputTokens,
             temperature: modelSettings.temperature,
           },
+          // Send conversation history (prior messages, excluding the just-added user message)
+          history: messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .map(m => ({ role: m.role, content: m.content })),
         })
       });
 

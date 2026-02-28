@@ -143,6 +143,7 @@ export class OpenAIAdapter implements LLMProvider {
           model,
           messages: [
             { role: "system", content: input.system },
+            ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
             { role: "user", content: input.message },
           ],
           ...(includeTemperature ? { temperature } : {}),
@@ -160,6 +161,7 @@ export class OpenAIAdapter implements LLMProvider {
           model,
           input: [
             { role: "system", content: input.system },
+            ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
             { role: "user", content: input.message },
           ],
           ...(includeTemperature ? { temperature } : {}),
@@ -200,10 +202,15 @@ export class OpenAIAdapter implements LLMProvider {
     const temperature = input.temperature ?? 0.7;
     const maxTokens = input.maxTokens ?? 2000;
 
+    const historyMessages = (input.history || []).map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
     const stream = await this.client.chat.completions.create({
       model,
       messages: [
         { role: "system", content: input.system },
+        ...historyMessages,
         { role: "user", content: input.message },
       ],
       temperature,

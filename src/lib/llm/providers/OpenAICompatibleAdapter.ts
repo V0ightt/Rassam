@@ -34,10 +34,15 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
   }
 
   async chat(input: ChatInput): Promise<string> {
+    const historyMessages = (input.history || []).map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
     const response = await this.client.chat.completions.create({
       model: input.model || this.model,
       messages: [
         { role: "system", content: input.system },
+        ...historyMessages,
         { role: "user", content: input.message },
       ],
       temperature: input.temperature ?? 0.7,
@@ -48,10 +53,15 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
   }
 
   async *chatStream(input: ChatInput): AsyncIterable<string> {
+    const historyMessages = (input.history || []).map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
     const stream = await this.client.chat.completions.create({
       model: input.model || this.model,
       messages: [
         { role: "system", content: input.system },
+        ...historyMessages,
         { role: "user", content: input.message },
       ],
       temperature: input.temperature ?? 0.7,

@@ -54,7 +54,8 @@ This document is designed to help future coding agents understand the architectu
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
-    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, then **streams** the response token-by-token using `ReadableStream`.
+    -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
+    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, then **streams** the response token-by-token using `ReadableStream`.
     -   The frontend reads the stream incrementally and updates the chat UI in real time, providing a typewriter-style experience.
 
 ## Key Directories & Files
@@ -214,6 +215,8 @@ interface EdgeData {
 -   Keep `canvasContext` + `allNodesContext` payload contract aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
 -   Keep model settings payload (`providerId`, `model`, `maxTokens`, `temperature`) aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
 -   The `LLMProvider` interface requires three methods: `generateStructure`, `chat`, and `chatStream` (returns `AsyncIterable<string>`).
+-   `ChatInput` accepts an optional `history?: ChatHistoryMessage[]` array. All adapters thread history between the system prompt and the latest user message.
+-   The API route sanitizes history (validates shape, caps at 20 messages) before forwarding.
 
 ### Adding Export Formats
 -   Extend `ExportPanel.tsx` with new export options.
