@@ -57,6 +57,7 @@ This document is designed to help future coding agents understand the architectu
     -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
     -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, then **streams** the response token-by-token using `ReadableStream`.
     -   The frontend reads the stream incrementally and updates the chat UI in real time, providing a typewriter-style experience.
+    -   **Streaming cancellation**: An `AbortController` backs every chat request. While streaming, the Send button becomes a red **Stop** button (`Square` icon) that aborts the fetch—partially streamed content is kept in the chat.
 
 ## Key Directories & Files
 

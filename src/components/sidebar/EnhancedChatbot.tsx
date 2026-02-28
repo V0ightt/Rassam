@@ -25,7 +25,8 @@ import {
   Package,
   History,
   ChevronRight,
-  X
+  X,
+  Square
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -106,6 +107,7 @@ export default function EnhancedChatbot({
   const [modelError, setModelError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Get current messages from active chat session
   const activeSession = chatSessions.find(s => s.id === activeChatSessionId);
@@ -300,9 +302,14 @@ export default function EnhancedChatbot({
         dependencies: n.dependencies,
       }));
 
+      // Create AbortController for this request
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortController.signal,
         body: JSON.stringify({ 
           message: text, 
           context: selectedNode ? selectedNode.data : null,
@@ -373,6 +380,11 @@ export default function EnhancedChatbot({
         onUpdateMessages(updated);
       }
     } catch (error) {
+      // Don't show error message if the user intentionally cancelled
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        // Stream was cancelled by the user – keep whatever was streamed so far
+        return;
+      }
       const errorMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(),
         role: 'assistant', 
@@ -381,9 +393,14 @@ export default function EnhancedChatbot({
       };
       onUpdateMessages([...updatedMessages, errorMsg]);
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
     }
   };
+
+  const handleStop = useCallback(() => {
+    abortControllerRef.current?.abort();
+  }, []);
 
   const copyMessage = useCallback((id: string, content: string) => {
     navigator.clipboard.writeText(content);
@@ -682,13 +699,23 @@ export default function EnhancedChatbot({
               onChange={(e) => setInput(e.target.value)}
             />
           </div>
-          <button 
-            onClick={() => handleSend()}
-            disabled={loading || !input.trim()}
-            className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 hover:shadow-blue-900/50"
-          >
-            <Send size={18} />
-          </button>
+          {loading ? (
+            <button 
+              onClick={handleStop}
+              className="p-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all shadow-lg shadow-red-900/30 hover:shadow-red-900/50"
+              title="Stop generating"
+            >
+              <Square size={18} />
+            </button>
+          ) : (
+            <button 
+              onClick={() => handleSend()}
+              disabled={!input.trim()}
+              className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 hover:shadow-blue-900/50"
+            >
+              <Send size={18} />
+            </button>
+          )}
         </div>
         <div className="text-[9px] text-slate-600 mt-2 text-center">
           Press Enter to send • {activeModelLabel}
