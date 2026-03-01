@@ -63,9 +63,9 @@ This document is designed to help future coding agents understand the architectu
 ## Key Directories & Files
 
 ### `src/app`
--   `page.tsx`: Main entry point. Contains the `ReactFlow` canvas, Projects sidebar with add button, search bar state, and layout. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
-  -   Owns project lifecycle state (`github`/`empty`/`imported` source), per-project synced AI context snapshots, and canvas sync handler.
-  -   Persists projects (including empty projects and sync snapshots) in localStorage.
+-   `page.tsx`: Thin orchestration shell (~310 lines). Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
+  -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), and canvas-specific handlers (node CRUD, search, layout change).
+  -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, and pane resizing are delegated to hooks.
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Supports PUT for re-layout.
@@ -84,8 +84,19 @@ This document is designed to help future coding agents understand the architectu
 ### `src/types`
 -   `index.ts`: TypeScript type definitions for `NodeCategory`, `NodeData`, `EdgeData`, `ChatMessage`, etc.
 
+### `src/hooks`
+-   `useProjects.ts`: All project CRUD, chat-session management, canvas-sync snapshots, localStorage persistence, and create-project modal UI state. Returns a `proj` object consumed by `page.tsx`.
+-   `useCanvasHistory.ts`: Undo/redo stack (up to 10 snapshots). Returns `saveToHistory`, `handleUndo`, `handleRedo`, `canUndo`, `canRedo`.
+-   `useClipboard.ts`: Copy/paste of nodes (and their internal edges) with fresh-ID generation on paste.
+-   `useCanvasShortcuts.ts`: Single `useEffect` registering all global keyboard shortcuts. Uses a ref to always read latest handler values without re-attaching listeners.
+-   `useResizablePane.ts`: Mouse-drag resizable sidebar width with localStorage persistence.
+
 ### `src/components`
 -   `ErrorBoundary.tsx`: React class-based error boundary wrapping the main app. Prevents component crashes from blanking the entire page.
+
+### `src/components/projects`
+-   `ProjectSidebar.tsx`: Animated sidebar listing all projects with switch, delete, and create-new actions.
+-   `CreateProjectModal.tsx`: Modal with three tabs (GitHub URL, Empty Project, JSON Import) for creating new projects.
 
 ### `src/components/canvas`
 -   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories. `EnhancedNode` supports **double-click inline editing** of label and description via the `InlineEdit` component.

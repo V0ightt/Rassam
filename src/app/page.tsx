@@ -1,39 +1,31 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import ReactFlow, { 
-    Background, 
-    useNodesState, 
-    useEdgesState, 
+import ReactFlow, {
+    Background,
+    useNodesState,
+    useEdgesState,
     BackgroundVariant,
     Connection,
     addEdge,
-    Edge,
     Node,
     useReactFlow,
     ReactFlowProvider,
-    Panel,
     ConnectionLineType,
     OnSelectionChangeParams,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { 
-    Search, 
-    Github, 
-    Loader2, 
+import {
+    Search,
+    Github,
+    Loader2,
     AlertCircle,
     FileCode,
     GitBranch,
-    Star,
     ExternalLink,
-    RefreshCw,
-    GripVertical,
     FolderOpen,
-    Trash2,
-    ChevronLeft,
-    Plus,
-    X,
+    GripVertical,
     Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -46,666 +38,95 @@ import ExportPanel from '@/components/canvas/ExportPanel';
 import EditToolbar from '@/components/canvas/EditToolbar';
 import FlowControls, { StyledMiniMap } from '@/components/canvas/FlowControls';
 import ErrorBoundary from '@/components/ErrorBoundary';
-import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails } from '@/types';
+import ProjectSidebar from '@/components/projects/ProjectSidebar';
+import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import { cn } from '@/lib/utils';
-import { parseAndValidateImportJson } from '@/lib/import';
 
-// Storage keys
-const STORAGE_KEYS = {
-    PROJECTS: 'repoAgent_projects',
-    ACTIVE_PROJECT_ID: 'repoAgent_activeProjectId',
-    CHAT_WIDTH: 'repoAgent_chatWidth',
-};
+import { useCanvasHistory } from '@/hooks/useCanvasHistory';
+import { useClipboard } from '@/hooks/useClipboard';
+import { useCanvasShortcuts } from '@/hooks/useCanvasShortcuts';
+import { useResizablePane } from '@/hooks/useResizablePane';
+import { useProjects } from '@/hooks/useProjects';
 
-// Helper to generate unique IDs
-const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-// Create a new project
-const createNewProject = (
-    repoUrl: string,
-    repoDetails: RepoDetails | null,
-    nodes: any[],
-    edges: any[],
-    options?: {
-        name?: string;
-        source?: ProjectSource;
-        layoutDirection?: 'TB' | 'LR';
-        snapshot?: CanvasSyncSnapshot | null;
-    }
-): Project => {
-    const now = new Date();
-    const source = options?.source || (repoDetails ? 'github' : 'empty');
-    const projectName = options?.name || (repoDetails 
-        ? `${repoDetails.owner}/${repoDetails.repo}`
-        : repoUrl || 'New Project');
-    
-    const initialChatSession: ChatSession = {
-        id: generateId(),
-        title: 'Chat 1',
-        messages: [{
-            id: '1',
-            role: 'assistant',
-            content: "👋 Hi! I'm **Rassam** (رسّام), your AI assistant for understanding code and flowcharts.\n\n**Quick tips:**\n- Add or edit nodes/edges on the canvas\n- Use the **Sync** button to update my project context\n- Ask questions about selected nodes or the whole architecture\n\nLet's explore this project together!",
-            timestamp: now
-        }],
-        createdAt: now,
-        updatedAt: now
-    };
-
-    return {
-        id: generateId(),
-        name: projectName,
-        repoUrl,
-        source,
-        repoDetails,
-        nodes,
-        edges,
-        layoutDirection: options?.layoutDirection || 'TB',
-        aiContextSnapshot: options?.snapshot || null,
-        lastSyncedAt: options?.snapshot?.syncedAt || null,
-        chatSessions: [initialChatSession],
-        activeChatSessionId: initialChatSession.id,
-        createdAt: now,
-        updatedAt: now
-    };
-};
+// ─────────────────────────────────────────────────────────────
+// FlowCanvas – thin orchestration shell that wires together
+// extracted hooks (projects, history, clipboard, shortcuts,
+// resizable pane) and the ReactFlow canvas.
+// ─────────────────────────────────────────────────────────────
 
 function FlowCanvas() {
-    // State for Flow
+    // ── React Flow core state ─────────────────────────────────
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-    
-    // State for Projects
-    const [projects, setProjects] = useState<Project[]>([]);
-    const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-    const [showProjectList, setShowProjectList] = useState(false);
-    const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
-    const [createProjectMode, setCreateProjectMode] = useState<'github' | 'empty' | 'json'>('github');
-    const [newProjectUrl, setNewProjectUrl] = useState('');
-    const [newProjectName, setNewProjectName] = useState('');
-    const [importError, setImportError] = useState<string | null>(null);
-    const importFileRef = useRef<HTMLInputElement>(null);
-    
-    // State for UI
-    const [repoUrl, setRepoUrl] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const { fitView, zoomIn, zoomOut } = useReactFlow();
+
+    // ── Local canvas UI state ─────────────────────────────────
     const [selectedNode, setSelectedNode] = useState<Node | null>(null);
     const [selectedNodes, setSelectedNodes] = useState<Node[]>([]);
-    const [repoDetails, setRepoDetails] = useState<RepoDetails | null>(null);
     const [showMinimap, setShowMinimap] = useState(true);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [history, setHistory] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
-    const [future, setFuture] = useState<{ nodes: Node[]; edges: Edge[] }[]>([]);
     const [snapToGrid, setSnapToGrid] = useState(true);
     const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
-    const [isSyncingCanvas, setIsSyncingCanvas] = useState(false);
-    
-    // Clipboard state for Ctrl+C / Ctrl+V
-    const [clipboard, setClipboard] = useState<{ nodes: Node[]; edges: Edge[] } | null>(null);
 
-    // Resizable chat state
-    const [chatWidth, setChatWidth] = useState(400);
-    const [isResizing, setIsResizing] = useState(false);
-    const resizeRef = useRef<HTMLDivElement>(null);
+    // ── Extracted hooks ───────────────────────────────────────
+    const { saveToHistory, handleUndo, handleRedo, canUndo, canRedo } =
+        useCanvasHistory(nodes, edges, setNodes, setEdges);
 
-    const { fitView, zoomIn, zoomOut } = useReactFlow();
-    
-    // Get active project
-    const activeProject = useMemo(() => 
-        projects.find(p => p.id === activeProjectId) || null
-    , [projects, activeProjectId]);
-    
-    // Get active chat session
-    const activeChatSession = useMemo(() => {
-        if (!activeProject) return null;
-        return activeProject.chatSessions.find(s => s.id === activeProject.activeChatSessionId) || null;
-    }, [activeProject]);
-    
-    // Load saved state from localStorage on mount
-    useEffect(() => {
-        try {
-            const savedProjects = localStorage.getItem(STORAGE_KEYS.PROJECTS);
-            const savedActiveProjectId = localStorage.getItem(STORAGE_KEYS.ACTIVE_PROJECT_ID);
-            const savedChatWidth = localStorage.getItem(STORAGE_KEYS.CHAT_WIDTH);
-            
-            if (savedProjects) {
-                const parsed = JSON.parse(savedProjects);
-                // Restore dates
-                const restored = parsed.map((p: any) => ({
-                    ...p,
-                    source: p.source || (p.repoDetails ? 'github' : 'empty'),
-                    layoutDirection: p.layoutDirection || 'TB',
-                    aiContextSnapshot: p.aiContextSnapshot || null,
-                    lastSyncedAt: p.lastSyncedAt || null,
-                    createdAt: new Date(p.createdAt),
-                    updatedAt: new Date(p.updatedAt),
-                    chatSessions: p.chatSessions.map((s: any) => ({
-                        ...s,
-                        createdAt: new Date(s.createdAt),
-                        updatedAt: new Date(s.updatedAt),
-                        messages: s.messages.map((m: any) => ({
-                            ...m,
-                            timestamp: new Date(m.timestamp)
-                        }))
-                    }))
-                }));
-                setProjects(restored);
-                
-                if (savedActiveProjectId && restored.find((p: Project) => p.id === savedActiveProjectId)) {
-                    setActiveProjectId(savedActiveProjectId);
-                    const project = restored.find((p: Project) => p.id === savedActiveProjectId);
-                    if (project) {
-                        setNodes(project.nodes);
-                        setEdges(project.edges);
-                        setRepoDetails(project.repoDetails);
-                        setRepoUrl(project.repoUrl);
-                        setLayoutDirection(project.layoutDirection || 'TB');
-                        setTimeout(() => fitView({ padding: 0.2 }), 200);
-                    }
-                }
-            }
-            
-            if (savedChatWidth) setChatWidth(parseInt(savedChatWidth));
-        } catch (e) {
-            console.error('Error loading saved state:', e);
-        }
-    }, []);
-    
-    // Save projects to localStorage when they change
-    useEffect(() => {
-        if (projects.length > 0) {
-            localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
-            return;
-        }
-        localStorage.removeItem(STORAGE_KEYS.PROJECTS);
-    }, [projects]);
-    
-    // Save active project ID
-    useEffect(() => {
-        if (activeProjectId) {
-            localStorage.setItem(STORAGE_KEYS.ACTIVE_PROJECT_ID, activeProjectId);
-        }
-    }, [activeProjectId]);
-    
-    // Update project when nodes/edges change
-    useEffect(() => {
-        if (activeProjectId) {
-            setProjects(prev => prev.map(p => 
-                p.id === activeProjectId 
-                    ? { ...p, nodes, edges, layoutDirection, updatedAt: new Date() }
-                    : p
-            ));
-        }
-    }, [nodes, edges, activeProjectId, layoutDirection]);
-    
-    useEffect(() => {
-        localStorage.setItem(STORAGE_KEYS.CHAT_WIDTH, chatWidth.toString());
-    }, [chatWidth]);
-    
-    // Resize handler
-    const handleMouseDown = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        setIsResizing(true);
-    }, []);
-    
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isResizing) return;
-            const newWidth = window.innerWidth - e.clientX;
-            setChatWidth(Math.max(300, Math.min(800, newWidth)));
-        };
-        
-        const handleMouseUp = () => {
-            setIsResizing(false);
-        };
-        
-        if (isResizing) {
-            document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-        }
-        
-        return () => {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-    }, [isResizing]);
-    
-    // Memoize node types and edge types to prevent re-renders
-    const memoizedNodeTypes = useMemo(() => nodeTypes, []);
-    const memoizedEdgeTypes = useMemo(() => edgeTypes, []);
+    const { handleCopy, handlePaste } = useClipboard(
+        selectedNodes, selectedNode, edges, saveToHistory, setNodes, setEdges,
+    );
 
-    // Save to history for undo (clears redo stack)
-    const saveToHistory = useCallback(() => {
-        setHistory(prev => [...prev.slice(-10), { nodes: [...nodes], edges: [...edges] }]);
-        setFuture([]);
-    }, [nodes, edges]);
+    const proj = useProjects({
+        nodes, edges, setNodes, setEdges,
+        selectedNode, layoutDirection, setLayoutDirection,
+        setSelectedNode, fitView, saveToHistory,
+    });
 
-    // Undo
-    const handleUndo = useCallback(() => {
-        if (history.length > 0) {
-            const lastState = history[history.length - 1];
-            setFuture(prev => [...prev, { nodes: [...nodes], edges: [...edges] }]);
-            setNodes(lastState.nodes);
-            setEdges(lastState.edges);
-            setHistory(prev => prev.slice(0, -1));
-        }
-    }, [history, nodes, edges, setNodes, setEdges]);
+    const { width: chatWidth, handleMouseDown, resizeRef } =
+        useResizablePane('repoAgent_chatWidth');
 
-    // Redo
-    const handleRedo = useCallback(() => {
-        if (future.length > 0) {
-            const nextState = future[future.length - 1];
-            setHistory(prev => [...prev, { nodes: [...nodes], edges: [...edges] }]);
-            setNodes(nextState.nodes);
-            setEdges(nextState.edges);
-            setFuture(prev => prev.slice(0, -1));
-        }
-    }, [future, nodes, edges, setNodes, setEdges]);
+    // ── Stable type maps (prevent ReactFlow re-registration) ──
+    const memoNodeTypes = useMemo(() => nodeTypes, []);
+    const memoEdgeTypes = useMemo(() => edgeTypes, []);
 
-    // Repo Fetch Handler
-    const createProjectFromGitHub = useCallback(async (url: string) => {
-        if (!url) return;
-        setLoading(true);
-        setError(null);
-        saveToHistory();
-        
-        try {
-            const res = await fetch('/api/repo', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url })
-            });
+    // ── Canvas interaction ────────────────────────────────────
 
-            if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.error || "Failed to fetch");
-            }
-
-            const data = await res.json();
-            setNodes(data.nodes);
-            setEdges(data.edges);
-            setRepoDetails(data.repoDetails);
-            setRepoUrl(url);
-            setLayoutDirection('TB');
-            
-            // Create new project
-            const newProject = createNewProject(url, data.repoDetails, data.nodes, data.edges, {
-                source: 'github',
-                layoutDirection: 'TB',
-            });
-            setProjects(prev => [...prev, newProject]);
-            setActiveProjectId(newProject.id);
-            setNewProjectUrl('');
-            
-            // Fit view after a short delay to ensure nodes are rendered
-            setTimeout(() => fitView({ padding: 0.2 }), 100);
-        } catch (error: any) {
-            setError(error.message || "Error analyzing repository");
-        } finally {
-            setLoading(false);
-        }
-    }, [fitView, saveToHistory, setEdges, setNodes]);
-
-    const handleVisualize = useCallback(async () => {
-        if (!repoUrl.trim()) return;
-        await createProjectFromGitHub(repoUrl.trim());
-    }, [createProjectFromGitHub, repoUrl]);
-
-    // Import project from JSON file
-    const handleImportProject = useCallback((file: File) => {
-        setImportError(null);
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const raw = e.target?.result as string;
-                const imported = parseAndValidateImportJson(raw, file.name);
-                const newProject = createNewProject(
-                    imported.repoDetails ? `https://github.com/${imported.repoDetails.owner}/${imported.repoDetails.repo}` : '',
-                    imported.repoDetails,
-                    imported.nodes,
-                    imported.edges,
-                    {
-                        name: imported.name,
-                        source: 'imported',
-                        layoutDirection: 'TB',
-                    }
-                );
-                setProjects(prev => [...prev, newProject]);
-                setActiveProjectId(newProject.id);
-                setNodes(imported.nodes);
-                setEdges(imported.edges);
-                setRepoDetails(imported.repoDetails);
-                setRepoUrl(newProject.repoUrl);
-                setLayoutDirection('TB');
-                setSelectedNode(null);
-                setShowCreateProjectModal(false);
-                setShowProjectList(false);
-                setError(null);
-                setImportError(null);
-                setTimeout(() => fitView({ padding: 0.2 }), 100);
-            } catch (err: any) {
-                setImportError(err.message || 'Failed to import JSON file.');
-            }
-        };
-        reader.onerror = () => {
-            setImportError('Failed to read the file.');
-        };
-        reader.readAsText(file);
-    }, [fitView, setEdges, setNodes]);
-
-    const handleCreateEmptyProject = useCallback(() => {
-        const nowName = newProjectName.trim();
-        const projectName = nowName || `Project ${projects.length + 1}`;
-        const newProject = createNewProject('', null, [], [], {
-            name: projectName,
-            source: 'empty',
-            layoutDirection,
-        });
-
-        setProjects(prev => [...prev, newProject]);
-        setActiveProjectId(newProject.id);
-        setNodes([]);
-        setEdges([]);
-        setRepoDetails(null);
-        setRepoUrl('');
-        setSelectedNode(null);
-        setShowCreateProjectModal(false);
-        setShowProjectList(false);
-        setNewProjectName('');
-        setNewProjectUrl('');
-        setError(null);
-    }, [layoutDirection, newProjectName, projects.length, setEdges, setNodes]);
-    
-    // Switch to a project
-    const switchToProject = useCallback((projectId: string) => {
-        const project = projects.find(p => p.id === projectId);
-        if (project) {
-            setActiveProjectId(projectId);
-            setNodes(project.nodes);
-            setEdges(project.edges);
-            setRepoDetails(project.repoDetails);
-            setRepoUrl(project.repoUrl);
-            setLayoutDirection(project.layoutDirection || 'TB');
-            setSelectedNode(null);
-            setShowProjectList(false);
-            setTimeout(() => fitView({ padding: 0.2 }), 100);
-        }
-    }, [projects, setNodes, setEdges, fitView]);
-    
-    // Delete a project
-    const deleteProject = useCallback((projectId: string) => {
-        setProjects(prev => {
-            const filtered = prev.filter(p => p.id !== projectId);
-            if (projectId === activeProjectId) {
-                if (filtered.length > 0) {
-                    const nextProject = filtered[0];
-                    setActiveProjectId(nextProject.id);
-                    setNodes(nextProject.nodes);
-                    setEdges(nextProject.edges);
-                    setRepoDetails(nextProject.repoDetails);
-                    setRepoUrl(nextProject.repoUrl);
-                    setLayoutDirection(nextProject.layoutDirection || 'TB');
-                } else {
-                    setActiveProjectId(null);
-                    setNodes([]);
-                    setEdges([]);
-                    setRepoDetails(null);
-                    setRepoUrl('');
-                    setLayoutDirection('TB');
-                    localStorage.removeItem(STORAGE_KEYS.PROJECTS);
-                    localStorage.removeItem(STORAGE_KEYS.ACTIVE_PROJECT_ID);
-                }
-            }
-            return filtered;
-        });
-    }, [activeProjectId, setNodes, setEdges]);
-
-    const handleSyncCanvas = useCallback(() => {
-        if (!activeProjectId) {
-            setError('Create or select a project before syncing the canvas.');
-            return;
-        }
-
-        setIsSyncingCanvas(true);
-        const syncedAt = new Date().toISOString();
-
-        setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-
-            const snapshot: CanvasSyncSnapshot = {
-                syncedAt,
-                project: {
-                    id: p.id,
-                    name: p.name,
-                    source: p.source,
-                    repo: p.repoDetails ? `${p.repoDetails.owner}/${p.repoDetails.repo}` : undefined,
-                },
-                layoutDirection,
-                selectedNodeId: selectedNode?.id || null,
-                selectedNodeLabel: selectedNode?.data?.label || null,
-                nodes: nodes.map(n => ({
-                    id: n.id,
-                    label: n.data?.label,
-                    description: n.data?.description,
-                    category: n.data?.category,
-                    files: n.data?.files,
-                    complexity: n.data?.complexity,
-                    dependencies: n.data?.dependencies,
-                    exports: n.data?.exports,
-                    position: n.position,
-                })),
-                edges: edges.map(e => ({
-                    id: e.id,
-                    source: e.source,
-                    target: e.target,
-                    label: (e.data as any)?.label || e.label,
-                    type: (e.data as any)?.type || e.type,
-                    strength: (e.data as any)?.strength,
-                    direction: (e.data as any)?.direction,
-                })),
-            };
-
-            return {
-                ...p,
-                aiContextSnapshot: snapshot,
-                lastSyncedAt: syncedAt,
-                updatedAt: new Date(),
-            };
-        }));
-
-        setError(null);
-        setTimeout(() => setIsSyncingCanvas(false), 250);
-    }, [activeProjectId, edges, layoutDirection, nodes, selectedNode]);
-    
-    // Update chat session messages
-    const updateChatMessages = useCallback((messages: any[]) => {
-        if (!activeProjectId || !activeProject?.activeChatSessionId) return;
-        
-        setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-            return {
-                ...p,
-                chatSessions: p.chatSessions.map(s => 
-                    s.id === p.activeChatSessionId 
-                        ? { ...s, messages, updatedAt: new Date() }
-                        : s
-                ),
-                updatedAt: new Date()
-            };
-        }));
-    }, [activeProjectId, activeProject?.activeChatSessionId]);
-    
-    // Create new chat session
-    const createNewChatSession = useCallback(() => {
-        if (!activeProjectId) return;
-        
-        const newSession: ChatSession = {
-            id: generateId(),
-            title: `Chat ${(activeProject?.chatSessions.length || 0) + 1}`,
-            messages: [{
-                id: '1',
-                role: 'assistant',
-                content: "🆕 **New conversation started!**\n\nI still have context about the repository. Ask me anything!",
-                timestamp: new Date()
-            }],
-            createdAt: new Date(),
-            updatedAt: new Date()
-        };
-        
-        setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-            return {
-                ...p,
-                chatSessions: [...p.chatSessions, newSession],
-                activeChatSessionId: newSession.id,
-                updatedAt: new Date()
-            };
-        }));
-    }, [activeProjectId, activeProject?.chatSessions.length]);
-    
-    // Switch chat session
-    const switchChatSession = useCallback((sessionId: string) => {
-        if (!activeProjectId) return;
-        
-        setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-            return {
-                ...p,
-                activeChatSessionId: sessionId,
-                updatedAt: new Date()
-            };
-        }));
-    }, [activeProjectId]);
-    
-    // Delete chat session
-    const deleteChatSession = useCallback((sessionId: string) => {
-        if (!activeProjectId) return;
-        
-        setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-            const filteredSessions = p.chatSessions.filter(s => s.id !== sessionId);
-            
-            // If we deleted the active session, switch to the first available
-            let newActiveSessionId = p.activeChatSessionId;
-            if (sessionId === p.activeChatSessionId && filteredSessions.length > 0) {
-                newActiveSessionId = filteredSessions[0].id;
-            }
-            
-            // If no sessions left, create a new one
-            if (filteredSessions.length === 0) {
-                const newSession: ChatSession = {
-                    id: generateId(),
-                    title: 'Chat 1',
-                    messages: [{
-                        id: '1',
-                        role: 'assistant',
-                        content: "👋 Chat cleared! Ready for new questions.",
-                        timestamp: new Date()
-                    }],
-                    createdAt: new Date(),
-                    updatedAt: new Date()
-                };
-                return {
-                    ...p,
-                    chatSessions: [newSession],
-                    activeChatSessionId: newSession.id,
-                    updatedAt: new Date()
-                };
-            }
-            
-            return {
-                ...p,
-                chatSessions: filteredSessions,
-                activeChatSessionId: newActiveSessionId,
-                updatedAt: new Date()
-            };
-        }));
-    }, [activeProjectId]);
-
-    // Re-layout handler
-    const handleLayoutChange = async (direction: 'TB' | 'LR') => {
-        if (nodes.length === 0) return;
-        setLayoutDirection(direction);
-        
-        try {
-            const res = await fetch('/api/repo', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nodes, edges, layout: direction })
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                setNodes(data.nodes);
-                setEdges(data.edges);
-                setTimeout(() => fitView({ padding: 0.2 }), 100);
-            }
-        } catch (error) {
-            console.error('Layout change failed:', error);
-        }
-    };
-
-    // React Flow Handlers
     const onConnect = useCallback((params: Connection) => {
         saveToHistory();
-        setEdges((eds) => addEdge({
-            ...params,
-            type: 'custom',
-            // No animation for performance
-            animated: false,
-            data: { type: 'dependency', strength: 'normal' }
-        }, eds));
+        setEdges((eds) =>
+            addEdge(
+                { ...params, type: 'custom', animated: false, data: { type: 'dependency', strength: 'normal' } },
+                eds,
+            ),
+        );
     }, [setEdges, saveToHistory]);
-    
-    const onSelectionChange = useCallback(({ nodes: selNodes }: OnSelectionChangeParams) => {
-        setSelectedNodes(selNodes);
-        if (selNodes.length === 1) {
-            setSelectedNode(selNodes[0]);
-        } else if (selNodes.length === 0) {
-            setSelectedNode(null);
-        } else {
-            // Multiple selected – clear single-node context
-            setSelectedNode(null);
-        }
+
+    const onSelectionChange = useCallback(({ nodes: sel }: OnSelectionChangeParams) => {
+        setSelectedNodes(sel);
+        setSelectedNode(sel.length === 1 ? sel[0] : null);
     }, []);
 
-    const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-        // Single click without Shift – React Flow handles selection,
-        // but we also track the "primary" selected node for the sidebar.
-        setSelectedNode(node);
-    }, []);
+    const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => setSelectedNode(node), []);
 
     const onPaneClick = useCallback(() => {
         setSelectedNode(null);
         setSelectedNodes([]);
     }, []);
 
-    // Add node handler
+    // ── Node CRUD ─────────────────────────────────────────────
+
     const handleAddNode = useCallback((nodeData: any) => {
         saveToHistory();
-        const id = `node-${Date.now()}`;
-        const newNode: Node = {
-            id,
-            type: 'enhanced',
-            position: { 
-                x: Math.random() * 400 + 100, 
-                y: Math.random() * 400 + 100 
+        setNodes((nds) => [
+            ...nds,
+            {
+                id: `node-${Date.now()}`,
+                type: 'enhanced',
+                position: { x: Math.random() * 400 + 100, y: Math.random() * 400 + 100 },
+                data: { ...nodeData, category: nodeData.category || 'default', complexity: 'low' },
             },
-            data: {
-                ...nodeData,
-                category: nodeData.category || 'default',
-                complexity: 'low',
-            },
-        };
-        setNodes((nds) => [...nds, newNode]);
+        ]);
     }, [setNodes, saveToHistory]);
 
-    // Delete node handler
     const handleDeleteNode = useCallback((nodeId: string) => {
         saveToHistory();
         setNodes((nds) => nds.filter((n) => n.id !== nodeId));
@@ -713,495 +134,198 @@ function FlowCanvas() {
         setSelectedNode(null);
     }, [setNodes, setEdges, saveToHistory]);
 
-    // Batch delete handler – delete all selected nodes
     const handleBatchDelete = useCallback((nodeIds: string[]) => {
-        if (nodeIds.length === 0) return;
+        if (!nodeIds.length) return;
         saveToHistory();
-        const idSet = new Set(nodeIds);
-        setNodes((nds) => nds.filter((n) => !idSet.has(n.id)));
-        setEdges((eds) => eds.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
+        const ids = new Set(nodeIds);
+        setNodes((nds) => nds.filter((n) => !ids.has(n.id)));
+        setEdges((eds) => eds.filter((e) => !ids.has(e.source) && !ids.has(e.target)));
         setSelectedNode(null);
         setSelectedNodes([]);
     }, [setNodes, setEdges, saveToHistory]);
 
-    // Batch category change handler
     const handleBatchUpdateCategory = useCallback((nodeIds: string[], category: string) => {
-        if (nodeIds.length === 0) return;
+        if (!nodeIds.length) return;
         saveToHistory();
-        const idSet = new Set(nodeIds);
-        setNodes((nds) => nds.map((n) =>
-            idSet.has(n.id) ? { ...n, data: { ...n.data, category } } : n
-        ));
+        const ids = new Set(nodeIds);
+        setNodes((nds) => nds.map((n) => (ids.has(n.id) ? { ...n, data: { ...n.data, category } } : n)));
     }, [setNodes, saveToHistory]);
 
-    // Update node handler
     const handleUpdateNode = useCallback((nodeId: string, data: any) => {
         saveToHistory();
-        setNodes((nds) => nds.map((n) => 
-            n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n
-        ));
+        setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n)));
     }, [setNodes, saveToHistory]);
 
-    // Stable context value for inline editing in nodes
-    const nodeEditContextValue = useMemo(() => ({
-        onUpdateNode: handleUpdateNode,
-    }), [handleUpdateNode]);
+    const nodeEditCtx = useMemo(() => ({ onUpdateNode: handleUpdateNode }), [handleUpdateNode]);
 
-    // Search handler - optimized with useCallback
+    // ── Search & helpers ──────────────────────────────────────
+
     const handleSearch = useCallback((query: string) => {
-        setSearchQuery(query);
         if (!query) {
-            // Reset all nodes to normal
             setNodes((nds) => nds.map((n) => ({ ...n, style: undefined })));
             return;
         }
-        
-        // Highlight matching nodes
-        const lowerQuery = query.toLowerCase();
-        setNodes((nds) => nds.map((n) => {
-            const matches = 
-                n.data.label.toLowerCase().includes(lowerQuery) ||
-                n.data.description?.toLowerCase().includes(lowerQuery) ||
-                n.data.files?.some((f: string) => f.toLowerCase().includes(lowerQuery));
-            
-            return {
-                ...n,
-                style: matches ? { opacity: 1 } : { opacity: 0.3 },
-            };
-        }));
+        const lq = query.toLowerCase();
+        setNodes((nds) =>
+            nds.map((n) => {
+                const hit =
+                    n.data.label?.toLowerCase().includes(lq) ||
+                    n.data.description?.toLowerCase().includes(lq) ||
+                    n.data.files?.some((f: string) => f.toLowerCase().includes(lq));
+                return { ...n, style: hit ? { opacity: 1 } : { opacity: 0.3 } };
+            }),
+        );
     }, [setNodes]);
 
-    // Select all nodes
-    const handleSelectAll = useCallback(() => {
-        setNodes((nds) => nds.map((n) => ({ ...n, selected: true })));
-    }, [setNodes]);
+    const handleSelectAll = useCallback(
+        () => setNodes((nds) => nds.map((n) => ({ ...n, selected: true }))),
+        [setNodes],
+    );
 
-    // Duplicate selected nodes
     const handleDuplicateSelected = useCallback(() => {
         if (!selectedNode) return;
         saveToHistory();
-        
-        const newNode: Node = {
-            ...selectedNode,
-            id: `node-${Date.now()}`,
-            position: { 
-                x: selectedNode.position.x + 50, 
-                y: selectedNode.position.y + 50 
+        setNodes((nds) => [
+            ...nds,
+            {
+                ...selectedNode,
+                id: `node-${Date.now()}`,
+                position: { x: selectedNode.position.x + 50, y: selectedNode.position.y + 50 },
+                selected: false,
             },
-            selected: false,
-        };
-        setNodes((nds) => [...nds, newNode]);
+        ]);
     }, [selectedNode, setNodes, saveToHistory]);
 
-    // Toggle snap to grid
-    const handleToggleSnapToGrid = useCallback(() => {
-        setSnapToGrid((prev) => !prev);
-    }, []);
+    const handleToggleSnapToGrid = useCallback(() => setSnapToGrid((s) => !s), []);
 
-    // Copy selected nodes to clipboard
-    const handleCopy = useCallback(() => {
-        const nodesToCopy = selectedNodes.length > 0 ? selectedNodes : (selectedNode ? [selectedNode] : []);
-        if (nodesToCopy.length === 0) return;
-        const nodeIds = new Set(nodesToCopy.map(n => n.id));
-        // Also copy edges that are fully within the selection
-        const edgesToCopy = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
-        setClipboard({ nodes: nodesToCopy, edges: edgesToCopy });
-    }, [selectedNodes, selectedNode, edges]);
-
-    // Paste clipboard nodes
-    const handlePaste = useCallback(() => {
-        if (!clipboard || clipboard.nodes.length === 0) return;
-        saveToHistory();
-
-        const OFFSET = 60;
-        // Map old ID -> new ID
-        const idMap = new Map<string, string>();
-        clipboard.nodes.forEach(n => {
-            idMap.set(n.id, `node-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`);
-        });
-
-        const newNodes: Node[] = clipboard.nodes.map(n => ({
-            ...n,
-            id: idMap.get(n.id)!,
-            position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET },
-            selected: false,
-            data: { ...n.data },
-        }));
-
-        const newEdges: Edge[] = clipboard.edges.map(e => ({
-            ...e,
-            id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-            source: idMap.get(e.source) || e.source,
-            target: idMap.get(e.target) || e.target,
-            selected: false,
-            data: e.data ? { ...e.data } : undefined,
-        }));
-
-        setNodes(nds => [...nds, ...newNodes]);
-        setEdges(eds => [...eds, ...newEdges]);
-    }, [clipboard, saveToHistory, setNodes, setEdges]);
-
-    // Keyboard shortcuts
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Skip if user is typing in an input
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-                return;
-            }
-            
-            if (e.key === 'Delete') {
-                if (selectedNodes.length > 1) {
-                    handleBatchDelete(selectedNodes.map(n => n.id));
-                } else if (selectedNode) {
-                    handleDeleteNode(selectedNode.id);
+    const handleLayoutChange = useCallback(
+        async (direction: 'TB' | 'LR') => {
+            if (!nodes.length) return;
+            setLayoutDirection(direction);
+            try {
+                const res = await fetch('/api/repo', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nodes, edges, layout: direction }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setNodes(data.nodes);
+                    setEdges(data.edges);
+                    setTimeout(() => fitView({ padding: 0.2 }), 100);
                 }
+            } catch (err) {
+                console.error('Layout change failed:', err);
             }
-            if (e.key === 'Escape') {
-                setSelectedNode(null);
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-                e.preventDefault();
-                handleUndo();
-            }
-            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
-                e.preventDefault();
-                handleRedo();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
-                e.preventDefault();
-                handleCopy();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
-                e.preventDefault();
-                handlePaste();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-                e.preventDefault();
-                handleSelectAll();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
-                e.preventDefault();
-                handleDuplicateSelected();
-            }
-            if (e.key === 'g' || e.key === 'G') {
-                handleToggleSnapToGrid();
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-                e.preventDefault();
-                // Focus search would be handled by FlowControls
-            }
-        };
+        },
+        [nodes, edges, setNodes, setEdges, fitView],
+    );
 
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedNode, selectedNodes, handleDeleteNode, handleBatchDelete, handleUndo, handleRedo, handleSelectAll, handleDuplicateSelected, handleToggleSnapToGrid, handleCopy, handlePaste]);
+    // ── Keyboard shortcuts (single stable effect) ─────────────
+
+    useCanvasShortcuts({
+        selectedNode,
+        selectedNodes,
+        setSelectedNode,
+        handleDeleteNode,
+        handleBatchDelete,
+        handleUndo,
+        handleRedo,
+        handleCopy,
+        handlePaste,
+        handleSelectAll,
+        handleDuplicateSelected,
+        handleToggleSnapToGrid,
+    });
+
+    // ── Render ────────────────────────────────────────────────
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-            {/* Project List Sidebar */}
+            {/* Project list sidebar */}
             <AnimatePresence>
-                {showProjectList && (
-                    <motion.div
-                        initial={{ x: -300, opacity: 0 }}
-                        animate={{ x: 0, opacity: 1 }}
-                        exit={{ x: -300, opacity: 0 }}
-                        className="w-72 h-full bg-slate-900 border-r border-slate-800 z-50 flex flex-col"
-                    >
-                        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                            <h2 className="font-semibold text-slate-100 flex items-center gap-2">
-                                <FolderOpen size={18} className="text-cyan-400" />
-                                Projects
-                            </h2>
-                            <div className="flex items-center gap-1">
-                                <button
-                                    onClick={() => setShowCreateProjectModal(true)}
-                                    className="p-1.5 text-slate-500 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors"
-                                    title="Add new project"
-                                >
-                                    <Plus size={16} />
-                                </button>
-                                <button
-                                    onClick={() => setShowProjectList(false)}
-                                    className="p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded"
-                                >
-                                    <X size={18} />
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                            {projects.length === 0 ? (
-                                <div className="text-center text-slate-500 text-sm py-8">
-                                    No projects yet.<br />
-                                    Create from GitHub or start empty.
-                                </div>
-                            ) : (
-                                projects.map(project => (
-                                    <div
-                                        key={project.id}
-                                        className={cn(
-                                            "p-3 rounded-lg cursor-pointer transition-all group",
-                                            project.id === activeProjectId
-                                                ? "bg-blue-500/20 border border-blue-500/30"
-                                                : "hover:bg-slate-800 border border-transparent"
-                                        )}
-                                        onClick={() => switchToProject(project.id)}
-                                    >
-                                        <div className="flex items-start justify-between">
-                                            <div className="flex-1 min-w-0">
-                                                <div className="text-sm font-medium text-slate-200 truncate">
-                                                    {project.name}
-                                                </div>
-                                                <div className="text-[10px] text-slate-500 mt-1">
-                                                    {project.nodes.length} nodes • {project.chatSessions.length} chats
-                                                </div>
-                                                <div className="text-[10px] text-slate-600 mt-0.5">
-                                                    {new Date(project.updatedAt).toLocaleDateString()}
-                                                </div>
-                                            </div>
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    if (confirm('Delete this project?')) {
-                                                        deleteProject(project.id);
-                                                    }
-                                                }}
-                                                className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </motion.div>
+                {proj.showProjectList && (
+                    <ProjectSidebar
+                        projects={proj.projects}
+                        activeProjectId={proj.activeProjectId}
+                        onSwitchProject={proj.switchToProject}
+                        onDeleteProject={proj.deleteProject}
+                        onCreateNew={() => proj.setShowCreateProjectModal(true)}
+                        onClose={() => proj.setShowProjectList(false)}
+                    />
                 )}
             </AnimatePresence>
 
-            {/* Create Project Modal */}
+            {/* Create-project modal */}
             <AnimatePresence>
-                {showCreateProjectModal && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute inset-0 z-[60] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-                    >
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.95, y: 8 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 8 }}
-                            className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
-                        >
-                            <div className="flex items-center justify-between p-4 border-b border-slate-800">
-                                <h3 className="text-sm font-semibold text-slate-100">Create Project</h3>
-                                <button
-                                    onClick={() => setShowCreateProjectModal(false)}
-                                    className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded"
-                                >
-                                    <X size={16} />
-                                </button>
-                            </div>
-
-                            <div className="p-4 space-y-4">
-                                <div className="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-800/60 border border-slate-700">
-                                    <button
-                                        onClick={() => { setCreateProjectMode('github'); setImportError(null); }}
-                                        className={cn(
-                                            'px-3 py-2 text-xs rounded-lg transition-colors',
-                                            createProjectMode === 'github'
-                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                                                : 'text-slate-300 hover:bg-slate-700'
-                                        )}
-                                    >
-                                        From GitHub
-                                    </button>
-                                    <button
-                                        onClick={() => { setCreateProjectMode('empty'); setImportError(null); }}
-                                        className={cn(
-                                            'px-3 py-2 text-xs rounded-lg transition-colors',
-                                            createProjectMode === 'empty'
-                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                                                : 'text-slate-300 hover:bg-slate-700'
-                                        )}
-                                    >
-                                        Empty Project
-                                    </button>
-                                    <button
-                                        onClick={() => { setCreateProjectMode('json'); setImportError(null); }}
-                                        className={cn(
-                                            'px-3 py-2 text-xs rounded-lg transition-colors',
-                                            createProjectMode === 'json'
-                                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                                                : 'text-slate-300 hover:bg-slate-700'
-                                        )}
-                                    >
-                                        From JSON
-                                    </button>
-                                </div>
-
-                                {createProjectMode === 'github' ? (
-                                    <div className="space-y-3">
-                                        <label className="text-xs text-slate-400 block">GitHub repository URL</label>
-                                        <input
-                                            value={newProjectUrl}
-                                            onChange={(e) => setNewProjectUrl(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && newProjectUrl.trim() && !loading) {
-                                                    setShowCreateProjectModal(false);
-                                                    setShowProjectList(false);
-                                                    setRepoUrl(newProjectUrl.trim());
-                                                    createProjectFromGitHub(newProjectUrl.trim());
-                                                }
-                                            }}
-                                            placeholder="https://github.com/owner/repo"
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
-                                        />
-                                    </div>
-                                ) : createProjectMode === 'empty' ? (
-                                    <div className="space-y-3">
-                                        <label className="text-xs text-slate-400 block">Project name (optional)</label>
-                                        <input
-                                            value={newProjectName}
-                                            onChange={(e) => setNewProjectName(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    handleCreateEmptyProject();
-                                                }
-                                            }}
-                                            placeholder="My Custom Flowchart"
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
-                                        />
-                                        <p className="text-xs text-slate-500">
-                                            Start from a blank canvas, then add custom nodes and connections.
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-3">
-                                        <label className="text-xs text-slate-400 block">Select a JSON file exported from Rassam</label>
-                                        <input
-                                            ref={importFileRef}
-                                            type="file"
-                                            accept=".json"
-                                            className="hidden"
-                                            onChange={(e) => {
-                                                const file = e.target.files?.[0];
-                                                if (file) handleImportProject(file);
-                                                e.target.value = '';
-                                            }}
-                                        />
-                                        <button
-                                            onClick={() => importFileRef.current?.click()}
-                                            className="w-full flex items-center justify-center gap-2 bg-slate-800 border-2 border-dashed border-slate-600 hover:border-cyan-500/50 rounded-lg px-3 py-6 text-sm text-slate-300 hover:text-cyan-300 transition-colors cursor-pointer"
-                                        >
-                                            <FileCode size={18} />
-                                            Choose JSON file
-                                        </button>
-                                        {importError && (
-                                            <div className="flex items-start gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-2">
-                                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                                                {importError}
-                                            </div>
-                                        )}
-                                        <p className="text-xs text-slate-500">
-                                            Import a previously exported JSON file as a new project.
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="p-4 border-t border-slate-800 flex items-center justify-end gap-2">
-                                <button
-                                    onClick={() => setShowCreateProjectModal(false)}
-                                    className="px-3 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
-                                >
-                                    Cancel
-                                </button>
-                                {createProjectMode === 'github' ? (
-                                    <button
-                                        onClick={() => {
-                                            if (!newProjectUrl.trim() || loading) return;
-                                            setShowCreateProjectModal(false);
-                                            setShowProjectList(false);
-                                            setRepoUrl(newProjectUrl.trim());
-                                            createProjectFromGitHub(newProjectUrl.trim());
-                                        }}
-                                        disabled={!newProjectUrl.trim() || loading}
-                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {loading ? 'Analyzing...' : 'Create from GitHub'}
-                                    </button>
-                                ) : createProjectMode === 'empty' ? (
-                                    <button
-                                        onClick={handleCreateEmptyProject}
-                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
-                                    >
-                                        Create Empty Project
-                                    </button>
-                                ) : (
-                                    <button
-                                        onClick={() => importFileRef.current?.click()}
-                                        className="px-3 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
-                                    >
-                                        Choose File to Import
-                                    </button>
-                                )}
-                            </div>
-                        </motion.div>
-                    </motion.div>
+                {proj.showCreateProjectModal && (
+                    <CreateProjectModal
+                        mode={proj.createProjectMode}
+                        onModeChange={proj.setCreateProjectMode}
+                        newProjectUrl={proj.newProjectUrl}
+                        onUrlChange={proj.setNewProjectUrl}
+                        newProjectName={proj.newProjectName}
+                        onNameChange={proj.setNewProjectName}
+                        loading={proj.loading}
+                        importError={proj.importError}
+                        importFileRef={proj.importFileRef}
+                        onClose={() => proj.setShowCreateProjectModal(false)}
+                        onCreateFromGitHub={proj.startGitHubProjectCreation}
+                        onCreateEmpty={proj.handleCreateEmptyProject}
+                        onImportFile={proj.handleImportProject}
+                        onClearImportError={() => proj.setImportError(null)}
+                    />
                 )}
             </AnimatePresence>
-            
-            {/* Main Canvas Area */}
+
+            {/* Main canvas area */}
             <div className="flex-1 relative h-full">
-                
-                {/* Project List Toggle */}
+                {/* Projects toggle */}
                 <button
-                    onClick={() => setShowProjectList(!showProjectList)}
+                    onClick={() => proj.setShowProjectList(!proj.showProjectList)}
                     className={cn(
-                        "absolute top-4 left-4 z-20 p-2.5 rounded-xl transition-all",
-                        "bg-slate-900/90 backdrop-blur border border-slate-700 hover:bg-slate-800",
-                        showProjectList && "bg-blue-500/20 border-blue-500/30"
+                        'absolute top-4 left-4 z-20 p-2.5 rounded-xl transition-all',
+                        'bg-slate-900/90 backdrop-blur border border-slate-700 hover:bg-slate-800',
+                        proj.showProjectList && 'bg-blue-500/20 border-blue-500/30',
                     )}
                     title="Projects"
                 >
-                    <FolderOpen size={18} className={showProjectList ? "text-blue-400" : "text-slate-400"} />
-                    {projects.length > 0 && (
+                    <FolderOpen size={18} className={proj.showProjectList ? 'text-blue-400' : 'text-slate-400'} />
+                    {proj.projects.length > 0 && (
                         <span className="absolute -top-1 -right-1 w-4 h-4 bg-blue-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                            {projects.length}
+                            {proj.projects.length}
                         </span>
                     )}
                 </button>
-                
-                {/* Floating Header / Input */}
+
+                {/* Floating header / repo input */}
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 w-[550px]">
                     <div className="flex gap-2">
                         <div className="relative flex-1 group">
                             <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
-                               <Github size={20} />
+                                <Github size={20} />
                             </div>
-                            <input 
-                               value={repoUrl}
-                               onChange={(e) => setRepoUrl(e.target.value)}
-                               className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-xl py-2 pl-10 pr-4 text-slate-200 outline-none focus:ring-2 focus:ring-blue-500 shadow-xl transition-all"
-                               placeholder="https://github.com/owner/repo"
-                               onKeyDown={(e) => e.key === 'Enter' && handleVisualize()}
+                            <input
+                                value={proj.repoUrl}
+                                onChange={(e) => proj.setRepoUrl(e.target.value)}
+                                className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-xl py-2 pl-10 pr-4 text-slate-200 outline-none focus:ring-2 focus:ring-blue-500 shadow-xl transition-all"
+                                placeholder="https://github.com/owner/repo"
+                                onKeyDown={(e) => e.key === 'Enter' && proj.handleVisualize()}
                             />
                         </div>
-                        <button 
-                            onClick={handleVisualize}
-                            disabled={loading || !repoUrl}
+                        <button
+                            onClick={proj.handleVisualize}
+                            disabled={proj.loading || !proj.repoUrl}
                             className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white rounded-xl px-5 py-2 font-medium shadow-lg shadow-blue-900/30 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {loading ? (
+                            {proj.loading ? (
                                 <Loader2 size={18} className="animate-spin" />
                             ) : (
                                 <Search size={18} />
                             )}
-                            <span className="hidden sm:inline">{loading ? 'Analyzing...' : 'Visualize'}</span>
+                            <span className="hidden sm:inline">{proj.loading ? 'Analyzing...' : 'Visualize'}</span>
                         </button>
-                        <ExportPanel repoDetails={repoDetails} onImportProject={handleImportProject} />
+                        <ExportPanel repoDetails={proj.repoDetails} onImportProject={proj.handleImportProject} />
                         <Link
                             href="/settings"
                             className="bg-slate-900/90 backdrop-blur-md border border-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-slate-300 transition-all flex items-center"
@@ -1210,10 +334,10 @@ function FlowCanvas() {
                             <Settings size={18} />
                         </Link>
                     </div>
-                    
+
                     {/* Error message */}
                     <AnimatePresence>
-                        {error && (
+                        {proj.error && (
                             <motion.div
                                 initial={{ opacity: 0, y: -10 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -1221,14 +345,14 @@ function FlowCanvas() {
                                 className="mt-2 p-3 bg-red-900/50 border border-red-700 rounded-xl flex items-center gap-2 text-red-200 text-sm"
                             >
                                 <AlertCircle size={16} />
-                                {error}
+                                {proj.error}
                             </motion.div>
                         )}
                     </AnimatePresence>
 
                     {/* Repo info badge */}
                     <AnimatePresence>
-                        {repoDetails && (
+                        {proj.repoDetails && (
                             <motion.div
                                 initial={{ opacity: 0, y: -10 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -1236,16 +360,16 @@ function FlowCanvas() {
                             >
                                 <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full">
                                     <GitBranch size={12} className="text-blue-400" />
-                                    <span className="text-slate-300">{repoDetails.owner}/{repoDetails.repo}</span>
+                                    <span className="text-slate-300">{proj.repoDetails.owner}/{proj.repoDetails.repo}</span>
                                 </div>
-                                {repoDetails.fileCount && (
+                                {proj.repoDetails.fileCount && (
                                     <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full">
                                         <FileCode size={12} className="text-green-400" />
-                                        <span className="text-slate-300">{repoDetails.fileCount} files</span>
+                                        <span className="text-slate-300">{proj.repoDetails.fileCount} files</span>
                                     </div>
                                 )}
                                 <a
-                                    href={repoUrl}
+                                    href={proj.repoUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex items-center gap-1 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full text-slate-400 hover:text-slate-200 transition-colors"
@@ -1258,7 +382,7 @@ function FlowCanvas() {
                     </AnimatePresence>
                 </div>
 
-                {/* Left-side Toolbars */}
+                {/* Left-side toolbars */}
                 <div className="absolute top-20 left-4 z-10 flex flex-col gap-2">
                     <EditToolbar
                         selectedNode={selectedNode}
@@ -1268,8 +392,8 @@ function FlowCanvas() {
                         onUpdateNode={handleUpdateNode}
                         onBatchDelete={handleBatchDelete}
                         onBatchUpdateCategory={handleBatchUpdateCategory}
-                        onUndo={history.length > 0 ? handleUndo : undefined}
-                        onRedo={future.length > 0 ? handleRedo : undefined}
+                        onUndo={canUndo ? handleUndo : undefined}
+                        onRedo={canRedo ? handleRedo : undefined}
                     />
                     <FlowControls
                         onSearch={handleSearch}
@@ -1283,15 +407,15 @@ function FlowCanvas() {
                         onToggleSnapToGrid={handleToggleSnapToGrid}
                         onSelectAll={handleSelectAll}
                         onDuplicateSelected={handleDuplicateSelected}
-                        onSyncCanvas={handleSyncCanvas}
-                        isSyncing={isSyncingCanvas}
-                        lastSyncedAt={activeProject?.lastSyncedAt || null}
+                        onSyncCanvas={proj.handleSyncCanvas}
+                        isSyncing={proj.isSyncingCanvas}
+                        lastSyncedAt={proj.activeProject?.lastSyncedAt || null}
                     />
                 </div>
 
-                {/* Empty State */}
+                {/* Empty state */}
                 <AnimatePresence>
-                    {nodes.length === 0 && !loading && (
+                    {nodes.length === 0 && !proj.loading && (
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
@@ -1313,63 +437,54 @@ function FlowCanvas() {
                     )}
                 </AnimatePresence>
 
-                <NodeEditProvider value={nodeEditContextValue}>
-                <ReactFlow
-                    nodes={nodes}
-                    edges={edges}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
-                    onConnect={onConnect}
-                    onNodeClick={onNodeClick}
-                    onPaneClick={onPaneClick}
-                    onSelectionChange={onSelectionChange}
-                    nodeTypes={memoizedNodeTypes}
-                    edgeTypes={memoizedEdgeTypes}
-                    fitView
-                    fitViewOptions={{ padding: 0.2 }}
-                    className="bg-slate-950"
-                    defaultEdgeOptions={{
-                        type: 'custom',
-                        animated: false,
-                    }}
-                    connectionLineStyle={{ stroke: '#3b82f6', strokeWidth: 2 }}
-                    connectionLineType={ConnectionLineType.SmoothStep}
-                    snapToGrid={snapToGrid}
-                    snapGrid={[15, 15]}
-                    minZoom={0.1}
-                    maxZoom={2}
-                    nodesDraggable
-                    nodesConnectable
-                    elementsSelectable
-                    multiSelectionKeyCode="Shift"
-                    selectionOnDrag
-                    selectionKeyCode="Shift"
-                    // Performance optimizations
-                    nodeExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
-                    translateExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
-                    preventScrolling
-                    zoomOnScroll
-                    zoomOnPinch
-                    panOnScroll={false}
-                    panOnDrag
-                    selectNodesOnDrag={false}
-                    nodeDragThreshold={2}
-                    autoPanOnConnect
-                    autoPanOnNodeDrag
-                >
-                    <Background 
-                        variant={BackgroundVariant.Dots} 
-                        gap={20} 
-                        size={1} 
-                        color="#1e293b" 
-                    />
-                    {showMinimap && <StyledMiniMap />}
-                </ReactFlow>
+                <NodeEditProvider value={nodeEditCtx}>
+                    <ReactFlow
+                        nodes={nodes}
+                        edges={edges}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onConnect={onConnect}
+                        onNodeClick={onNodeClick}
+                        onPaneClick={onPaneClick}
+                        onSelectionChange={onSelectionChange}
+                        nodeTypes={memoNodeTypes}
+                        edgeTypes={memoEdgeTypes}
+                        fitView
+                        fitViewOptions={{ padding: 0.2 }}
+                        className="bg-slate-950"
+                        defaultEdgeOptions={{ type: 'custom', animated: false }}
+                        connectionLineStyle={{ stroke: '#3b82f6', strokeWidth: 2 }}
+                        connectionLineType={ConnectionLineType.SmoothStep}
+                        snapToGrid={snapToGrid}
+                        snapGrid={[15, 15]}
+                        minZoom={0.1}
+                        maxZoom={2}
+                        nodesDraggable
+                        nodesConnectable
+                        elementsSelectable
+                        multiSelectionKeyCode="Shift"
+                        selectionOnDrag
+                        selectionKeyCode="Shift"
+                        nodeExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
+                        translateExtent={[[-Infinity, -Infinity], [Infinity, Infinity]]}
+                        preventScrolling
+                        zoomOnScroll
+                        zoomOnPinch
+                        panOnScroll={false}
+                        panOnDrag
+                        selectNodesOnDrag={false}
+                        nodeDragThreshold={2}
+                        autoPanOnConnect
+                        autoPanOnNodeDrag
+                    >
+                        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e293b" />
+                        {showMinimap && <StyledMiniMap />}
+                    </ReactFlow>
                 </NodeEditProvider>
             </div>
 
-            {/* Sidebar (Right Pane) - Resizable */}
-            <div 
+            {/* Resize handle */}
+            <div
                 ref={resizeRef}
                 className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors z-30 flex items-center justify-center group"
                 onMouseDown={handleMouseDown}
@@ -1379,24 +494,26 @@ function FlowCanvas() {
                     <GripVertical size={12} className="text-slate-500 group-hover:text-blue-300" />
                 </div>
             </div>
-            <div 
+
+            {/* Right-side chat pane */}
+            <div
                 className="h-full shadow-2xl z-20 transition-all duration-75"
                 style={{ width: `${chatWidth}px`, minWidth: '300px', maxWidth: '800px' }}
             >
-                <EnhancedChatbot 
-                    selectedNode={selectedNode} 
-                    repoDetails={repoDetails}
+                <EnhancedChatbot
+                    selectedNode={selectedNode}
+                    repoDetails={proj.repoDetails}
                     allNodes={nodes}
                     allEdges={edges}
-                    projectName={activeProject?.name}
+                    projectName={proj.activeProject?.name}
                     layoutDirection={layoutDirection}
-                    syncedCanvasContext={activeProject?.aiContextSnapshot || null}
-                    chatSessions={activeProject?.chatSessions || []}
-                    activeChatSessionId={activeProject?.activeChatSessionId || null}
-                    onUpdateMessages={updateChatMessages}
-                    onCreateNewChat={createNewChatSession}
-                    onSwitchChat={switchChatSession}
-                    onDeleteChat={deleteChatSession}
+                    syncedCanvasContext={proj.activeProject?.aiContextSnapshot || null}
+                    chatSessions={proj.activeProject?.chatSessions || []}
+                    activeChatSessionId={proj.activeProject?.activeChatSessionId || null}
+                    onUpdateMessages={proj.updateChatMessages}
+                    onCreateNewChat={proj.createNewChatSession}
+                    onSwitchChat={proj.switchChatSession}
+                    onDeleteChat={proj.deleteChatSession}
                 />
             </div>
         </div>
