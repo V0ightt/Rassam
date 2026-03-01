@@ -72,7 +72,8 @@ export async function POST(req: NextRequest) {
 
     // 1. Get Repo Structure
     const repoNodes = await getRepoStructure(owner, repo);
-    const filePaths = repoNodes.map(n => n.path);
+    // Only pass file blobs to AI – directory entries pollute the file list
+    const filePaths = repoNodes.filter(n => n.type === 'blob').map(n => n.path);
 
     // 2. Analyze with AI
     const aiAnalysis = await analyzeRepoStructure(filePaths);

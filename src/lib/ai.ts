@@ -1,4 +1,4 @@
-import { NodeCategory } from "@/types";
+import { NodeCategory, NodeData, SyncedCanvasNode, SyncedCanvasEdge, CanvasSyncSnapshot } from "@/types";
 import { getProvider } from "@/lib/llm";
 import type { ChatHistoryMessage } from "@/lib/llm/types";
 
@@ -150,23 +150,23 @@ Return JSON in this exact format:
 }
 
 function buildSystemMessage(
-  context: any | null,
+  context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: any[] | null,
-  canvasContext?: any | null,
+  allNodesContext?: SyncedCanvasNode[] | null,
+  canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
   message?: string
 ): string {
-  const snapshotNodes = canvasContext?.nodes || [];
-  const normalizedNodes = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
+  const snapshotNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
+  const normalizedNodes: SyncedCanvasNode[] = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
 
   const projectOverview = normalizedNodes.length > 0
     ? `\n\nPROJECT OVERVIEW (${normalizedNodes.length} components):
-${normalizedNodes.map((node: any) => `- **${node.label}** (${node.category || 'default'}): ${node.description || 'No description'} - ${node.files?.length || 0} files`).join('\n')}`
+${normalizedNodes.map((node: SyncedCanvasNode) => `- **${node.label}** (${node.category || 'default'}): ${node.description || 'No description'} - ${node.files?.length || 0} files`).join('\n')}`
     : '';
 
-  const snapshotEdges = canvasContext?.edges || [];
+  const snapshotEdges: SyncedCanvasEdge[] = canvasContext?.edges || [];
   const canvasStructure = canvasContext
     ? `\n\nCANVAS STRUCTURE:
 - Project: ${canvasContext.project?.name || 'Untitled'}${canvasContext.project?.source ? ` (${canvasContext.project.source})` : ''}
@@ -177,7 +177,7 @@ ${normalizedNodes.map((node: any) => `- **${node.label}** (${node.category || 'd
 - Last Sync: ${canvasContext.syncedAt || 'Unknown'}
 
 GRAPH RELATIONSHIPS:
-${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: any) => `- ${edge.source} -> ${edge.target}${edge.label ? ` (${edge.label})` : ''}${edge.type ? ` [${edge.type}]` : ''}`).join('\n') : '- No edges defined yet.'}`
+${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvasEdge) => `- ${edge.source} -> ${edge.target}${edge.label ? ` (${edge.label})` : ''}${edge.type ? ` [${edge.type}]` : ''}`).join('\n') : '- No edges defined yet.'}`
     : '';
 
   const readmeSection = readmeContent
@@ -261,46 +261,12 @@ INSTRUCTIONS:
 9. When file content is provided, analyze it directly to answer questions`;
 }
 
-export async function chatWithContext(
-  message: string, 
-  context: any | null, 
-  repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: any[] | null,
-  canvasContext?: any | null,
-  readmeContent?: string | null,
-  specificFile?: { path: string; content: string | null } | null,
-  runtimeSettings?: ChatRuntimeSettings,
-  history?: ChatHistoryMessage[]
-) {
-  const systemMessage = buildSystemMessage(
-    context, repoDetails, allNodesContext, canvasContext,
-    readmeContent, specificFile, message
-  );
-
-  try {
-    const provider = getProvider(runtimeSettings?.providerId);
-    const response = await provider.chat({
-      system: systemMessage,
-      message,
-      history,
-      temperature: clampTemperature(runtimeSettings?.temperature),
-      maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
-      model: runtimeSettings?.model || undefined,
-    });
-
-    return response;
-  } catch (error) {
-    console.error("Chat Error:", error);
-    throw error;
-  }
-}
-
 export function chatStreamWithContext(
   message: string,
-  context: any | null,
+  context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: any[] | null,
-  canvasContext?: any | null,
+  allNodesContext?: SyncedCanvasNode[] | null,
+  canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
   runtimeSettings?: ChatRuntimeSettings,

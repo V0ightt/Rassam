@@ -71,10 +71,6 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers) {
             if (e.key === 'g' || e.key === 'G') {
                 h.handleToggleSnapToGrid();
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-                e.preventDefault();
-                // Focus search – handled by FlowControls
-            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
