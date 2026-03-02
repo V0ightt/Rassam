@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
             canvasContext,
             modelSettings,
             history,
+            cachedFiles,
         } = await req.json();
 
         if (!message) {
@@ -77,32 +78,56 @@ export async function POST(req: NextRequest) {
         // Detect what content we need to fetch
         const { needsReadme, specificFile } = detectFileQueryIntent(message);
         
+        // Normalize cached files object
+        const cached: Record<string, string> = (cachedFiles && typeof cachedFiles === 'object') ? cachedFiles : {};
+
         let readmeContent: string | null = null;
         let fileContent: string | null = null;
         
-        // Fetch README if needed and repo details available
-        if (needsReadme && repoDetails?.owner && repoDetails?.repo) {
-            try {
-                // Try common README filenames
-                const readmeFiles = ['README.md', 'readme.md', 'README.MD', 'Readme.md', 'README', 'readme'];
-                for (const filename of readmeFiles) {
-                    const content = await getFileContent(repoDetails.owner, repoDetails.repo, filename);
-                    if (content) {
-                        readmeContent = content;
-                        break;
-                    }
+        // Fetch README – prefer cached version
+        if (needsReadme) {
+            const readmeKeys = ['README.md', 'readme.md', 'README.MD', 'Readme.md', 'README', 'readme'];
+            for (const key of readmeKeys) {
+                if (cached[key]) {
+                    readmeContent = cached[key];
+                    break;
                 }
-            } catch (e) {
-                console.log('Could not fetch README:', e);
+            }
+            // Fall back to GitHub if not cached
+            if (!readmeContent && repoDetails?.owner && repoDetails?.repo) {
+                try {
+                    for (const filename of readmeKeys) {
+                        const content = await getFileContent(repoDetails.owner, repoDetails.repo, filename);
+                        if (content) {
+                            readmeContent = content;
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Could not fetch README:', e);
+                }
             }
         }
         
-        // Fetch specific file if requested
-        if (specificFile && repoDetails?.owner && repoDetails?.repo) {
-            try {
-                fileContent = await getFileContent(repoDetails.owner, repoDetails.repo, specificFile);
-            } catch (e) {
-                console.log('Could not fetch specific file:', e);
+        // Fetch specific file – prefer cached version
+        if (specificFile) {
+            fileContent = cached[specificFile] || null;
+            if (!fileContent && repoDetails?.owner && repoDetails?.repo) {
+                try {
+                    fileContent = await getFileContent(repoDetails.owner, repoDetails.repo, specificFile);
+                } catch (e) {
+                    console.log('Could not fetch specific file:', e);
+                }
+            }
+        }
+
+        // Build supplementary cached files context (beyond README and specificFile)
+        const supplementaryFiles: Record<string, string> = {};
+        for (const [path, content] of Object.entries(cached)) {
+            if (path === specificFile) continue;
+            if (/readme/i.test(path) && readmeContent) continue;
+            if (content && typeof content === 'string') {
+                supplementaryFiles[path] = content;
             }
         }
 
@@ -157,7 +182,8 @@ export async function POST(req: NextRequest) {
                 maxTokens,
                 temperature,
             },
-            sanitizedHistory
+            sanitizedHistory,
+            supplementaryFiles,
         );
 
         const encoder = new TextEncoder();

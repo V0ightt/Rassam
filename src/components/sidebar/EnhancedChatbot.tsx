@@ -57,6 +57,10 @@ interface ChatbotProps {
   onCreateNewChat: () => void;
   onSwitchChat: (sessionId: string) => void;
   onDeleteChat: (sessionId: string) => void;
+  /** Returns cached file contents for the given paths (from IndexedDB). */
+  getCachedFiles?: (paths: string[]) => Promise<Record<string, string>>;
+  /** All file paths that are cached for the current project. */
+  cachedFilePaths?: Set<string>;
 }
 
 // Quick action prompts
@@ -95,7 +99,9 @@ export default function EnhancedChatbot({
   onUpdateMessages,
   onCreateNewChat,
   onSwitchChat,
-  onDeleteChat
+  onDeleteChat,
+  getCachedFiles,
+  cachedFilePaths,
 }: ChatbotProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -306,6 +312,44 @@ export default function EnhancedChatbot({
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
+      // ── Gather relevant cached files for AI context ──────────
+      let cachedFileContents: Record<string, string> | undefined;
+      if (getCachedFiles && cachedFilePaths && cachedFilePaths.size > 0) {
+        // Collect file paths from the selected node + any file paths mentioned in the message
+        const relevantPaths = new Set<string>();
+
+        // Files from selected node
+        if (selectedNode?.data?.files) {
+          for (const f of selectedNode.data.files as string[]) {
+            if (cachedFilePaths.has(f)) relevantPaths.add(f);
+          }
+        }
+
+        // Files mentioned in the message text
+        for (const fp of cachedFilePaths) {
+          const fileName = fp.split('/').pop()?.toLowerCase() || '';
+          if (text.toLowerCase().includes(fileName) || text.includes(fp)) {
+            relevantPaths.add(fp);
+          }
+        }
+
+        // Also include key files like README, package.json if cached
+        const keyFiles = ['README.md', 'readme.md', 'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod'];
+        for (const kf of keyFiles) {
+          if (cachedFilePaths.has(kf)) relevantPaths.add(kf);
+        }
+
+        // Cap at 15 files to avoid overwhelming context
+        const pathsArray = Array.from(relevantPaths).slice(0, 15);
+        if (pathsArray.length > 0) {
+          try {
+            cachedFileContents = await getCachedFiles(pathsArray);
+          } catch {
+            // ignore – will fall back to GitHub fetching
+          }
+        }
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -316,6 +360,7 @@ export default function EnhancedChatbot({
           repoDetails: repoDetails,
           canvasContext,
           allNodesContext: allNodesContext,
+          cachedFiles: cachedFileContents,
           modelSettings: {
             providerId: selectedOption.providerId,
             model: selectedOption.model,

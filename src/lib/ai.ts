@@ -156,7 +156,8 @@ function buildSystemMessage(
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
-  message?: string
+  message?: string,
+  cachedFiles?: Record<string, string> | null,
 ): string {
   const snapshotNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
   const normalizedNodes: SyncedCanvasNode[] = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
@@ -189,6 +190,26 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     : specificFile?.path
       ? `\n\n⚠️ Could not fetch content for file: ${specificFile.path}`
       : '';
+
+  // Build cached files section (supplementary context from the local file store)
+  let cachedFilesSection = '';
+  if (cachedFiles && Object.keys(cachedFiles).length > 0) {
+    const entries = Object.entries(cachedFiles);
+    const maxTotalChars = 12000;
+    let usedChars = 0;
+    const sections: string[] = [];
+    for (const [path, content] of entries) {
+      if (!content) continue;
+      const budget = Math.min(content.length, maxTotalChars - usedChars);
+      if (budget <= 0) break;
+      const truncated = content.slice(0, budget);
+      sections.push(`📄 ${path}:\n\`\`\`\n${truncated}${truncated.length < content.length ? '\n... (truncated)' : ''}\n\`\`\``);
+      usedChars += truncated.length;
+    }
+    if (sections.length > 0) {
+      cachedFilesSection = `\n\nCACHED FILE CONTENTS (${sections.length} files from local file explorer):\n${sections.join('\n\n')}`;
+    }
+  }
 
   const isRunQuestion = message
     ? /how\s+(do\s+i|to|can\s+i)\s+(run|start|launch|execute|install|setup|set\s+up)/i.test(message)
@@ -226,6 +247,7 @@ ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
 ${fileSection}
+${cachedFilesSection}
 ${runInstructions}
 
 INSTRUCTIONS:
@@ -237,7 +259,8 @@ INSTRUCTIONS:
 6. Format your responses with markdown for better readability
 7. You have access to the full project structure, use it to provide context-aware answers
 8. If README content is provided, use it as the authoritative source for setup/run instructions
-9. When file content is provided, analyze it directly to answer questions`;
+9. When file content is provided, analyze it directly to answer questions
+10. When cached file contents are available, use them as primary source of truth for code-related questions`;
   }
 
   return `You are Rassam (رسّام), an expert AI assistant specialized in explaining code and software architecture. Your name means "artist/illustrator" in Arabic, reflecting your ability to visualize and explain codebases.
@@ -247,6 +270,7 @@ ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
 ${fileSection}
+${cachedFilesSection}
 ${runInstructions}
 
 INSTRUCTIONS:
@@ -258,7 +282,8 @@ INSTRUCTIONS:
 6. You have access to the full project structure, use it to provide context-aware answers
 7. When asked about running the project, ALWAYS check the README content first - it contains the official instructions
 8. If README content is provided, quote the exact commands and steps from it
-9. When file content is provided, analyze it directly to answer questions`;
+9. When file content is provided, analyze it directly to answer questions
+10. When cached file contents are available, use them as primary source of truth for code-related questions`;
 }
 
 export function chatStreamWithContext(
@@ -270,11 +295,12 @@ export function chatStreamWithContext(
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
   runtimeSettings?: ChatRuntimeSettings,
-  history?: ChatHistoryMessage[]
+  history?: ChatHistoryMessage[],
+  cachedFiles?: Record<string, string> | null,
 ): AsyncIterable<string> {
   const systemMessage = buildSystemMessage(
     context, repoDetails, allNodesContext, canvasContext,
-    readmeContent, specificFile, message
+    readmeContent, specificFile, message, cachedFiles
   );
 
   const provider = getProvider(runtimeSettings?.providerId);

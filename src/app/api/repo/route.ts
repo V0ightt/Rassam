@@ -121,7 +121,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       nodes: layouted.nodes,
       edges: layouted.edges,
-      repoDetails: { owner, repo, fileCount: filePaths.length }
+      repoDetails: { owner, repo, fileCount: filePaths.length },
+      fileTree: repoNodes.map(n => ({ path: n.path, type: n.type, sha: n.sha })),
     });
 
   } catch (error: any) {

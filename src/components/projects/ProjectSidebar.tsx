@@ -1,7 +1,6 @@
 'use client';
 
 import { memo } from 'react';
-import { motion } from 'framer-motion';
 import { FolderOpen, Plus, X, Trash2 } from 'lucide-react';
 import { Project } from '@/types';
 import { cn } from '@/lib/utils';
@@ -24,12 +23,7 @@ function ProjectSidebar({
     onClose,
 }: ProjectSidebarProps) {
     return (
-        <motion.div
-            initial={{ x: -300, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -300, opacity: 0 }}
-            className="w-72 h-full bg-slate-900 border-r border-slate-800 z-50 flex flex-col"
-        >
+        <div className="w-72 h-full bg-slate-900 flex flex-col">
             <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                 <h2 className="font-semibold text-slate-100 flex items-center gap-2">
                     <FolderOpen size={18} className="text-cyan-400" />
@@ -100,7 +94,7 @@ function ProjectSidebar({
                     ))
                 )}
             </div>
-        </motion.div>
+        </div>
     );
 }
 

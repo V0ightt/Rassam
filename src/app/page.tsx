@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
-import Link from 'next/link';
 import ReactFlow, {
     Background,
     useNodesState,
@@ -17,16 +16,9 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
-    Search,
     Github,
-    Loader2,
     AlertCircle,
-    FileCode,
-    GitBranch,
-    ExternalLink,
-    FolderOpen,
     GripVertical,
-    Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -38,7 +30,9 @@ import ExportPanel from '@/components/canvas/ExportPanel';
 import EditToolbar from '@/components/canvas/EditToolbar';
 import FlowControls, { StyledMiniMap } from '@/components/canvas/FlowControls';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import ActivityBar, { ActivityPanel } from '@/components/navigation/ActivityBar';
 import ProjectSidebar from '@/components/projects/ProjectSidebar';
+import FileExplorer from '@/components/explorer/FileExplorer';
 import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import { cn } from '@/lib/utils';
 
@@ -47,6 +41,8 @@ import { useClipboard } from '@/hooks/useClipboard';
 import { useCanvasShortcuts } from '@/hooks/useCanvasShortcuts';
 import { useResizablePane } from '@/hooks/useResizablePane';
 import { useProjects } from '@/hooks/useProjects';
+import { useFileExplorer } from '@/hooks/useFileExplorer';
+import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
 
 // ─────────────────────────────────────────────────────────────
 // FlowCanvas – thin orchestration shell that wires together
@@ -83,6 +79,39 @@ function FlowCanvas() {
 
     const { width: chatWidth, handleMouseDown, resizeRef } =
         useResizablePane('repoAgent_chatWidth');
+
+    // ── Activity Bar / Navigation state ───────────────────────
+    const [activePanel, setActivePanel] = useState<ActivityPanel>(null);
+
+    // ── File Explorer ─────────────────────────────────────────
+    const fileExplorer = useFileExplorer({
+        projectId: proj.activeProjectId,
+        fileEntries: proj.activeProject?.fileTree || [],
+        repoDetails: proj.repoDetails,
+    });
+
+    const handlePanelChange = useCallback((panel: ActivityPanel) => {
+        if (panel === 'settings') {
+            window.location.href = '/settings';
+            return;
+        }
+        setActivePanel(panel);
+        // Keep project list visibility in sync
+        if (panel === 'projects') {
+            proj.setShowProjectList(true);
+        } else {
+            proj.setShowProjectList(false);
+        }
+    }, [proj]);
+
+    /** Retrieve cached file contents from IndexedDB for chat context. */
+    const handleGetCachedFiles = useCallback(
+        async (paths: string[]) => {
+            if (!proj.activeProjectId) return {};
+            return getFilesFromStore(proj.activeProjectId, paths);
+        },
+        [proj.activeProjectId],
+    );
 
     // ── Stable type maps (prevent ReactFlow re-registration) ──
     const memoNodeTypes = useMemo(() => nodeTypes, []);
@@ -242,17 +271,64 @@ function FlowCanvas() {
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-            {/* Project list sidebar */}
-            <AnimatePresence>
-                {proj.showProjectList && (
-                    <ProjectSidebar
-                        projects={proj.projects}
-                        activeProjectId={proj.activeProjectId}
-                        onSwitchProject={proj.switchToProject}
-                        onDeleteProject={proj.deleteProject}
-                        onCreateNew={() => proj.setShowCreateProjectModal(true)}
-                        onClose={() => proj.setShowProjectList(false)}
+            {/* ── Activity Bar (VS Code-style) ────────────────── */}
+            <ActivityBar
+                activePanel={activePanel}
+                onPanelChange={handlePanelChange}
+                projectCount={proj.projects.length || undefined}
+                cachedFileCount={fileExplorer.cachedPaths.size || undefined}
+                repoDetails={proj.repoDetails}
+                repoUrl={proj.repoUrl}
+                exportSlot={
+                    <ExportPanel
+                        repoDetails={proj.repoDetails}
+                        onImportProject={proj.handleImportProject}
+                        compact
                     />
+                }
+            />
+
+            {/* ── Left panel (Projects / Explorer) ────────────── */}
+            <AnimatePresence>
+                {activePanel === 'projects' && (
+                    <motion.div
+                        key="projects-panel"
+                        initial={{ width: 0, opacity: 0 }}
+                        animate={{ width: 288, opacity: 1 }}
+                        exit={{ width: 0, opacity: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className="h-full overflow-hidden border-r border-slate-800 bg-slate-900 z-40 shrink-0"
+                    >
+                        <ProjectSidebar
+                            projects={proj.projects}
+                            activeProjectId={proj.activeProjectId}
+                            onSwitchProject={proj.switchToProject}
+                            onDeleteProject={proj.deleteProject}
+                            onCreateNew={() => proj.setShowCreateProjectModal(true)}
+                            onClose={() => setActivePanel(null)}
+                        />
+                    </motion.div>
+                )}
+                {activePanel === 'explorer' && (
+                    <motion.div
+                        key="explorer-panel"
+                        initial={{ width: 0, opacity: 0 }}
+                        animate={{ width: 288, opacity: 1 }}
+                        exit={{ width: 0, opacity: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className="h-full overflow-hidden border-r border-slate-800 bg-slate-900 z-40 shrink-0"
+                    >
+                        <FileExplorer
+                            fileEntries={proj.activeProject?.fileTree || []}
+                            cachedPaths={fileExplorer.cachedPaths}
+                            fetchingPaths={fileExplorer.fetchingPaths}
+                            onFetchFile={fileExplorer.fetchFile}
+                            onFetchAll={fileExplorer.fetchAll}
+                            projectName={proj.activeProject?.name}
+                            totalFiles={(proj.activeProject?.fileTree || []).filter(e => e.type === 'blob').length}
+                            isFetchingAll={fileExplorer.isFetchingAll}
+                        />
+                    </motion.div>
                 )}
             </AnimatePresence>
 
@@ -280,110 +356,23 @@ function FlowCanvas() {
 
             {/* Main canvas area */}
             <div className="flex-1 relative h-full">
-                {/* Projects toggle */}
-                <button
-                    onClick={() => proj.setShowProjectList(!proj.showProjectList)}
-                    className={cn(
-                        'absolute top-4 left-4 z-20 p-2.5 rounded-xl transition-all',
-                        'bg-slate-900/90 backdrop-blur border border-slate-700 hover:bg-slate-800',
-                        proj.showProjectList && 'bg-blue-500/20 border-blue-500/30',
-                    )}
-                    title="Projects"
-                >
-                    <FolderOpen size={18} className={proj.showProjectList ? 'text-blue-400' : 'text-slate-400'} />
-                    {proj.projects.length > 0 && (
-                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-blue-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                            {proj.projects.length}
-                        </span>
-                    )}
-                </button>
-
-                {/* Floating header / repo input */}
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 w-[550px]">
-                    <div className="flex gap-2">
-                        <div className="relative flex-1 group">
-                            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
-                                <Github size={20} />
-                            </div>
-                            <input
-                                value={proj.repoUrl}
-                                onChange={(e) => proj.setRepoUrl(e.target.value)}
-                                className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-xl py-2 pl-10 pr-4 text-slate-200 outline-none focus:ring-2 focus:ring-blue-500 shadow-xl transition-all"
-                                placeholder="https://github.com/owner/repo"
-                                onKeyDown={(e) => e.key === 'Enter' && proj.handleVisualize()}
-                            />
-                        </div>
-                        <button
-                            onClick={proj.handleVisualize}
-                            disabled={proj.loading || !proj.repoUrl}
-                            className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white rounded-xl px-5 py-2 font-medium shadow-lg shadow-blue-900/30 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                {/* Error message */}
+                <AnimatePresence>
+                    {proj.error && (
+                        <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="absolute top-4 left-1/2 -translate-x-1/2 z-10 w-[450px] p-3 bg-red-900/50 border border-red-700 rounded-xl flex items-center gap-2 text-red-200 text-sm"
                         >
-                            {proj.loading ? (
-                                <Loader2 size={18} className="animate-spin" />
-                            ) : (
-                                <Search size={18} />
-                            )}
-                            <span className="hidden sm:inline">{proj.loading ? 'Analyzing...' : 'Visualize'}</span>
-                        </button>
-                        <ExportPanel repoDetails={proj.repoDetails} onImportProject={proj.handleImportProject} />
-                        <Link
-                            href="/settings"
-                            className="bg-slate-900/90 backdrop-blur-md border border-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-slate-300 transition-all flex items-center"
-                            title="AI Settings"
-                        >
-                            <Settings size={18} />
-                        </Link>
-                    </div>
-
-                    {/* Error message */}
-                    <AnimatePresence>
-                        {proj.error && (
-                            <motion.div
-                                initial={{ opacity: 0, y: -10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -10 }}
-                                className="mt-2 p-3 bg-red-900/50 border border-red-700 rounded-xl flex items-center gap-2 text-red-200 text-sm"
-                            >
-                                <AlertCircle size={16} />
-                                {proj.error}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-
-                    {/* Repo info badge */}
-                    <AnimatePresence>
-                        {proj.repoDetails && (
-                            <motion.div
-                                initial={{ opacity: 0, y: -10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="mt-2 flex items-center justify-center gap-3 text-xs"
-                            >
-                                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full">
-                                    <GitBranch size={12} className="text-blue-400" />
-                                    <span className="text-slate-300">{proj.repoDetails.owner}/{proj.repoDetails.repo}</span>
-                                </div>
-                                {proj.repoDetails.fileCount && (
-                                    <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full">
-                                        <FileCode size={12} className="text-green-400" />
-                                        <span className="text-slate-300">{proj.repoDetails.fileCount} files</span>
-                                    </div>
-                                )}
-                                <a
-                                    href={proj.repoUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-1 px-3 py-1.5 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full text-slate-400 hover:text-slate-200 transition-colors"
-                                >
-                                    <ExternalLink size={12} />
-                                    Open
-                                </a>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
+                            <AlertCircle size={16} />
+                            {proj.error}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 {/* Left-side toolbars */}
-                <div className="absolute top-20 left-4 z-10 flex flex-col gap-2">
+                <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
                     <EditToolbar
                         selectedNode={selectedNode}
                         selectedNodes={selectedNodes}
@@ -514,6 +503,8 @@ function FlowCanvas() {
                     onCreateNewChat={proj.createNewChatSession}
                     onSwitchChat={proj.switchChatSession}
                     onDeleteChat={proj.deleteChatSession}
+                    getCachedFiles={handleGetCachedFiles}
+                    cachedFilePaths={fileExplorer.cachedPaths}
                 />
             </div>
         </div>

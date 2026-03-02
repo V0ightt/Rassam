@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { AlertCircle, ArrowLeft, CheckCircle2, RefreshCw, Settings } from 'lucide-react';
 import {
   getDefaultModelSettings,
@@ -14,6 +15,7 @@ import {
   sanitizeModelSettings,
 } from '@/lib/model-settings';
 import { cn } from '@/lib/utils';
+import ActivityBar, { type ActivityPanel } from '@/components/navigation/ActivityBar';
 
 function parseNumberInput(value: string, fallback: number): number {
   const parsed = Number(value);
@@ -21,6 +23,7 @@ function parseNumberInput(value: string, fallback: number): number {
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(getDefaultModelSettings());
   const [loading, setLoading] = useState(false);
@@ -127,8 +130,21 @@ export default function SettingsPage() {
     setTimeout(() => setSaving(false), 350);
   }, [applySettings, settings]);
 
+  const handlePanelChange = useCallback((panel: ActivityPanel) => {
+    if (panel !== 'settings') {
+      router.push('/');
+    }
+  }, [router]);
+
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Activity Bar */}
+      <ActivityBar
+        activePanel="settings"
+        onPanelChange={handlePanelChange}
+      />
+
+      <main className="flex-1 overflow-y-auto">
       <div className="max-w-5xl mx-auto p-6 space-y-5">
         <div className="flex items-center justify-between">
           <div>
@@ -277,6 +293,7 @@ export default function SettingsPage() {
           </div>
         </section>
       </div>
-    </main>
+      </main>
+    </div>
   );
 }

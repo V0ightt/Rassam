@@ -137,6 +137,8 @@ export interface Project {
   lastSyncedAt: string | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
+  /** Flat list of file paths from the repo (set when creating from GitHub) */
+  fileTree?: RepoFileEntry[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -149,4 +151,31 @@ export interface FlowchartState {
   nodes: FlowNode[];
   edges: FlowEdge[];
   repoDetails: RepoDetails | null;
+}
+
+// ── File Explorer types ───────────────────────────────────────
+
+/** Flat file entry from GitHub tree API */
+export interface RepoFileEntry {
+  path: string;
+  type: 'blob' | 'tree';
+  sha?: string;
+}
+
+/** Tree node used by the file explorer UI */
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'folder';
+  children?: FileTreeNode[];
+  /** Whether the file content has been fetched & cached */
+  cached?: boolean;
+}
+
+/** Stored in IndexedDB – one record per file per project */
+export interface CachedFileContent {
+  projectId: string;
+  filePath: string;
+  content: string;
+  fetchedAt: string;
 }

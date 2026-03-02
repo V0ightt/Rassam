@@ -16,12 +16,14 @@ import { cn } from '@/lib/utils';
 interface ExportPanelProps {
   repoDetails?: { owner: string; repo: string } | null;
   onImportProject?: (file: File) => void;
+  /** Render as icon-only button with rightward dropdown (for navbar) */
+  compact?: boolean;
 }
 
 const imageWidth = 1920;
 const imageHeight = 1080;
 
-export default function ExportPanel({ repoDetails, onImportProject }: ExportPanelProps) {
+export default function ExportPanel({ repoDetails, onImportProject, compact }: ExportPanelProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
   const { getNodes, getEdges } = useReactFlow();
@@ -191,18 +193,25 @@ export default function ExportPanel({ repoDetails, onImportProject }: ExportPane
         onClick={() => setIsOpen(!isOpen)}
         disabled={isExporting}
         className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/80 backdrop-blur border border-slate-700 hover:bg-slate-800 transition-colors text-slate-200 text-sm",
-          isOpen && "bg-slate-800 border-slate-600",
-          isExporting && "opacity-50 cursor-not-allowed"
+          compact
+            ? 'p-2 rounded-lg transition-colors'
+            : 'flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/80 backdrop-blur border border-slate-700 hover:bg-slate-800 transition-colors text-slate-200 text-sm',
+          compact && (isOpen ? 'text-cyan-400 bg-slate-800' : 'text-slate-500 hover:text-slate-200'),
+          !compact && isOpen && 'bg-slate-800 border-slate-600',
+          isExporting && 'opacity-50 cursor-not-allowed'
         )}
+        title={compact ? 'Export / Import' : undefined}
       >
-        <Download size={16} className={isExporting ? "animate-pulse" : ""} />
-        {isExporting ? 'Exporting...' : 'Export'}
-        <ChevronDown size={14} className={cn("transition-transform", isOpen && "rotate-180")} />
+        <Download size={compact ? 20 : 16} className={isExporting ? 'animate-pulse' : ''} />
+        {!compact && (isExporting ? 'Exporting...' : 'Export')}
+        {!compact && <ChevronDown size={14} className={cn('transition-transform', isOpen && 'rotate-180')} />}
       </button>
       
       {isOpen && (
-        <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-xl overflow-hidden z-50">
+        <div className={cn(
+          'absolute w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-xl overflow-hidden z-50',
+          compact ? 'left-full top-0 ml-2' : 'top-full right-0 mt-2'
+        )}>
           {exportOptions.map((option, i) => (
             <button
               key={i}

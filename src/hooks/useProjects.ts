@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Node, Edge } from 'reactflow';
-import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails } from '@/types';
+import { CanvasSyncSnapshot, Project, ProjectSource, ChatSession, RepoDetails, RepoFileEntry } from '@/types';
 import { parseAndValidateImportJson } from '@/lib/import';
 
 // ── Storage keys ──────────────────────────────────────────────
@@ -20,6 +20,7 @@ function createNewProject(
         source?: ProjectSource;
         layoutDirection?: 'TB' | 'LR';
         snapshot?: CanvasSyncSnapshot | null;
+        fileTree?: RepoFileEntry[];
     },
 ): Project {
     const now = new Date();
@@ -59,6 +60,7 @@ function createNewProject(
         lastSyncedAt: options?.snapshot?.syncedAt || null,
         chatSessions: [initialChat],
         activeChatSessionId: initialChat.id,
+        fileTree: options?.fileTree || [],
         createdAt: now,
         updatedAt: now,
     };
@@ -142,6 +144,7 @@ export function useProjects(params: UseProjectsParams) {
                     layoutDirection: p.layoutDirection || 'TB',
                     aiContextSnapshot: p.aiContextSnapshot || null,
                     lastSyncedAt: p.lastSyncedAt || null,
+                    fileTree: p.fileTree || [],
                     createdAt: new Date(p.createdAt),
                     updatedAt: new Date(p.updatedAt),
                     chatSessions: p.chatSessions.map((s: any) => ({
@@ -235,6 +238,7 @@ export function useProjects(params: UseProjectsParams) {
                 const newProject = createNewProject(url, data.repoDetails, data.nodes, data.edges, {
                     source: 'github',
                     layoutDirection: 'TB',
+                    fileTree: data.fileTree || [],
                 });
                 setProjects((prev) => [...prev, newProject]);
                 setActiveProjectId(newProject.id);
