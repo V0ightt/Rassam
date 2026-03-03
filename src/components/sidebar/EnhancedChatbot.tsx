@@ -61,6 +61,7 @@ interface ChatbotProps {
   getCachedFiles?: (paths: string[]) => Promise<Record<string, string>>;
   /** All file paths that are cached for the current project. */
   cachedFilePaths?: Set<string>;
+  onClose?: () => void;
 }
 
 // Quick action prompts
@@ -102,6 +103,7 @@ export default function EnhancedChatbot({
   onDeleteChat,
   getCachedFiles,
   cachedFilePaths,
+  onClose,
 }: ChatbotProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -483,6 +485,22 @@ export default function EnhancedChatbot({
             >
               <Plus size={14} />
             </button>
+            <Link
+              href="/settings"
+              className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings size={14} />
+            </Link>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-1.5 text-slate-500 hover:text-red-300 hover:bg-slate-800 rounded-lg transition-colors"
+                title="Close chat"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
         </div>
         
@@ -723,12 +741,6 @@ export default function EnhancedChatbot({
               ))
             )}
           </select>
-          <Link
-            href="/settings"
-            className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
-          >
-            Settings
-          </Link>
         </div>
         {modelError && (
           <div className="text-[10px] text-amber-300 mb-2">{modelError}</div>

@@ -19,9 +19,6 @@ import {
     Github,
     AlertCircle,
     GripVertical,
-    MessageSquare,
-    PanelRightClose,
-    PanelRightOpen,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -37,7 +34,6 @@ import ActivityBar, { ActivityPanel } from '@/components/navigation/ActivityBar'
 import ProjectSidebar from '@/components/projects/ProjectSidebar';
 import FileExplorer from '@/components/explorer/FileExplorer';
 import CreateProjectModal from '@/components/projects/CreateProjectModal';
-import { cn } from '@/lib/utils';
 
 import { useCanvasHistory } from '@/hooks/useCanvasHistory';
 import { useClipboard } from '@/hooks/useClipboard';
@@ -47,7 +43,7 @@ import { useProjects } from '@/hooks/useProjects';
 import { useFileExplorer } from '@/hooks/useFileExplorer';
 import { useEditorTabs } from '@/hooks/useEditorTabs';
 import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
-import TabBar, { CANVAS_TAB } from '@/components/editor/TabBar';
+import TabBar from '@/components/editor/TabBar';
 import FileViewer from '@/components/editor/FileViewer';
 
 // ─────────────────────────────────────────────────────────────
@@ -100,8 +96,8 @@ function FlowCanvas() {
     // ── Activity Bar / Navigation state ───────────────────────
     const [activePanel, setActivePanel] = useState<ActivityPanel>(null);
 
-    // ── Chat pane minimization ────────────────────────────────
-    const [isChatMinimized, setIsChatMinimized] = useState(false);
+    // ── Chat pane visibility ─────────────────────────────────
+    const [isChatOpen, setIsChatOpen] = useState(true);
 
     // ── File Explorer ─────────────────────────────────────────
     const fileExplorer = useFileExplorer({
@@ -117,9 +113,9 @@ function FlowCanvas() {
     });
 
     /** Clicking a file in the explorer: fetch + open in a tab */
-    const handleFileClick = useCallback((filePath: string) => {
-        fileExplorer.fetchFile(filePath);
-        editorTabs.openFile(filePath);
+    const handleFileClick = useCallback(async (filePath: string) => {
+        const prefetchedContent = await fileExplorer.fetchFile(filePath);
+        await editorTabs.openFile(filePath, prefetchedContent ?? undefined);
     }, [fileExplorer, editorTabs]);
 
     const handlePanelChange = useCallback((panel: ActivityPanel) => {
@@ -400,6 +396,8 @@ function FlowCanvas() {
                     onSelectTab={editorTabs.selectTab}
                     onCloseTab={editorTabs.closeTab}
                     onCloseAll={editorTabs.closeAllTabs}
+                    isChatOpen={isChatOpen}
+                    onToggleChat={() => setIsChatOpen((prev) => !prev)}
                 />
 
                 {/* ── Active content area ──────────────────────── */}
@@ -527,6 +525,7 @@ function FlowCanvas() {
                 {/* ── File viewer (when a file tab is active) ──── */}
                 {!editorTabs.isCanvasActive && editorTabs.activeFilePath && (
                     <FileViewer
+                        key={editorTabs.activeFilePath}
                         filePath={editorTabs.activeFilePath}
                         content={editorTabs.activeFileContent}
                         isLoading={editorTabs.isActiveFileLoading}
@@ -536,8 +535,8 @@ function FlowCanvas() {
                 </div>
             </div>
 
-            {/* Resize handle (hidden when chat minimized) */}
-            {!isChatMinimized && (
+            {/* Resize handle */}
+            {isChatOpen && (
                 <div
                     ref={resizeRef}
                     className="w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors z-30 flex items-center justify-center group shrink-0"
@@ -550,35 +549,11 @@ function FlowCanvas() {
             )}
 
             {/* Right-side chat pane */}
-            <div
-                className={cn(
-                    'h-full shadow-2xl z-20 transition-all duration-200 shrink-0 flex flex-col border-l border-slate-800',
-                    isChatMinimized ? 'w-10' : '',
-                )}
-                style={isChatMinimized ? undefined : { width: `${chatWidth}px`, minWidth: '300px', maxWidth: '800px' }}
-            >
-                {/* Minimize / Expand toggle header */}
-                <div className={cn(
-                    'flex items-center shrink-0 bg-slate-900 border-b border-slate-800',
-                    isChatMinimized ? 'flex-col py-2 gap-2' : 'px-2 py-1.5 justify-between',
-                )}>
-                    {!isChatMinimized && (
-                        <span className="text-xs text-slate-400 font-medium flex items-center gap-1.5">
-                            <MessageSquare size={12} className="text-cyan-400" />
-                            Rassam AI
-                        </span>
-                    )}
-                    <button
-                        onClick={() => setIsChatMinimized(!isChatMinimized)}
-                        className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
-                        title={isChatMinimized ? 'Expand chat' : 'Minimize chat'}
-                    >
-                        {isChatMinimized ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
-                    </button>
-                </div>
-
-                {/* Chat content (hidden when minimized) */}
-                {!isChatMinimized && (
+            {isChatOpen && (
+                <div
+                    className="h-full shadow-2xl z-20 shrink-0 flex flex-col border-l border-slate-800 bg-slate-900 relative"
+                    style={{ width: `${chatWidth}px`, minWidth: '300px', maxWidth: '800px' }}
+                >
                     <div className="flex-1 min-h-0">
                         <EnhancedChatbot
                             selectedNode={selectedNode}
@@ -596,20 +571,11 @@ function FlowCanvas() {
                             onDeleteChat={proj.deleteChatSession}
                             getCachedFiles={handleGetCachedFiles}
                             cachedFilePaths={fileExplorer.cachedPaths}
+                            onClose={() => setIsChatOpen(false)}
                         />
                     </div>
-                )}
-
-                {/* Minimized indicator */}
-                {isChatMinimized && (
-                    <div className="flex-1 flex flex-col items-center pt-4 gap-3">
-                        <div className="w-6 h-6 rounded-full bg-cyan-500/10 flex items-center justify-center">
-                            <MessageSquare size={12} className="text-cyan-400" />
-                        </div>
-                        <span className="text-[10px] text-slate-600 [writing-mode:vertical-lr] rotate-180">Chat</span>
-                    </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

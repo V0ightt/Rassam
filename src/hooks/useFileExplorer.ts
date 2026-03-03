@@ -32,9 +32,10 @@ export function useFileExplorer({ projectId, fileEntries, repoDetails }: UseFile
   }, [projectId]);
 
   const fetchFile = useCallback(
-    async (filePath: string) => {
-      if (!projectId || !repoDetails) return;
-      if (cachedPaths.has(filePath) || fetchingPaths.has(filePath)) return;
+    async (filePath: string): Promise<string | null> => {
+      if (!projectId || !repoDetails) return null;
+      if (cachedPaths.has(filePath)) return null;
+      if (fetchingPaths.has(filePath)) return null;
 
       setFetchingPaths((prev) => new Set(prev).add(filePath));
 
@@ -57,8 +58,11 @@ export function useFileExplorer({ projectId, fileEntries, repoDetails }: UseFile
         if (projectIdRef.current === projectId) {
           setCachedPaths((prev) => new Set(prev).add(filePath));
         }
+
+        return content;
       } catch (err) {
         console.error(`Failed to fetch ${filePath}:`, err);
+        return null;
       } finally {
         setFetchingPaths((prev) => {
           const next = new Set(prev);

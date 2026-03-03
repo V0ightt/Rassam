@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useCallback } from 'react';
-import { X, XCircle, Workflow } from 'lucide-react';
+import { MessageSquare, X, XCircle, Workflow } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ── File icon color helper ────────────────────────────────────
@@ -61,9 +61,19 @@ interface TabBarProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onCloseAll: () => void;
+  isChatOpen?: boolean;
+  onToggleChat?: () => void;
 }
 
-function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onCloseAll }: TabBarProps) {
+function TabBar({
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onCloseTab,
+  onCloseAll,
+  isChatOpen,
+  onToggleChat,
+}: TabBarProps) {
   const handleClose = useCallback(
     (e: React.MouseEvent, tabId: string) => {
       e.stopPropagation();
@@ -126,6 +136,22 @@ function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onCloseAll }: TabB
         })}
       </div>
 
+      {onToggleChat && (
+        <button
+          className={cn(
+            'flex items-center gap-1 px-2 py-1.5 text-[11px] transition-colors shrink-0 border-l border-slate-800',
+            isChatOpen
+              ? 'text-cyan-300 bg-slate-800/70 hover:bg-slate-700'
+              : 'text-slate-500 hover:text-cyan-300 hover:bg-slate-800',
+          )}
+          onClick={onToggleChat}
+          title={isChatOpen ? 'Hide chat' : 'Show chat'}
+        >
+          <MessageSquare size={13} />
+          <span className="hidden sm:inline">Chat</span>
+        </button>
+      )}
+
       {/* Close all button */}
       {hasFileTabs && (
         <button
@@ -137,6 +163,7 @@ function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onCloseAll }: TabB
           <span className="hidden sm:inline">Close All</span>
         </button>
       )}
+
     </div>
   );
 }

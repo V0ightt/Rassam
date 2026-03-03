@@ -16,18 +16,22 @@ export function useEditorTabs({ projectId, repoDetails }: UseEditorTabsParams) {
 
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
+  const fileContentsRef = useRef<Record<string, string>>({});
+  const inFlightFetchesRef = useRef<Map<string, Promise<void>>>(new Map());
 
   // Reset tabs when project changes
   useEffect(() => {
     setTabs([CANVAS_TAB]);
     setActiveTabId(CANVAS_TAB.id);
     setFileContents({});
+    fileContentsRef.current = {};
     setLoadingFiles(new Set());
+    inFlightFetchesRef.current.clear();
   }, [projectId]);
 
   /** Open a file tab (or switch to it if already open). Also fetches content. */
   const openFile = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, prefetchedContent?: string) => {
       const tabId = filePath;
 
       // Add tab if not already open
@@ -40,61 +44,102 @@ export function useEditorTabs({ projectId, repoDetails }: UseEditorTabsParams) {
       // Set it as active
       setActiveTabId(tabId);
 
-      // If content already loaded, done
-      if (fileContents[filePath]) return;
+      if (typeof prefetchedContent === 'string') {
+        setFileContents((prev) => {
+          if (prev[filePath] === prefetchedContent) return prev;
+          const next = { ...prev, [filePath]: prefetchedContent };
+          fileContentsRef.current = next;
+          return next;
+        });
 
-      // Try IndexedDB cache first
-      if (projectId) {
-        try {
-          const cached = await getCachedFile(projectId, filePath);
-          if (cached !== null) {
-            if (projectIdRef.current === projectId) {
-              setFileContents((prev) => ({ ...prev, [filePath]: cached }));
-            }
-            return;
-          }
-        } catch {
-          // fall through to network fetch
+        if (projectId) {
+          await cacheFile(projectId, filePath, prefetchedContent);
         }
+
+        return;
       }
 
-      // Fetch from API
-      if (repoDetails) {
-        setLoadingFiles((prev) => new Set(prev).add(filePath));
-        try {
-          const res = await fetch('/api/files', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              owner: repoDetails.owner,
-              repo: repoDetails.repo,
-              path: filePath,
-            }),
-          });
+      // If content already loaded, done
+      if (fileContentsRef.current[filePath]) return;
 
-          if (!res.ok) throw new Error('Fetch failed');
-          const { content } = await res.json();
+      // If a fetch is already in progress for this file, reuse it.
+      const inFlight = inFlightFetchesRef.current.get(filePath);
+      if (inFlight) {
+        await inFlight;
+        return;
+      }
 
-          if (projectIdRef.current === projectId) {
-            setFileContents((prev) => ({ ...prev, [filePath]: content }));
+      const loadPromise = (async () => {
+        // Try IndexedDB cache first
+        if (projectId) {
+          try {
+            const cached = await getCachedFile(projectId, filePath);
+            if (cached !== null) {
+              if (projectIdRef.current === projectId) {
+                setFileContents((prev) => {
+                  if (prev[filePath] === cached) return prev;
+                  const next = { ...prev, [filePath]: cached };
+                  fileContentsRef.current = next;
+                  return next;
+                });
+              }
+              return;
+            }
+          } catch {
+            // fall through to network fetch
           }
-
-          // Also cache in IndexedDB for the file explorer
-          if (projectId) {
-            await cacheFile(projectId, filePath, content);
-          }
-        } catch (err) {
-          console.error(`Failed to fetch file ${filePath}:`, err);
-        } finally {
-          setLoadingFiles((prev) => {
-            const next = new Set(prev);
-            next.delete(filePath);
-            return next;
-          });
         }
+
+        // Fetch from API
+        if (repoDetails) {
+          setLoadingFiles((prev) => new Set(prev).add(filePath));
+          try {
+            const res = await fetch('/api/files', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                owner: repoDetails.owner,
+                repo: repoDetails.repo,
+                path: filePath,
+              }),
+            });
+
+            if (!res.ok) throw new Error('Fetch failed');
+            const { content } = await res.json();
+
+            if (projectIdRef.current === projectId) {
+              setFileContents((prev) => {
+                if (prev[filePath] === content) return prev;
+                const next = { ...prev, [filePath]: content };
+                fileContentsRef.current = next;
+                return next;
+              });
+            }
+
+            // Also cache in IndexedDB for the file explorer
+            if (projectId) {
+              await cacheFile(projectId, filePath, content);
+            }
+          } catch (err) {
+            console.error(`Failed to fetch file ${filePath}:`, err);
+          } finally {
+            setLoadingFiles((prev) => {
+              const next = new Set(prev);
+              next.delete(filePath);
+              return next;
+            });
+          }
+        }
+      })();
+
+      inFlightFetchesRef.current.set(filePath, loadPromise);
+      try {
+        await loadPromise;
+      } finally {
+        inFlightFetchesRef.current.delete(filePath);
       }
     },
-    [projectId, repoDetails, fileContents],
+    [projectId, repoDetails],
   );
 
   /** Select a tab by its id */

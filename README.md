@@ -88,7 +88,11 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### Quality of Life Features
 - **Search nodes**: Filter nodes by name, description, or file paths
 - **Permanent tab bar**: Canvas/file tab bar is always visible for consistent navigation
+- **Chat toggle in top bar**: Open/close chat from the top-right `Chat` button near `Close All`
+- **Clean chat close behavior**: Closing chat fully removes the right panel (no collapsed mini sidebar)
+- **Top chat controls**: Chat header includes icon-only actions for history, new chat, settings, and close
 - **Resizable left panel**: Drag to resize the Projects/File Explorer side panel width
+- **Smooth code viewer**: All files keep syntax highlighting with virtualized rendering and stable line numbers for smooth large-file opening and scrolling
 - **Minimap**: Bird's-eye view of the entire flowchart
 - **Keyboard shortcuts**: Common actions accessible via keyboard (Ctrl+C/V, Ctrl+Z, Ctrl+A, Delete, etc.)
 - **Layout options**: Top-to-bottom or Left-to-right layouts
