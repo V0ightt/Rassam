@@ -49,6 +49,7 @@ This document is designed to help future coding agents understand the architectu
     -   Custom FlowControls (no legacy +/- buttons).
 7.  **Interaction**:
     -   The left side has a **VS Code-style Activity Bar** (`ActivityBar.tsx`) with icons for Projects, File Explorer, and Settings. This bar is **permanent on all pages** (main canvas and settings). Clicking an icon toggles the corresponding panel; on the settings page, clicking Projects or Explorer navigates back to the main page.
+    -   The opened left-side Activity panel (Projects/File Explorer) is **resizable by dragging** its vertical divider.
     -   The Activity Bar bottom section displays:
         -   **Export/Import** button (compact icon) for PNG, SVG, JSON export and JSON import
         -   **Repo stats**: project name, file count, and GitHub link (when a repo-based project is active)
@@ -73,10 +74,11 @@ This document is designed to help future coding agents understand the architectu
 ## Key Directories & Files
 
 ### `src/app`
--   `page.tsx`: Thin orchestration shell. Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`, `useFileExplorer`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
-  -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), Activity Bar panel state, and canvas-specific handlers (node CRUD, search, layout change).
-  -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, pane resizing, and file explorer are delegated to hooks.
+-   `page.tsx`: Thin orchestration shell. Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`, `useFileExplorer`, `useEditorTabs`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
+  -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), Activity Bar panel state, editor tab state, and canvas-specific handlers (node CRUD, search, layout change).
+  -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, pane resizing, file explorer, and editor tabs are delegated to hooks.
   -   The top-center floating header (URL input, Visualize button) and repo info badge have been removed. Export/import and repo stats are now in the ActivityBar bottom section.
+  -   A **TabBar** is always visible above the main content area. Canvas is the default tab; clicking files in the explorer opens them in new tabs with syntax-highlighted code.
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Returns file tree alongside nodes/edges. Supports PUT for re-layout.
@@ -104,6 +106,7 @@ This document is designed to help future coding agents understand the architectu
 -   `useCanvasShortcuts.ts`: Single `useEffect` registering all global keyboard shortcuts. Uses a ref to always read latest handler values without re-attaching listeners.
 -   `useResizablePane.ts`: Mouse-drag resizable sidebar width with localStorage persistence.
 -   `useFileExplorer.ts`: Manages file fetching, caching state, and batch fetch-all. Tracks `cachedPaths`, `fetchingPaths`, and provides `fetchFile` / `fetchAll` callbacks.
+-   `useEditorTabs.ts`: Manages open file tabs state. Tracks open tabs, active tab, file contents (loaded from IndexedDB or fetched from GitHub API). Provides `openFile`, `selectTab`, `closeTab`, `closeAllTabs`. Canvas is always the first tab and cannot be closed.
 
 ### `src/components`
 -   `ErrorBoundary.tsx`: React class-based error boundary wrapping the main app. Prevents component crashes from blanking the entire page.
@@ -125,8 +128,12 @@ This document is designed to help future coding agents understand the architectu
 ### `src/components/navigation`
 -   `ActivityBar.tsx`: VS Code-style vertical activity bar on the far left, **permanent across all pages**. Icons for Projects, File Explorer, and Settings. Bottom section shows Export button (compact ExportPanel), repo stats (project name, file count), and GitHub link. On the settings page, clicking non-settings icons navigates back to `/`.
 
+### `src/components/editor`
+-   `TabBar.tsx`: VS Code-style tab bar for switching between the canvas and open file viewers. Tabs show file icons with extension-based colors, close buttons, and a "Close All" action. The Canvas tab is always present and cannot be closed. Exports `EditorTab` interface and `CANVAS_TAB` constant.
+-   `FileViewer.tsx`: Read-only code viewer with syntax highlighting (via `react-syntax-highlighter` / Prism). Detects language from file extension. Shows file path, language, line count, and file size in a status bar. Displays loading and empty states.
+
 ### `src/components/explorer`
--   `FileExplorer.tsx`: VS Code-style tree view showing the repository file structure. Folders expand/collapse; clicking a file fetches its content from GitHub and stores it in IndexedDB. Shows cached status (green checkmark), search/filter, expand/collapse all, and "Fetch All" bulk download. Includes `buildFileTree()` utility to convert flat path lists into a nested tree.
+-   `FileExplorer.tsx`: VS Code-style tree view showing the repository file structure. Folders expand/collapse; clicking a file fetches its content from GitHub, stores it in IndexedDB, **and opens it in a new editor tab**. Shows cached status (green checkmark), search/filter, expand/collapse all, and "Fetch All" bulk download. Includes `buildFileTree()` utility to convert flat path lists into a nested tree.
 
 ### `src/components/sidebar`
 -   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.

@@ -4,14 +4,30 @@ const DEFAULT_WIDTH = 400;
 const MIN_WIDTH = 300;
 const MAX_WIDTH = 800;
 
+interface ResizablePaneOptions {
+    defaultWidth?: number;
+    minWidth?: number;
+    maxWidth?: number;
+    side?: 'left' | 'right';
+}
+
 /**
  * Manages a resizable sidebar pane width with mouse-drag support
  * and localStorage persistence.
  */
-export function useResizablePane(storageKey: string) {
-    const [width, setWidth] = useState(DEFAULT_WIDTH);
+export function useResizablePane(storageKey: string, options: ResizablePaneOptions = {}) {
+    const {
+        defaultWidth = DEFAULT_WIDTH,
+        minWidth = MIN_WIDTH,
+        maxWidth = MAX_WIDTH,
+        side = 'right',
+    } = options;
+
+    const [width, setWidth] = useState(defaultWidth);
     const [isResizing, setIsResizing] = useState(false);
     const resizeRef = useRef<HTMLDivElement>(null);
+    const startXRef = useRef(0);
+    const startWidthRef = useRef(defaultWidth);
 
     // Load persisted width on mount
     useEffect(() => {
@@ -28,14 +44,19 @@ export function useResizablePane(storageKey: string) {
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
+        startXRef.current = e.clientX;
+        startWidthRef.current = width;
         setIsResizing(true);
-    }, []);
+    }, [width]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isResizing) return;
-            const newWidth = window.innerWidth - e.clientX;
-            setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth)));
+            const delta = e.clientX - startXRef.current;
+            const newWidth = side === 'left'
+                ? startWidthRef.current + delta
+                : startWidthRef.current - delta;
+            setWidth(Math.max(minWidth, Math.min(maxWidth, newWidth)));
         };
 
         const handleMouseUp = () => {
@@ -55,7 +76,7 @@ export function useResizablePane(storageKey: string) {
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
         };
-    }, [isResizing]);
+    }, [isResizing, minWidth, maxWidth, side]);
 
     return { width, isResizing, handleMouseDown, resizeRef };
 }

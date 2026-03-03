@@ -87,6 +87,8 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 
 ### Quality of Life Features
 - **Search nodes**: Filter nodes by name, description, or file paths
+- **Permanent tab bar**: Canvas/file tab bar is always visible for consistent navigation
+- **Resizable left panel**: Drag to resize the Projects/File Explorer side panel width
 - **Minimap**: Bird's-eye view of the entire flowchart
 - **Keyboard shortcuts**: Common actions accessible via keyboard (Ctrl+C/V, Ctrl+Z, Ctrl+A, Delete, etc.)
 - **Layout options**: Top-to-bottom or Left-to-right layouts

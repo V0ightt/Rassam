@@ -19,6 +19,9 @@ import {
     Github,
     AlertCircle,
     GripVertical,
+    MessageSquare,
+    PanelRightClose,
+    PanelRightOpen,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -42,7 +45,10 @@ import { useCanvasShortcuts } from '@/hooks/useCanvasShortcuts';
 import { useResizablePane } from '@/hooks/useResizablePane';
 import { useProjects } from '@/hooks/useProjects';
 import { useFileExplorer } from '@/hooks/useFileExplorer';
+import { useEditorTabs } from '@/hooks/useEditorTabs';
 import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
+import TabBar, { CANVAS_TAB } from '@/components/editor/TabBar';
+import FileViewer from '@/components/editor/FileViewer';
 
 // ─────────────────────────────────────────────────────────────
 // FlowCanvas – thin orchestration shell that wires together
@@ -78,10 +84,24 @@ function FlowCanvas() {
     });
 
     const { width: chatWidth, handleMouseDown, resizeRef } =
-        useResizablePane('repoAgent_chatWidth');
+        useResizablePane('repoAgent_chatWidth', { side: 'right' });
+
+    const {
+        width: leftPanelWidth,
+        handleMouseDown: handleLeftPanelResize,
+        resizeRef: leftPanelResizeRef,
+    } = useResizablePane('repoAgent_leftPanelWidth', {
+        defaultWidth: 288,
+        minWidth: 140,
+        maxWidth: 560,
+        side: 'left',
+    });
 
     // ── Activity Bar / Navigation state ───────────────────────
     const [activePanel, setActivePanel] = useState<ActivityPanel>(null);
+
+    // ── Chat pane minimization ────────────────────────────────
+    const [isChatMinimized, setIsChatMinimized] = useState(false);
 
     // ── File Explorer ─────────────────────────────────────────
     const fileExplorer = useFileExplorer({
@@ -89,6 +109,18 @@ function FlowCanvas() {
         fileEntries: proj.activeProject?.fileTree || [],
         repoDetails: proj.repoDetails,
     });
+
+    // ── Editor tabs (file viewer) ─────────────────────────────
+    const editorTabs = useEditorTabs({
+        projectId: proj.activeProjectId,
+        repoDetails: proj.repoDetails,
+    });
+
+    /** Clicking a file in the explorer: fetch + open in a tab */
+    const handleFileClick = useCallback((filePath: string) => {
+        fileExplorer.fetchFile(filePath);
+        editorTabs.openFile(filePath);
+    }, [fileExplorer, editorTabs]);
 
     const handlePanelChange = useCallback((panel: ActivityPanel) => {
         if (panel === 'settings') {
@@ -289,48 +321,53 @@ function FlowCanvas() {
             />
 
             {/* ── Left panel (Projects / Explorer) ────────────── */}
-            <AnimatePresence>
-                {activePanel === 'projects' && (
+            <AnimatePresence initial={false}>
+                {(activePanel === 'projects' || activePanel === 'explorer') && (
                     <motion.div
-                        key="projects-panel"
+                        key={`${activePanel}-panel`}
                         initial={{ width: 0, opacity: 0 }}
-                        animate={{ width: 288, opacity: 1 }}
+                        animate={{ width: leftPanelWidth, opacity: 1 }}
                         exit={{ width: 0, opacity: 0 }}
                         transition={{ duration: 0.15 }}
+                        style={{ width: leftPanelWidth }}
                         className="h-full overflow-hidden border-r border-slate-800 bg-slate-900 z-40 shrink-0"
                     >
-                        <ProjectSidebar
-                            projects={proj.projects}
-                            activeProjectId={proj.activeProjectId}
-                            onSwitchProject={proj.switchToProject}
-                            onDeleteProject={proj.deleteProject}
-                            onCreateNew={() => proj.setShowCreateProjectModal(true)}
-                            onClose={() => setActivePanel(null)}
-                        />
-                    </motion.div>
-                )}
-                {activePanel === 'explorer' && (
-                    <motion.div
-                        key="explorer-panel"
-                        initial={{ width: 0, opacity: 0 }}
-                        animate={{ width: 288, opacity: 1 }}
-                        exit={{ width: 0, opacity: 0 }}
-                        transition={{ duration: 0.15 }}
-                        className="h-full overflow-hidden border-r border-slate-800 bg-slate-900 z-40 shrink-0"
-                    >
-                        <FileExplorer
-                            fileEntries={proj.activeProject?.fileTree || []}
-                            cachedPaths={fileExplorer.cachedPaths}
-                            fetchingPaths={fileExplorer.fetchingPaths}
-                            onFetchFile={fileExplorer.fetchFile}
-                            onFetchAll={fileExplorer.fetchAll}
-                            projectName={proj.activeProject?.name}
-                            totalFiles={(proj.activeProject?.fileTree || []).filter(e => e.type === 'blob').length}
-                            isFetchingAll={fileExplorer.isFetchingAll}
-                        />
+                        {activePanel === 'projects' ? (
+                            <ProjectSidebar
+                                projects={proj.projects}
+                                activeProjectId={proj.activeProjectId}
+                                onSwitchProject={proj.switchToProject}
+                                onDeleteProject={proj.deleteProject}
+                                onCreateNew={() => proj.setShowCreateProjectModal(true)}
+                                onClose={() => setActivePanel(null)}
+                            />
+                        ) : (
+                            <FileExplorer
+                                fileEntries={proj.activeProject?.fileTree || []}
+                                cachedPaths={fileExplorer.cachedPaths}
+                                fetchingPaths={fileExplorer.fetchingPaths}
+                                onFetchFile={handleFileClick}
+                                onFetchAll={fileExplorer.fetchAll}
+                                projectName={proj.activeProject?.name}
+                                totalFiles={(proj.activeProject?.fileTree || []).filter(e => e.type === 'blob').length}
+                                isFetchingAll={fileExplorer.isFetchingAll}
+                            />
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {(activePanel === 'projects' || activePanel === 'explorer') && (
+                <div
+                    ref={leftPanelResizeRef}
+                    className="w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors z-30 flex items-center justify-center group shrink-0"
+                    onMouseDown={handleLeftPanelResize}
+                >
+                    <div className="w-4 h-12 bg-slate-700/50 rounded-full group-hover:bg-blue-500/50 flex items-center justify-center">
+                        <GripVertical size={12} className="text-slate-500 group-hover:text-blue-300" />
+                    </div>
+                </div>
+            )}
 
             {/* Create-project modal */}
             <AnimatePresence>
@@ -355,7 +392,18 @@ function FlowCanvas() {
             </AnimatePresence>
 
             {/* Main canvas area */}
-            <div className="flex-1 relative h-full">
+            <div className="flex-1 relative h-full flex flex-col">
+                {/* ── Tab Bar ──────────────────────────────────── */}
+                <TabBar
+                    tabs={editorTabs.tabs}
+                    activeTabId={editorTabs.activeTabId}
+                    onSelectTab={editorTabs.selectTab}
+                    onCloseTab={editorTabs.closeTab}
+                    onCloseAll={editorTabs.closeAllTabs}
+                />
+
+                {/* ── Active content area ──────────────────────── */}
+                <div className="flex-1 relative overflow-hidden" style={{ minHeight: 0 }}>
                 {/* Error message */}
                 <AnimatePresence>
                     {proj.error && (
@@ -371,6 +419,9 @@ function FlowCanvas() {
                     )}
                 </AnimatePresence>
 
+                {/* ── Canvas view (default) ────────────────────── */}
+                {editorTabs.isCanvasActive && (
+                    <>
                 {/* Left-side toolbars */}
                 <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
                     <EditToolbar
@@ -470,42 +521,94 @@ function FlowCanvas() {
                         {showMinimap && <StyledMiniMap />}
                     </ReactFlow>
                 </NodeEditProvider>
-            </div>
+                    </>
+                )}
 
-            {/* Resize handle */}
-            <div
-                ref={resizeRef}
-                className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors z-30 flex items-center justify-center group"
-                onMouseDown={handleMouseDown}
-                style={{ left: `calc(100% - ${chatWidth}px)` }}
-            >
-                <div className="w-4 h-12 bg-slate-700/50 rounded-full group-hover:bg-blue-500/50 flex items-center justify-center">
-                    <GripVertical size={12} className="text-slate-500 group-hover:text-blue-300" />
+                {/* ── File viewer (when a file tab is active) ──── */}
+                {!editorTabs.isCanvasActive && editorTabs.activeFilePath && (
+                    <FileViewer
+                        filePath={editorTabs.activeFilePath}
+                        content={editorTabs.activeFileContent}
+                        isLoading={editorTabs.isActiveFileLoading}
+                        className="h-full"
+                    />
+                )}
                 </div>
             </div>
 
+            {/* Resize handle (hidden when chat minimized) */}
+            {!isChatMinimized && (
+                <div
+                    ref={resizeRef}
+                    className="w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors z-30 flex items-center justify-center group shrink-0"
+                    onMouseDown={handleMouseDown}
+                >
+                    <div className="w-4 h-12 bg-slate-700/50 rounded-full group-hover:bg-blue-500/50 flex items-center justify-center">
+                        <GripVertical size={12} className="text-slate-500 group-hover:text-blue-300" />
+                    </div>
+                </div>
+            )}
+
             {/* Right-side chat pane */}
             <div
-                className="h-full shadow-2xl z-20 transition-all duration-75"
-                style={{ width: `${chatWidth}px`, minWidth: '300px', maxWidth: '800px' }}
+                className={cn(
+                    'h-full shadow-2xl z-20 transition-all duration-200 shrink-0 flex flex-col border-l border-slate-800',
+                    isChatMinimized ? 'w-10' : '',
+                )}
+                style={isChatMinimized ? undefined : { width: `${chatWidth}px`, minWidth: '300px', maxWidth: '800px' }}
             >
-                <EnhancedChatbot
-                    selectedNode={selectedNode}
-                    repoDetails={proj.repoDetails}
-                    allNodes={nodes}
-                    allEdges={edges}
-                    projectName={proj.activeProject?.name}
-                    layoutDirection={layoutDirection}
-                    syncedCanvasContext={proj.activeProject?.aiContextSnapshot || null}
-                    chatSessions={proj.activeProject?.chatSessions || []}
-                    activeChatSessionId={proj.activeProject?.activeChatSessionId || null}
-                    onUpdateMessages={proj.updateChatMessages}
-                    onCreateNewChat={proj.createNewChatSession}
-                    onSwitchChat={proj.switchChatSession}
-                    onDeleteChat={proj.deleteChatSession}
-                    getCachedFiles={handleGetCachedFiles}
-                    cachedFilePaths={fileExplorer.cachedPaths}
-                />
+                {/* Minimize / Expand toggle header */}
+                <div className={cn(
+                    'flex items-center shrink-0 bg-slate-900 border-b border-slate-800',
+                    isChatMinimized ? 'flex-col py-2 gap-2' : 'px-2 py-1.5 justify-between',
+                )}>
+                    {!isChatMinimized && (
+                        <span className="text-xs text-slate-400 font-medium flex items-center gap-1.5">
+                            <MessageSquare size={12} className="text-cyan-400" />
+                            Rassam AI
+                        </span>
+                    )}
+                    <button
+                        onClick={() => setIsChatMinimized(!isChatMinimized)}
+                        className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
+                        title={isChatMinimized ? 'Expand chat' : 'Minimize chat'}
+                    >
+                        {isChatMinimized ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+                    </button>
+                </div>
+
+                {/* Chat content (hidden when minimized) */}
+                {!isChatMinimized && (
+                    <div className="flex-1 min-h-0">
+                        <EnhancedChatbot
+                            selectedNode={selectedNode}
+                            repoDetails={proj.repoDetails}
+                            allNodes={nodes}
+                            allEdges={edges}
+                            projectName={proj.activeProject?.name}
+                            layoutDirection={layoutDirection}
+                            syncedCanvasContext={proj.activeProject?.aiContextSnapshot || null}
+                            chatSessions={proj.activeProject?.chatSessions || []}
+                            activeChatSessionId={proj.activeProject?.activeChatSessionId || null}
+                            onUpdateMessages={proj.updateChatMessages}
+                            onCreateNewChat={proj.createNewChatSession}
+                            onSwitchChat={proj.switchChatSession}
+                            onDeleteChat={proj.deleteChatSession}
+                            getCachedFiles={handleGetCachedFiles}
+                            cachedFilePaths={fileExplorer.cachedPaths}
+                        />
+                    </div>
+                )}
+
+                {/* Minimized indicator */}
+                {isChatMinimized && (
+                    <div className="flex-1 flex flex-col items-center pt-4 gap-3">
+                        <div className="w-6 h-6 rounded-full bg-cyan-500/10 flex items-center justify-center">
+                            <MessageSquare size={12} className="text-cyan-400" />
+                        </div>
+                        <span className="text-[10px] text-slate-600 [writing-mode:vertical-lr] rotate-180">Chat</span>
+                    </div>
+                )}
             </div>
         </div>
     );
