@@ -447,16 +447,20 @@ export function useProjects(params: UseProjectsParams) {
     // ── Chat sessions ─────────────────────────────────────────
 
     const updateChatMessages = useCallback(
-        (messages: any[]) => {
-            if (!activeProjectId || !activeProject?.activeChatSessionId) return;
+        (projectId: string, sessionId: string, messages: ChatSession['messages']) => {
+            if (!projectId || !sessionId) return;
 
             setProjects((prev) =>
                 prev.map((p) => {
-                    if (p.id !== activeProjectId) return p;
+                    if (p.id !== projectId) return p;
+
+                    const hasSession = p.chatSessions.some((s) => s.id === sessionId);
+                    if (!hasSession) return p;
+
                     return {
                         ...p,
                         chatSessions: p.chatSessions.map((s) =>
-                            s.id === p.activeChatSessionId
+                            s.id === sessionId
                                 ? { ...s, messages, updatedAt: new Date() }
                                 : s,
                         ),
@@ -465,7 +469,7 @@ export function useProjects(params: UseProjectsParams) {
                 }),
             );
         },
-        [activeProjectId, activeProject?.activeChatSessionId],
+        [],
     );
 
     const createNewChatSession = useCallback(() => {

@@ -206,21 +206,51 @@ export class OpenAIAdapter implements LLMProvider {
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
-    const stream = await this.client.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: input.system },
-        ...historyMessages,
-        { role: "user", content: input.message },
-      ],
-      temperature,
-      max_tokens: maxTokens,
-      stream: true,
-    });
+    let includeTemperature = true;
+    let useMaxCompletionTokens = false;
+    let lastError: unknown;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) yield delta;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const stream = await this.client.chat.completions.create({
+          model,
+          messages: [
+            { role: "system", content: input.system },
+            ...historyMessages,
+            { role: "user", content: input.message },
+          ],
+          ...(includeTemperature ? { temperature } : {}),
+          ...(useMaxCompletionTokens
+            ? { max_completion_tokens: maxTokens }
+            : { max_tokens: maxTokens }),
+          stream: true,
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content;
+          if (delta) yield delta;
+        }
+
+        return;
+      } catch (error) {
+        lastError = error;
+
+        let changed = false;
+        if (!useMaxCompletionTokens && isMaxTokensUnsupported(error)) {
+          useMaxCompletionTokens = true;
+          changed = true;
+        }
+        if (includeTemperature && isTemperatureUnsupported(error)) {
+          includeTemperature = false;
+          changed = true;
+        }
+
+        if (!changed) {
+          throw error;
+        }
+      }
     }
+
+    if (lastError) throw lastError;
   }
 }

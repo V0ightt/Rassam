@@ -65,6 +65,7 @@ This document is designed to help future coding agents understand the architectu
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
     -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
     -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, then **streams** the response token-by-token using `ReadableStream`.
+    -   Chat message updates are **session-scoped**: an in-flight streamed reply keeps writing to the originating project/chat session even if the user switches to another chat before the stream finishes.
     -   Before sending a chat request, the client collects **cached file contents** (from IndexedDB) relevant to the selected node and the user's query, and sends them as `cachedFiles` in the payload.
     -   The API route prefers cached file contents over GitHub fetches for README.md and specific file queries, falling back to GitHub when not cached.
     -   The AI system prompt includes a `CACHED FILE CONTENTS` section when cached files are available, enabling deeper code-aware answers.

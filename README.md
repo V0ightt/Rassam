@@ -78,6 +78,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **File path formatting**: Special rendering for file references
 - **Quick actions**: Pre-built prompts for common questions
 - **Chat history**: Persistent conversation within session
+- **Session-safe streaming**: In-flight AI replies stay attached to the chat session where they started, even if you switch chats mid-response
 
 ### AI Settings
 - **Dedicated settings page**: Open `/settings` to manage AI runtime behavior

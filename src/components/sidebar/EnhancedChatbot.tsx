@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Edge, Node } from 'reactflow';
-import { CanvasSyncSnapshot, ChatSession, ChatMessage, EdgeData } from '@/types';
+import { CanvasSyncSnapshot, ChatSession, ChatMessage, EdgeData, NodeData } from '@/types';
 import { LLMProviderId } from '@/lib/llm';
 import {
   loadModelSettings,
@@ -44,7 +44,8 @@ import {
 } from '@/lib/model-settings';
 
 interface ChatbotProps {
-  selectedNode: any | null;
+  projectId: string | null;
+  selectedNode: Node<NodeData> | null;
   repoDetails?: { owner: string; repo: string } | null;
   allNodes?: Node[];
   allEdges?: Edge[];
@@ -53,7 +54,7 @@ interface ChatbotProps {
   syncedCanvasContext?: CanvasSyncSnapshot | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
-  onUpdateMessages: (messages: ChatMessage[]) => void;
+  onUpdateMessages: (projectId: string, sessionId: string, messages: ChatMessage[]) => void;
   onCreateNewChat: () => void;
   onSwitchChat: (sessionId: string) => void;
   onDeleteChat: (sessionId: string) => void;
@@ -88,6 +89,7 @@ const defaultMessages: ChatMessage[] = [{
 }];
 
 export default function EnhancedChatbot({ 
+  projectId,
   selectedNode, 
   repoDetails, 
   allNodes,
@@ -120,6 +122,15 @@ export default function EnhancedChatbot({
   // Get current messages from active chat session
   const activeSession = chatSessions.find(s => s.id === activeChatSessionId);
   const messages = activeSession?.messages || defaultMessages;
+
+  const updateTargetSessionMessages = useCallback(
+    (sessionId: string | null, nextMessages: ChatMessage[]) => {
+      if (!projectId || !sessionId) return false;
+      onUpdateMessages(projectId, sessionId, nextMessages);
+      return true;
+    },
+    [onUpdateMessages, projectId],
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -225,6 +236,9 @@ export default function EnhancedChatbot({
     const text = messageText || input;
     if (!text.trim()) return;
 
+    const targetSessionId = activeSession?.id || activeChatSessionId;
+    if (!projectId || !targetSessionId) return;
+
     if (!modelSettings || enabledModelOptions.length === 0) {
       const unavailableMsg: ChatMessage = {
         id: Date.now().toString(),
@@ -232,7 +246,7 @@ export default function EnhancedChatbot({
         content: '❌ No enabled AI model is available. Open Settings and enable a validated model first.',
         timestamp: new Date(),
       };
-      onUpdateMessages([...messages, unavailableMsg]);
+      updateTargetSessionMessages(targetSessionId, [...messages, unavailableMsg]);
       return;
     }
 
@@ -247,7 +261,7 @@ export default function EnhancedChatbot({
         content: '❌ Your selected model is no longer valid. Please update it in Settings.',
         timestamp: new Date(),
       };
-      onUpdateMessages([...messages, invalidSelectionMsg]);
+      updateTargetSessionMessages(targetSessionId, [...messages, invalidSelectionMsg]);
       return;
     }
 
@@ -259,7 +273,7 @@ export default function EnhancedChatbot({
     };
     
     const updatedMessages = [...messages, userMsg];
-    onUpdateMessages(updatedMessages);
+    updateTargetSessionMessages(targetSessionId, updatedMessages);
     setInput("");
     setLoading(true);
     setShowQuickActions(false);
@@ -404,7 +418,7 @@ export default function EnhancedChatbot({
       };
 
       const messagesWithAssistant = [...updatedMessages, assistantMsg];
-      onUpdateMessages(messagesWithAssistant);
+      updateTargetSessionMessages(targetSessionId, messagesWithAssistant);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -415,7 +429,7 @@ export default function EnhancedChatbot({
         const updated = messagesWithAssistant.map(m =>
           m.id === assistantMsgId ? { ...m, content: streamedContent } : m
         );
-        onUpdateMessages(updated);
+        updateTargetSessionMessages(targetSessionId, updated);
       }
 
       if (!streamedContent.trim()) {
@@ -424,7 +438,7 @@ export default function EnhancedChatbot({
             ? { ...m, content: "Sorry, I couldn't process that request." }
             : m
         );
-        onUpdateMessages(updated);
+        updateTargetSessionMessages(targetSessionId, updated);
       }
     } catch (error) {
       // Don't show error message if the user intentionally cancelled
@@ -438,7 +452,7 @@ export default function EnhancedChatbot({
         content: `❌ ${error instanceof Error ? error.message : 'Error communicating with AI. Please try again.'}`,
         timestamp: new Date()
       };
-      onUpdateMessages([...updatedMessages, errorMsg]);
+      updateTargetSessionMessages(targetSessionId, [...updatedMessages, errorMsg]);
     } finally {
       abortControllerRef.current = null;
       setLoading(false);
