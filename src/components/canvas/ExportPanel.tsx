@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, memo } from 'react';
 import { toPng, toSvg } from 'html-to-image';
 import { useReactFlow, getNodesBounds, getViewportForBounds } from 'reactflow';
 import { 
@@ -23,7 +23,7 @@ interface ExportPanelProps {
 const imageWidth = 1920;
 const imageHeight = 1080;
 
-export default function ExportPanel({ repoDetails, onImportProject, compact }: ExportPanelProps) {
+export default memo(function ExportPanel({ repoDetails, onImportProject, compact }: ExportPanelProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
   const { getNodes, getEdges } = useReactFlow();
@@ -227,4 +227,4 @@ export default function ExportPanel({ repoDetails, onImportProject, compact }: E
       )}
     </div>
   );
-}
+});

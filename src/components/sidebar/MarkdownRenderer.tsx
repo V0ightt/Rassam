@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -96,7 +96,7 @@ const FilePath = ({ path }: { path: string }) => (
   </span>
 );
 
-export default function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+export default memo(function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   // Pre-process content to detect file paths (only paths with directory separators)
   const processedContent = content.replace(
     /`((?:[a-zA-Z0-9_\-]+\/)+[a-zA-Z0-9_\-]+\.(ts|tsx|js|jsx|css|json|md|py|go|rs|java|c|cpp|h|hpp))`/g,
@@ -223,4 +223,4 @@ export default function MarkdownRenderer({ content, className }: MarkdownRendere
       </ReactMarkdown>
     </div>
   );
-}
+});

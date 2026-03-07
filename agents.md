@@ -64,7 +64,10 @@ This document is designed to help future coding agents understand the architectu
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
     -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
-    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, then **streams** the response token-by-token using `ReadableStream`.
+    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, and runs the chat agent loop.
+    -   Chat now supports **two modes**: `ask` (read + session inspection tools only) and `agent` (read + session + canvas write/write_batch tools).
+    -   Tool calls are streamed as structured NDJSON events (`status`, `text`, `write`, `error`, `done`), and the client renders tool progress inline in the assistant reply.
+    -   `write` tool events mutate the live React Flow canvas client-side without automatically updating the synced AI snapshot.
     -   Chat message updates are **session-scoped**: an in-flight streamed reply keeps writing to the originating project/chat session even if the user switches to another chat before the stream finishes.
     -   Before sending a chat request, the client collects **cached file contents** (from IndexedDB) relevant to the selected node and the user's query, and sends them as `cachedFiles` in the payload.
     -   The API route prefers cached file contents over GitHub fetches for README.md and specific file queries, falling back to GitHub when not cached.
@@ -84,12 +87,13 @@ This document is designed to help future coding agents understand the architectu
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Returns file tree alongside nodes/edges. Supports PUT for re-layout.
--   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, uses `cachedFiles` from client when available, falls back to GitHub. Returns a `ReadableStream` of text tokens (pre-stream validation errors still return JSON).
+-   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, validates the selected mode/provider, uses `cachedFiles` from client when available, falls back to GitHub, and returns NDJSON chat events for streamed text, tool status, and live canvas write operations.
 -   `api/files/route.ts`: POST endpoint that fetches a single file's content from GitHub via Octokit. Used by the File Explorer to populate the IndexedDB cache.
 -   `api/settings/models/route.ts`: Returns provider metadata and live availability checks used by Settings and chat selector.
 
 ### `src/lib`
 -   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths). Accepts optional `cachedFiles` to enrich system prompt with file contents from the local store.
+-   `chat-agent.ts`: Chat agent orchestration for ask/agent modes. Plans tool calls, executes `read`, `session`, `write`, and `write_batch` tools, maintains per-turn working canvas state, emits structured stream events consumed by the chat UI. Supports up to 25 planning steps per turn with up to 3 retries per step for write-needed scenarios. `write_batch` accepts an array of operations (nodes first, then edges), executes them in order, and auto-layouts all nodes using dagre. Falls back to a write-plan LLM pass when the planner reads/searches but fails to mutate the canvas for an edit request. Includes `tryExtractWriteBatchFromCodeOutput` to rescue LLM responses that output code blocks or Python dicts instead of raw JSON tool calls. Planner uses 4096 maxTokens for sufficient room for large write_batch operations.
 -   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests (validates token format before use).
 -   `file-store.ts`: IndexedDB wrapper for per-project file content caching. Provides `cacheFile`, `getCachedFile`, `getCachedFiles`, `getCachedPaths`, and `clearProjectFiles`.
 -   `import.ts`: JSON import utility. `parseAndValidateImportJson()` validates exported JSON, regenerates node/edge IDs to avoid collisions, applies defaults for missing fields, and derives project metadata.
@@ -139,10 +143,10 @@ This document is designed to help future coding agents understand the architectu
 
 ### `src/components/sidebar`
 -   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.
-  -   Header controls are icon-only actions for chat history, new chat, settings, and close.
+  -   Header controls are icon-only actions for chat history, new chat, settings, close, plus an ask/agent mode toggle.
   -   Sends `canvasContext` payload (synced snapshot preferred, live graph fallback) to `/api/chat`.
   -   Before each request, collects relevant cached file contents from IndexedDB (selected node files, files mentioned in the query, key files like README.md) and sends them as `cachedFiles`.
-  -   Reads the streaming response via `ReadableStream` / `TextDecoder`, updating the assistant message in real time.
+  -   Reads the NDJSON streaming response via `ReadableStream` / `TextDecoder`, updating the assistant message in real time and applying streamed canvas write operations.
   -   Includes both node-level context and graph-level relationships to improve architectural responses.
 -   `MarkdownRenderer.tsx`: Custom markdown renderer with syntax highlighting and file path detection.
 

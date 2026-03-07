@@ -178,13 +178,18 @@ export function useProjects(params: UseProjectsParams) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ── Persistence: save projects array ──────────────────────
+    // ── Persistence: save projects array (debounced) ──────────
+    const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
-        if (projects.length > 0) {
-            localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(projects));
-            return;
-        }
-        localStorage.removeItem(STORAGE_KEY_PROJECTS);
+        if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = setTimeout(() => {
+            if (projects.length > 0) {
+                localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(projects));
+            } else {
+                localStorage.removeItem(STORAGE_KEY_PROJECTS);
+            }
+        }, 500);
+        return () => { if (persistTimerRef.current) clearTimeout(persistTimerRef.current); };
     }, [projects]);
 
     // ── Persistence: save active project ID ───────────────────
@@ -194,17 +199,26 @@ export function useProjects(params: UseProjectsParams) {
         }
     }, [activeProjectId]);
 
-    // ── Sync canvas state back into the active project ────────
+    // ── Sync canvas state back into the active project (debounced) ──
+    const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const nodesRef = useRef(nodes);
+    const edgesRef = useRef(edges);
+    useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+    useEffect(() => { edgesRef.current = edges; }, [edges]);
+
     useEffect(() => {
-        if (activeProjectId) {
+        if (!activeProjectId) return;
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => {
             setProjects((prev) =>
                 prev.map((p) =>
                     p.id === activeProjectId
-                        ? { ...p, nodes, edges, layoutDirection, updatedAt: new Date() }
+                        ? { ...p, nodes: nodesRef.current, edges: edgesRef.current, layoutDirection, updatedAt: new Date() }
                         : p,
                 ),
             );
-        }
+        }, 300);
+        return () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); };
     }, [nodes, edges, activeProjectId, layoutDirection]);
 
     // ── Project CRUD ──────────────────────────────────────────

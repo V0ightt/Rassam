@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { chatStreamWithContext } from "@/lib/ai";
+import { streamChatResponse } from "@/lib/chat-agent";
 import { getFileContent } from "@/lib/github";
 import { getProviderAvailability } from "@/lib/llm";
 import { normalizeProviderId } from "@/lib/llm/registry";
+import { ChatMode } from "@/types";
+
+interface HistoryPayloadMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
 
 function parseNumber(value: unknown): number | undefined {
     if (typeof value === 'number') return value;
@@ -62,6 +68,7 @@ export async function POST(req: NextRequest) {
     try {
         const {
             message,
+            chatMode,
             context,
             repoDetails,
             allNodesContext,
@@ -160,43 +167,77 @@ export async function POST(req: NextRequest) {
         const MAX_HISTORY = 20;
         const sanitizedHistory = Array.isArray(history)
             ? history
-                .filter((m: any) => 
-                    m && typeof m.content === 'string' && 
-                    (m.role === 'user' || m.role === 'assistant')
-                )
-                .map((m: any) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+                .filter((m: unknown): m is HistoryPayloadMessage => {
+                    if (!m || typeof m !== 'object') return false;
+                    const message = m as Partial<HistoryPayloadMessage>;
+                    return typeof message.content === 'string' &&
+                        (message.role === 'user' || message.role === 'assistant');
+                })
+                .map((m) => ({ role: m.role, content: m.content }))
                 .slice(-MAX_HISTORY)
             : undefined;
 
-        const tokenStream = chatStreamWithContext(
-            message, 
-            context, 
-            repoDetails, 
+        const mode: ChatMode = chatMode === 'agent' ? 'agent' : 'ask';
+
+        const readFile = async (requestedPath: string) => {
+            const normalizedPath = requestedPath.trim();
+            if (!normalizedPath) {
+                return { path: requestedPath, content: null, source: 'missing' as const };
+            }
+
+            const exactCacheHit = cached[normalizedPath];
+            if (exactCacheHit) {
+                return { path: normalizedPath, content: exactCacheHit, source: 'cache' as const };
+            }
+
+            const caseInsensitiveHit = Object.entries(cached).find(([path]) => path.toLowerCase() === normalizedPath.toLowerCase());
+            if (caseInsensitiveHit) {
+                return { path: caseInsensitiveHit[0], content: caseInsensitiveHit[1], source: 'cache' as const };
+            }
+
+            if (repoDetails?.owner && repoDetails?.repo) {
+                const content = await getFileContent(repoDetails.owner, repoDetails.repo, normalizedPath);
+                return {
+                    path: normalizedPath,
+                    content: content || null,
+                    source: content ? 'github' as const : 'missing' as const,
+                };
+            }
+
+            return { path: normalizedPath, content: null, source: 'missing' as const };
+        };
+
+        const eventStream = streamChatResponse({
+            message,
+            mode,
+            context: context || null,
+            repoDetails,
             allNodesContext,
             canvasContext,
             readmeContent,
-            specificFile ? { path: specificFile, content: fileContent } : null,
-            {
+            specificFile: specificFile ? { path: specificFile, content: fileContent } : null,
+            runtimeSettings: {
                 providerId,
                 model,
                 maxTokens,
                 temperature,
             },
-            sanitizedHistory,
-            supplementaryFiles,
-        );
+            history: sanitizedHistory,
+            cachedFiles: supplementaryFiles,
+            readFile,
+        });
 
         const encoder = new TextEncoder();
         const readable = new ReadableStream({
             async start(controller) {
                 try {
-                    for await (const token of tokenStream) {
-                        controller.enqueue(encoder.encode(token));
+                    for await (const event of eventStream) {
+                        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
                     }
                     controller.close();
                 } catch (err) {
                     const errorMsg = err instanceof Error ? err.message : 'Streaming failed';
-                    controller.enqueue(encoder.encode(`\n\n❌ Error: ${errorMsg}`));
+                    controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'error', text: errorMsg })}\n`));
                     controller.close();
                 }
             },
@@ -204,14 +245,14 @@ export async function POST(req: NextRequest) {
 
         return new Response(readable, {
             headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Type': 'application/x-ndjson; charset=utf-8',
                 'Transfer-Encoding': 'chunked',
                 'Cache-Control': 'no-cache',
                 'X-Content-Type-Options': 'nosniff',
             },
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Chat API Error:", error);
         return NextResponse.json({ 
             error: "Failed to process chat",

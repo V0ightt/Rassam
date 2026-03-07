@@ -73,6 +73,9 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### AI-Powered Chatbot
 - **Context-aware responses**: Understands the selected node's context
 - **Canvas-aware responses**: Understands graph relationships and architecture flow from synced snapshots
+- **Two chat modes**: `ask` mode can inspect files and session state; `agent` mode can also edit canvas nodes and edges
+- **Write fallback in agent mode**: if the planner stalls after reading/searching, Rassam runs a backup write-planning pass so file-to-flowchart requests still place nodes and edges on the canvas
+- **Tool-call streaming**: Tool activity is streamed into the chat response with live status updates like read, session, and write actions
 - **Model selector**: Choose between enabled provider/model pairs directly in chat
 - **Markdown support**: Code blocks with syntax highlighting
 - **File path formatting**: Special rendering for file references
@@ -92,6 +95,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **Chat toggle in top bar**: Open/close chat from the top-right `Chat` button near `Close All`
 - **Clean chat close behavior**: Closing chat fully removes the right panel (no collapsed mini sidebar)
 - **Top chat controls**: Chat header includes icon-only actions for history, new chat, settings, and close
+- **Mode toggle in chat**: Switch between `ask` and `agent` directly from the chat header
 - **Resizable left panel**: Drag to resize the Projects/File Explorer side panel width
 - **Smooth code viewer**: All files keep syntax highlighting with virtualized rendering and stable line numbers for smooth large-file opening and scrolling
 - **Minimap**: Bird's-eye view of the entire flowchart

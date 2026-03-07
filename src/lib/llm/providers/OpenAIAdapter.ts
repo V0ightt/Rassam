@@ -226,9 +226,21 @@ export class OpenAIAdapter implements LLMProvider {
           stream: true,
         });
 
+        let emittedText = false;
         for await (const chunk of stream) {
           const delta = chunk.choices[0]?.delta?.content;
-          if (delta) yield delta;
+          if (delta) {
+            emittedText = true;
+            yield delta;
+          }
+        }
+
+        // If streaming produced nothing, fall back to non-streaming
+        if (!emittedText) {
+          const fallbackText = await this.chat(input);
+          if (fallbackText) {
+            yield fallbackText;
+          }
         }
 
         return;

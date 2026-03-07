@@ -1,117 +1,53 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
-- Session start default behavior:
-	- Always read both `.github/copilot-instructions.md` and `agents.md` before doing implementation work.
-	- Also read `README.md` before implementation when the task may affect setup, usage, architecture, or documented behavior.
-	- If either file is missing, state that explicitly and proceed with available context.
+# Rassam – Copilot Instructions
 
-- Documentation maintenance policy for future sessions:
-	- After completing code changes, update `README.md` and `agents.md` to reflect behavior, architecture, setup, API, and workflow changes.
-	- If no documentation updates are needed, state that explicitly in the final response.
+Read `agents.md` for full architecture details before substantial implementation work. Update `agents.md` and `README.md` when your changes affect architecture, APIs, or documented behavior.
 
-- [x] Verify that the copilot-instructions.md file in the .github directory is created.
+## Project Overview
 
-- [x] Clarify Project Requirements
-	<!-- Ask for project type, language, and frameworks if not specified. Skip if already provided. -->
+Next.js 16 (App Router) + TypeScript app that converts GitHub repos into interactive AI-analyzed flowcharts using React Flow. The integrated chatbot is named **Rassam**. Styling uses Tailwind CSS v4 (dark theme, cyan accents).
 
-- [x] Scaffold the Project
-	<!--
-	Ensure that the previous step has been marked as completed.
-	Call project setup tool with projectType parameter.
-	Run scaffolding command to create project files and folders.
-	Use '.' as the working directory.
-	If no appropriate projectType is available, search documentation using available tools.
-	Otherwise, create the project structure manually using available file creation tools.
-	-->
+## Dev Workflow
 
-- [x] Customize the Project
-	<!--
-	Verify that all previous steps have been completed successfully and you have marked the step as completed.
-	Develop a plan to modify codebase according to user requirements.
-	Apply modifications using appropriate tools and user-provided references.
-	Skip this step for "Hello World" projects.
-	-->
+- `npm run dev` — start Next.js dev server
+- `npm run build` — production build (catches type errors)
+- `npm run lint` — ESLint (next/core-web-vitals + typescript)
+- `npm test` — runs `tsx --test` (Node.js built-in test runner, not Jest). Test files use `node:test` + `node:assert/strict` (see `src/lib/llm/registry.test.ts`)
+- Environment: copy `.env.local` with API keys (`DEEPSEEK_API_KEY`, `GITHUB_TOKEN`, etc.)
 
-- [x] Install Required Extensions
-	<!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->
+## Architecture (key data flow)
 
-- [x] Compile the Project
-	<!--
-	Verify that all previous steps have been completed.
-	Install any missing dependencies.
-	Run diagnostics and resolve any issues.
-	Check for markdown files in project folder for relevant instructions on how to do this.
-	-->
+1. **Project creation** → `useProjects` hook manages CRUD + localStorage persistence
+2. **GitHub analysis** → `POST /api/repo` → `github.ts` fetches file tree → `ai.ts` sends to LLM → dagre layouts nodes → returns `{nodes, edges, fileTree}`
+3. **Canvas rendering** → `page.tsx` (thin shell) wires React Flow with extracted hooks; owns only `useNodesState`/`useEdgesState` + UI state
+4. **Chat streaming** → `POST /api/chat` → validates provider → `ai.ts#chatStreamWithContext` → `ReadableStream` of tokens
+5. **File caching** → `file-store.ts` (IndexedDB) per-project; client sends `cachedFiles` to chat API to avoid re-fetching
 
-- [x] Create and Run Task
-	<!--
-	Verify that all previous steps have been completed.
-	Check https://code.visualstudio.com/docs/debugtest/tasks to determine if the project needs a task. If so, use the create_and_run_task to create and launch a task based on package.json, README.md, and project structure.
-	Skip this step otherwise.
-	 -->
+## Hook-based decomposition (`src/hooks/`)
 
-- [x] Launch the Project
-	<!--
-	Verify that all previous steps have been completed.
-	Prompt user for debug mode, launch only if confirmed.
-	 -->
+`page.tsx` delegates all complex logic to hooks: `useProjects` (project/chat lifecycle), `useCanvasHistory` (undo/redo), `useClipboard` (copy/paste), `useCanvasShortcuts` (keyboard bindings via ref pattern), `useResizablePane`, `useFileExplorer`, `useEditorTabs`. Follow this pattern — keep `page.tsx` as a thin wiring layer.
 
-- [x] Ensure Documentation is Complete
-	<!--
-	Verify that all previous steps have been completed.
-	Verify that agents.md and README.md and the copilot-instructions.md file in the .github directory exists and contains current project information.
-	Clean up the copilot-instructions.md file in the .github directory by removing all HTML comments.
-	 -->
+## LLM Provider Adapter Pattern (`src/lib/llm/`)
 
-<!--
-## Execution Guidelines
-PROGRESS TRACKING:
-- If any tools are available to manage the above todo list, use it to track progress through this checklist.
-- After completing each step, mark it complete and add a summary.
-- Read current todo list status before starting each new step.
+- Interface: `LLMProvider` in `types.ts` — requires `generateStructure`, `chat`, `chatStream` (returns `AsyncIterable<string>`)
+- OpenAI-compatible providers extend `OpenAICompatibleAdapter` (override `id`, `apiKey`, `baseURL`, `model` only — see `DeepSeekAdapter.ts` as a 10-line example)
+- Non-OpenAI providers implement `LLMProvider` directly (see `AnthropicAdapter.ts`)
+- Register in `registry.ts`, add metadata in `catalog.ts`
 
-COMMUNICATION RULES:
-- Avoid verbose explanations or printing full command outputs.
-- If a step is skipped, state that briefly (e.g. "No extensions needed").
-- Do not explain project structure unless asked.
-- Keep explanations concise and focused.
+## Adding a Node Category (6-file checklist)
 
-DEVELOPMENT RULES:
-- Use '.' as the working directory unless user specifies otherwise.
-- Avoid adding media or external links unless explicitly requested.
-- Use placeholders only with a note that they should be replaced.
-- Use VS Code API tool only for VS Code extension projects.
-- Once the project is created, it is already opened in Visual Studio Code—do not suggest commands to open this project in Visual Studio again.
-- If the project setup information has additional rules, follow them strictly.
+1. `src/types/index.ts` — add to `NodeCategory` union
+2. `src/components/canvas/NodeTypes.tsx` — add to `categoryIcons` + `categoryColors`
+3. `src/components/canvas/FlowControls.tsx` — add to `minimapCategoryStroke`
+4. `src/components/canvas/EditToolbar.tsx` — add to `categories` array (set `group: 'Code'` or `'System'`)
+5. `src/lib/ai.ts` — add to `VALID_NODE_CATEGORIES` array + update AI prompt
 
-FOLDER CREATION RULES:
-- Always use the current directory as the project root.
-- If you are running any terminal commands, use the '.' argument to ensure that the current working directory is used ALWAYS.
-- Do not create a new folder unless the user explicitly requests it besides a .vscode folder for a tasks.json file.
-- If any of the scaffolding commands mention that the folder name is not correct, let the user know to create a new folder with the correct name and then reopen it again in vscode.
+## Project-Specific Conventions
 
-EXTENSION INSTALLATION RULES:
-- Only install extension specified by the get_project_setup_info tool. DO NOT INSTALL any other extensions.
-
-PROJECT CONTENT RULES:
-- If the user has not specified project details, assume they want a "Hello World" project as a starting point.
-- Avoid adding links of any type (URLs, files, folders, etc.) or integrations that are not explicitly required.
-- Avoid generating images, videos, or any other media files unless explicitly requested.
-- If you need to use any media assets as placeholders, let the user know that these are placeholders and should be replaced with the actual assets later.
-- Ensure all generated components serve a clear purpose within the user's requested workflow.
-- If a feature is assumed but not confirmed, prompt the user for clarification before including it.
-- If you are working on a VS Code extension, use the VS Code API tool with a query to find relevant VS Code API references and samples related to that query.
-
-TASK COMPLETION RULES:
-- Your task is complete when:
-  - Project is successfully scaffolded and compiled without errors
-  - copilot-instructions.md file in the .github directory exists in the project
-  - README.md file exists and is up to date
-  - User is provided with clear instructions to debug/launch the project
-	- agents.md file exists and is up to date if applicable
-
-Before starting a new task in the above plan, update progress in the plan.
--->
-- Work through each checklist item systematically.
-- Keep communication concise and focused.
-- Follow development best practices.
-- When you are done ensure agents.md is up to date with the changes you made.
+- **Path alias**: `@/*` maps to `./src/*` — always use `@/` imports
+- **No Jest**: tests use `node:test` + `node:assert/strict`, run via `tsx --test`
+- **Streaming pattern**: chat API returns `ReadableStream` (not SSE). Client reads with `ReadableStream`/`TextDecoder`. Pre-stream errors return JSON
+- **Canvas sync**: manual Sync button creates `CanvasSyncSnapshot` stored in project. Chat uses snapshot as primary context (live canvas as fallback)
+- **State persistence**: projects + chat sessions in localStorage (`repoAgent_projects` key); file contents in IndexedDB per project
+- **Component locations**: canvas components in `src/components/canvas/`, navigation in `src/components/navigation/`, editor tabs in `src/components/editor/`
+- **AI prompt changes**: edit `buildSystemMessage()` in `ai.ts` (shared by streaming and non-streaming paths)
+- **Edge/node data contracts**: defined in `src/types/index.ts` (`NodeData`, `EdgeData`). Keep chat API payload aligned with `EnhancedChatbot.tsx`
