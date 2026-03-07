@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { 
   Plus,
   Trash2,
@@ -67,7 +67,7 @@ const categories: { value: NodeCategory; label: string; group?: string }[] = [
   { value: 'default', label: 'Other' },
 ];
 
-export default function EditToolbar({ 
+export default memo(function EditToolbar({ 
   selectedNode, 
   selectedNodes = [],
   onAddNode, 
@@ -508,4 +508,4 @@ export default function EditToolbar({
       </AnimatePresence>
     </div>
   );
-}
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import Link from 'next/link';
 import { 
   Send, 
@@ -46,8 +46,7 @@ interface ChatbotProps {
   projectId: string | null;
   selectedNode: Node<NodeData> | null;
   repoDetails?: { owner: string; repo: string } | null;
-  allNodes?: Node[];
-  allEdges?: Edge[];
+  getCanvasState?: () => { nodes: Node[]; edges: Edge[] };
   projectName?: string;
   layoutDirection?: 'TB' | 'LR';
   syncedCanvasContext?: CanvasSyncSnapshot | null;
@@ -97,12 +96,11 @@ const defaultMessages: ChatMessage[] = [{
   timestamp: new Date()
 }];
 
-export default function EnhancedChatbot({ 
+export default memo(function EnhancedChatbot({ 
   projectId,
   selectedNode, 
   repoDetails, 
-  allNodes,
-  allEdges,
+  getCanvasState,
   projectName,
   layoutDirection = 'TB',
   syncedCanvasContext,
@@ -346,7 +344,7 @@ export default function EnhancedChatbot({
         layoutDirection,
         selectedNodeId: selectedNode?.id || null,
         selectedNodeLabel: selectedNode?.data?.label || null,
-        nodes: (allNodes || []).map(n => ({
+        nodes: (getCanvasState?.().nodes || []).map(n => ({
           id: n.id,
           label: n.data?.label,
           category: n.data?.category,
@@ -357,7 +355,7 @@ export default function EnhancedChatbot({
           exports: n.data?.exports,
           position: n.position,
         })),
-        edges: (allEdges || []).map(e => ({
+        edges: (getCanvasState?.().edges || []).map(e => ({
           id: e.id,
           source: e.source,
           target: e.target,
@@ -794,7 +792,7 @@ export default function EnhancedChatbot({
 
         {/* Global quick actions when no node selected */}
         <AnimatePresence>
-          {showQuickActions && !selectedNode && allNodes && allNodes.length > 0 && !loading && (
+          {showQuickActions && !selectedNode && getCanvasState && getCanvasState().nodes.length > 0 && !loading && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -895,4 +893,4 @@ export default function EnhancedChatbot({
       </div>
     </div>
   );
-}
+});

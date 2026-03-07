@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import ReactFlow, {
     Background,
     useNodesState,
@@ -147,6 +147,16 @@ function FlowCanvas() {
     // ── Stable type maps (prevent ReactFlow re-registration) ──
     const memoNodeTypes = useMemo(() => nodeTypes, []);
     const memoEdgeTypes = useMemo(() => edgeTypes, []);
+
+    // ── Refs for stable chatbot getter (avoids re-render on every drag) ──
+    const nodesRef = useRef(nodes);
+    const edgesRef = useRef(edges);
+    useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+    useEffect(() => { edgesRef.current = edges; }, [edges]);
+    const getCanvasState = useCallback(() => ({
+        nodes: nodesRef.current,
+        edges: edgesRef.current,
+    }), []);
 
     // ── Canvas interaction ────────────────────────────────────
 
@@ -654,8 +664,7 @@ function FlowCanvas() {
                             projectId={proj.activeProjectId}
                             selectedNode={selectedNode}
                             repoDetails={proj.repoDetails}
-                            allNodes={nodes}
-                            allEdges={edges}
+                            getCanvasState={getCanvasState}
                             projectName={proj.activeProject?.name}
                             layoutDirection={layoutDirection}
                             syncedCanvasContext={proj.activeProject?.aiContextSnapshot || null}
