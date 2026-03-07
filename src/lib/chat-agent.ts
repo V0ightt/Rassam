@@ -367,6 +367,39 @@ function buildPlannerMessage(
   return lines.join('\n');
 }
 
+/**
+ * Detect if a message likely requires the planner loop (tool calls).
+ * Returns false for simple conversational questions that can be answered
+ * directly from the context already in the system prompt.
+ */
+function messageLikelyNeedsTools(message: string, mode: ChatMode): boolean {
+  // Agent mode with canvas write intent always needs tools
+  if (mode === 'agent' && requestLikelyNeedsCanvasWrite(message)) {
+    return true;
+  }
+
+  const normalized = message.toLowerCase();
+
+  // Explicit file read requests that the route's detectFileQueryIntent might miss
+  const fileReadPatterns = [
+    /(?:look at|check|read|open|inspect|examine|analyze|review)\s+(?:the\s+)?(?:file|source|contents?\s+of)\s/,
+    /(?:show|display|print)\s+(?:me\s+)?(?:the\s+)?(?:code|file|source)\s/,
+    /what(?:'s| is| are)\s+(?:in|inside)\s+[`"']?[\w/.-]+\.\w+/,
+  ];
+
+  // Session/canvas inspection that benefits from the search tool
+  const sessionPatterns = [
+    /(?:how many|count|number of)\s+(?:nodes?|edges?|components?|connections?)/,
+    /(?:list|enumerate|show)\s+(?:all\s+)?(?:the\s+)?(?:nodes?|edges?|components?)/,
+    /(?:find|search|look\s*for|filter)\s+(?:nodes?|edges?)/,
+  ];
+
+  if (fileReadPatterns.some(p => p.test(normalized))) return true;
+  if (sessionPatterns.some(p => p.test(normalized))) return true;
+
+  return false;
+}
+
 function requestLikelyNeedsCanvasWrite(message: string): boolean {
   const normalized = message.toLowerCase();
 
@@ -1728,9 +1761,35 @@ export async function* streamChatResponse(
     message,
     cachedFiles,
   );
+  const sanitizedHistory = sanitizeHistory(history);
+  const needsTools = messageLikelyNeedsTools(message, mode);
+
+  // ── Fast path: skip the planner for simple questions ──
+  // The system message already contains canvas context, selected node,
+  // cached files, README, and specific file content.
+  if (!needsTools) {
+    try {
+      for await (const chunk of provider.chatStream({
+        system: baseSystemMessage,
+        message,
+        history: sanitizedHistory,
+        temperature: clampTemperature(runtimeSettings?.temperature),
+        maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
+        model: runtimeSettings?.model || undefined,
+      })) {
+        yield { type: 'text', text: chunk };
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unable to generate a response.';
+      yield { type: 'error', text: messageText };
+    }
+    yield { type: 'done' };
+    return;
+  }
+
+  // ── Tool-assisted path: planner loop ──
   const workingState = createWorkingCanvasState(canvasContext, allNodesContext, repoDetails);
   const transcript: ToolTranscriptEntry[] = [];
-  const sanitizedHistory = sanitizeHistory(history);
   const requiresCanvasWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message);
   let fallbackFinalContent: string | undefined;
 
