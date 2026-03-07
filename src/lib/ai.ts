@@ -135,7 +135,7 @@ Return JSON in this exact format:
     
     // Post-process to ensure categories are valid and add complexity if missing
     if (result.nodes) {
-      result.nodes = result.nodes.map((node: any) => ({
+      result.nodes = result.nodes.map((node: { category?: unknown; files?: string[]; complexity?: 'low' | 'medium' | 'high' }) => ({
         ...node,
         category: normalizeCategory(node.category, node.files || []),
         complexity: node.complexity || estimateComplexity(node.files || []),
@@ -149,7 +149,7 @@ Return JSON in this exact format:
   }
 }
 
-function buildSystemMessage(
+export function buildSystemMessage(
   context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
   allNodesContext?: SyncedCanvasNode[] | null,

@@ -45,6 +45,9 @@ import { useEditorTabs } from '@/hooks/useEditorTabs';
 import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
 import TabBar from '@/components/editor/TabBar';
 import FileViewer from '@/components/editor/FileViewer';
+import { ChatCanvasWriteOperation, EdgeData, NodeCategory, NodeData } from '@/types';
+
+type EditableNodeInput = Partial<NodeData> & Pick<NodeData, 'label' | 'description' | 'files'>;
 
 // ─────────────────────────────────────────────────────────────
 // FlowCanvas – thin orchestration shell that wires together
@@ -171,7 +174,7 @@ function FlowCanvas() {
 
     // ── Node CRUD ─────────────────────────────────────────────
 
-    const handleAddNode = useCallback((nodeData: any) => {
+    const handleAddNode = useCallback((nodeData: EditableNodeInput) => {
         saveToHistory();
         setNodes((nds) => [
             ...nds,
@@ -205,13 +208,105 @@ function FlowCanvas() {
         if (!nodeIds.length) return;
         saveToHistory();
         const ids = new Set(nodeIds);
-        setNodes((nds) => nds.map((n) => (ids.has(n.id) ? { ...n, data: { ...n.data, category } } : n)));
+        const nextCategory = category as NodeCategory;
+        setNodes((nds) => nds.map((n) => (ids.has(n.id) ? { ...n, data: { ...n.data, category: nextCategory } } : n)));
     }, [setNodes, saveToHistory]);
 
-    const handleUpdateNode = useCallback((nodeId: string, data: any) => {
+    const handleUpdateNode = useCallback((nodeId: string, data: Partial<NodeData>) => {
         saveToHistory();
         setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n)));
     }, [setNodes, saveToHistory]);
+
+    const handleApplyChatWrite = useCallback((operation: ChatCanvasWriteOperation) => {
+        saveToHistory();
+
+        switch (operation.action) {
+            case 'add_node': {
+                setNodes((nds) => [
+                    ...nds,
+                    {
+                        id: operation.node.id,
+                        type: operation.node.type || 'enhanced',
+                        position: operation.node.position,
+                        data: operation.node.data,
+                    },
+                ]);
+                break;
+            }
+
+            case 'edit_node': {
+                setNodes((nds) => nds.map((node) => {
+                    if (node.id !== operation.nodeId) return node;
+
+                    const { position, ...dataChanges } = operation.changes;
+                    return {
+                        ...node,
+                        position: position || node.position,
+                        data: {
+                            ...node.data,
+                            ...(dataChanges as Partial<NodeData>),
+                            category: (dataChanges.category as NodeCategory | undefined) || node.data.category,
+                        },
+                    };
+                }));
+                if (selectedNode?.id === operation.nodeId) {
+                    setSelectedNode((prev) => prev ? {
+                        ...prev,
+                        position: operation.changes.position || prev.position,
+                        data: { ...prev.data, ...(operation.changes as Partial<NodeData>) },
+                    } : prev);
+                }
+                break;
+            }
+
+            case 'delete_node': {
+                setNodes((nds) => nds.filter((node) => node.id !== operation.nodeId));
+                setEdges((eds) => eds.filter((edge) => edge.source !== operation.nodeId && edge.target !== operation.nodeId));
+                if (selectedNode?.id === operation.nodeId) {
+                    setSelectedNode(null);
+                }
+                setSelectedNodes((prev) => prev.filter((node) => node.id !== operation.nodeId));
+                break;
+            }
+
+            case 'add_edge': {
+                setEdges((eds) => [
+                    ...eds,
+                    {
+                        id: operation.edge.id,
+                        source: operation.edge.source,
+                        target: operation.edge.target,
+                        type: operation.edge.type || 'custom',
+                        data: operation.edge.data,
+                    },
+                ]);
+                break;
+            }
+
+            case 'edit_edge': {
+                setEdges((eds) => eds.map((edge) => {
+                    if (edge.id !== operation.edgeId) return edge;
+                    const nextData = operation.changes.data
+                        ? { ...(edge.data as EdgeData | undefined), ...operation.changes.data }
+                        : edge.data;
+
+                    return {
+                        ...edge,
+                        source: operation.changes.source || edge.source,
+                        target: operation.changes.target || edge.target,
+                        type: operation.changes.type || edge.type,
+                        data: nextData,
+                    };
+                }));
+                break;
+            }
+
+            case 'delete_edge': {
+                setEdges((eds) => eds.filter((edge) => edge.id !== operation.edgeId));
+                break;
+            }
+        }
+    }, [saveToHistory, selectedNode, setEdges, setNodes]);
 
     const nodeEditCtx = useMemo(() => ({ onUpdateNode: handleUpdateNode }), [handleUpdateNode]);
 
@@ -572,6 +667,7 @@ function FlowCanvas() {
                             onDeleteChat={proj.deleteChatSession}
                             getCachedFiles={handleGetCachedFiles}
                             cachedFilePaths={fileExplorer.cachedPaths}
+                            onApplyCanvasWrite={handleApplyChatWrite}
                             onClose={() => setIsChatOpen(false)}
                         />
                     </div>

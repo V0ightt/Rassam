@@ -114,6 +114,57 @@ export interface ChatMessage {
   };
 }
 
+export type ChatMode = 'ask' | 'agent';
+
+export interface ChatCanvasNodePayload {
+  id: string;
+  type?: string;
+  position: { x: number; y: number };
+  data: NodeData;
+}
+
+export interface ChatCanvasEdgePayload {
+  id: string;
+  source: string;
+  target: string;
+  type?: string;
+  data?: EdgeData;
+}
+
+export type ChatCanvasWriteOperation =
+  | {
+      action: 'add_node';
+      node: ChatCanvasNodePayload;
+      summary?: string;
+    }
+  | {
+      action: 'edit_node';
+      nodeId: string;
+      changes: Partial<NodeData> & { position?: { x: number; y: number } };
+      summary?: string;
+    }
+  | {
+      action: 'delete_node';
+      nodeId: string;
+      summary?: string;
+    }
+  | {
+      action: 'add_edge';
+      edge: ChatCanvasEdgePayload;
+      summary?: string;
+    }
+  | {
+      action: 'edit_edge';
+      edgeId: string;
+      changes: Partial<ChatCanvasEdgePayload>;
+      summary?: string;
+    }
+  | {
+      action: 'delete_edge';
+      edgeId: string;
+      summary?: string;
+    };
+
 // Chat session for history
 export interface ChatSession {
   id: string;

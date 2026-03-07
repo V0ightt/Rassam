@@ -11,7 +11,6 @@ import {
   Folder, 
   Trash2, 
   RefreshCw,
-  ChevronDown,
   Copy,
   Check,
   Lightbulb,
@@ -24,7 +23,6 @@ import {
   Settings,
   Package,
   History,
-  ChevronRight,
   X,
   Square
 } from 'lucide-react';
@@ -33,6 +31,7 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Edge, Node } from 'reactflow';
 import { CanvasSyncSnapshot, ChatSession, ChatMessage, EdgeData, NodeData } from '@/types';
+import type { ChatCanvasWriteOperation, ChatMode } from '@/types';
 import { LLMProviderId } from '@/lib/llm';
 import {
   loadModelSettings,
@@ -62,8 +61,18 @@ interface ChatbotProps {
   getCachedFiles?: (paths: string[]) => Promise<Record<string, string>>;
   /** All file paths that are cached for the current project. */
   cachedFilePaths?: Set<string>;
+  onApplyCanvasWrite?: (operation: ChatCanvasWriteOperation) => void;
   onClose?: () => void;
 }
+
+type ChatStreamEvent =
+  | { type: 'status'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'write'; operation: ChatCanvasWriteOperation; text?: string }
+  | { type: 'error'; text: string }
+  | { type: 'done' };
+
+const CHAT_MODE_STORAGE_KEY = 'repoAgent_chatMode';
 
 // Quick action prompts
 const quickActions = [
@@ -105,6 +114,7 @@ export default function EnhancedChatbot({
   onDeleteChat,
   getCachedFiles,
   cachedFilePaths,
+  onApplyCanvasWrite,
   onClose,
 }: ChatbotProps) {
   const [input, setInput] = useState("");
@@ -115,6 +125,7 @@ export default function EnhancedChatbot({
   const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<ChatMode>('ask');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -143,7 +154,20 @@ export default function EnhancedChatbot({
     if (selectedNode) {
       setShowQuickActions(true);
     }
-  }, [selectedNode?.id]);
+  }, [selectedNode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+    if (stored === 'agent' || stored === 'ask') {
+      setChatMode(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode);
+  }, [chatMode]);
 
   const syncSettings = useCallback((statusPayload: ProviderStatusResponse) => {
     const loaded = loadModelSettings();
@@ -231,6 +255,38 @@ export default function EnhancedChatbot({
     setModelSettings(sanitized);
     saveModelSettings(sanitized);
   }, [modelSettings, providerStatus]);
+
+  const appendToolStatus = useCallback((content: string, status: string) => {
+    return `${content}${content ? '\n\n' : ''}> [tool] ${status}`;
+  }, []);
+
+  const sanitizeHistoryContent = useCallback((content: string) => {
+    return content.replace(/^> \[tool\].*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  }, []);
+
+  const applyStreamEvent = useCallback((
+    event: ChatStreamEvent,
+    currentContent: string,
+  ) => {
+    if (event.type === 'status') {
+      return appendToolStatus(currentContent, event.text);
+    }
+
+    if (event.type === 'text') {
+      return `${currentContent}${event.text}`;
+    }
+
+    if (event.type === 'write') {
+      onApplyCanvasWrite?.(event.operation);
+      return event.text ? appendToolStatus(currentContent, event.text) : currentContent;
+    }
+
+    if (event.type === 'error') {
+      return `${currentContent}${currentContent ? '\n\n' : ''}❌ ${event.text}`;
+    }
+
+    return currentContent;
+  }, [appendToolStatus, onApplyCanvasWrite]);
 
   const handleSend = async (messageText?: string) => {
     const text = messageText || input;
@@ -372,6 +428,7 @@ export default function EnhancedChatbot({
         signal: abortController.signal,
         body: JSON.stringify({ 
           message: text, 
+          chatMode,
           context: selectedNode ? selectedNode.data : null,
           repoDetails: repoDetails,
           canvasContext,
@@ -386,7 +443,7 @@ export default function EnhancedChatbot({
           // Send conversation history (prior messages, excluding the just-added user message)
           history: messages
             .filter(m => m.role === 'user' || m.role === 'assistant')
-            .map(m => ({ role: m.role, content: m.content })),
+            .map(m => ({ role: m.role, content: sanitizeHistoryContent(m.content) })),
         })
       });
 
@@ -409,6 +466,7 @@ export default function EnhancedChatbot({
       const decoder = new TextDecoder();
       const assistantMsgId = (Date.now() + 1).toString();
       let streamedContent = '';
+      let buffer = '';
 
       const assistantMsg: ChatMessage = {
         id: assistantMsgId,
@@ -424,7 +482,35 @@ export default function EnhancedChatbot({
         const { done, value } = await reader.read();
         if (done) break;
 
-        streamedContent += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          let event: ChatStreamEvent | null = null;
+          try {
+            event = JSON.parse(line) as ChatStreamEvent;
+          } catch {
+            event = { type: 'text', text: line };
+          }
+
+          streamedContent = applyStreamEvent(event, streamedContent);
+          const updated = messagesWithAssistant.map(m =>
+            m.id === assistantMsgId ? { ...m, content: streamedContent } : m
+          );
+          updateTargetSessionMessages(targetSessionId, updated);
+        }
+      }
+
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer) as ChatStreamEvent;
+          streamedContent = applyStreamEvent(event, streamedContent);
+        } catch {
+          streamedContent += buffer;
+        }
 
         const updated = messagesWithAssistant.map(m =>
           m.id === assistantMsgId ? { ...m, content: streamedContent } : m
@@ -754,6 +840,21 @@ export default function EnhancedChatbot({
                 </option>
               ))
             )}
+          </select>
+          <select
+            value={chatMode}
+            onChange={(e) => setChatMode(e.target.value as ChatMode)}
+            disabled={loading}
+            className={cn(
+              "bg-slate-800 border rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-cyan-500 capitalize cursor-pointer",
+              chatMode === 'agent'
+                ? "border-cyan-500/50 text-cyan-300"
+                : "border-slate-700 text-slate-300",
+            )}
+            title={chatMode === 'ask' ? 'Read-only tools' : 'Read + write canvas tools'}
+          >
+            <option value="ask">Ask</option>
+            <option value="agent">Agent</option>
           </select>
         </div>
         {modelError && (
