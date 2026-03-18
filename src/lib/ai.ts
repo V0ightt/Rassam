@@ -152,15 +152,13 @@ Return JSON in this exact format:
 export function buildSystemMessage(
   context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: SyncedCanvasNode[] | null,
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
   message?: string,
   cachedFiles?: Record<string, string> | null,
 ): string {
-  const snapshotNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
-  const normalizedNodes: SyncedCanvasNode[] = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
+  const normalizedNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
 
   const projectOverview = normalizedNodes.length > 0
     ? `\n\nPROJECT OVERVIEW (${normalizedNodes.length} components):
@@ -172,7 +170,7 @@ ${normalizedNodes.map((node: SyncedCanvasNode) => `- **${node.label}** (${node.c
     ? `\n\nCANVAS STRUCTURE:
 - Project: ${canvasContext.project?.name || 'Untitled'}${canvasContext.project?.source ? ` (${canvasContext.project.source})` : ''}
 - Layout: ${canvasContext.layoutDirection || 'TB'}
-- Nodes: ${snapshotNodes.length}
+- Nodes: ${normalizedNodes.length}
 - Edges: ${snapshotEdges.length}
 - Selected Node: ${canvasContext.selectedNodeLabel || 'None'}
 - Last Sync: ${canvasContext.syncedAt || 'Unknown'}
@@ -290,7 +288,6 @@ export function chatStreamWithContext(
   message: string,
   context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: SyncedCanvasNode[] | null,
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
@@ -299,7 +296,7 @@ export function chatStreamWithContext(
   cachedFiles?: Record<string, string> | null,
 ): AsyncIterable<string> {
   const systemMessage = buildSystemMessage(
-    context, repoDetails, allNodesContext, canvasContext,
+    context, repoDetails, canvasContext,
     readmeContent, specificFile, message, cachedFiles
   );
 

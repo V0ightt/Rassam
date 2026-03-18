@@ -368,16 +368,6 @@ export default memo(function EnhancedChatbot({
 
       const canvasContext = syncedCanvasContext || liveCanvasContext;
 
-      const allNodesContext = canvasContext.nodes.map(n => ({
-        id: n.id,
-        label: n.label,
-        category: n.category,
-        description: n.description,
-        files: n.files,
-        complexity: n.complexity,
-        dependencies: n.dependencies,
-      }));
-
       // Create AbortController for this request
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
@@ -424,13 +414,11 @@ export default memo(function EnhancedChatbot({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ 
-          message: text, 
+        body: JSON.stringify({
+          message: text,
           chatMode,
-          context: selectedNode ? selectedNode.data : null,
           repoDetails: repoDetails,
           canvasContext,
-          allNodesContext: allNodesContext,
           cachedFiles: cachedFileContents,
           modelSettings: {
             providerId: selectedOption.providerId,

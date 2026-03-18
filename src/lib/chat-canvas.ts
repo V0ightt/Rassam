@@ -86,7 +86,6 @@ export type ToolTranscriptEntry = {
 
 export function createWorkingCanvasState(
   canvasContext: CanvasSyncSnapshot | null | undefined,
-  allNodesContext: SyncedCanvasNode[] | null | undefined,
   repoDetails?: { owner: string; repo: string } | null,
 ): WorkingCanvasState {
   return {
@@ -99,7 +98,7 @@ export function createWorkingCanvasState(
     layoutDirection: canvasContext?.layoutDirection || 'TB',
     selectedNodeId: canvasContext?.selectedNodeId || null,
     selectedNodeLabel: canvasContext?.selectedNodeLabel || null,
-    nodes: (canvasContext?.nodes || allNodesContext || []).map((node) => ({ ...node })),
+    nodes: (canvasContext?.nodes || []).map((node) => ({ ...node })),
     edges: (canvasContext?.edges || []).map((edge) => ({ ...edge })),
   };
 }

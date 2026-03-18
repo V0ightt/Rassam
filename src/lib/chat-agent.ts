@@ -6,7 +6,6 @@ import type {
   ChatCanvasWriteOperation,
   ChatMode,
   NodeData,
-  SyncedCanvasNode,
 } from '@/types';
 import type { ToolTranscriptEntry, WorkingCanvasState } from '@/lib/chat-canvas';
 import {
@@ -52,7 +51,6 @@ interface StreamChatResponseParams extends ReadToolContext {
   mode: ChatMode;
   context: NodeData | null;
   repoDetails?: { owner: string; repo: string } | null;
-  allNodesContext?: SyncedCanvasNode[] | null;
   canvasContext?: CanvasSyncSnapshot | null;
   readmeContent?: string | null;
   specificFile?: { path: string; content: string | null } | null;
@@ -526,7 +524,6 @@ export async function* streamChatResponse(
     mode,
     context,
     repoDetails,
-    allNodesContext,
     canvasContext,
     readmeContent,
     specificFile,
@@ -540,7 +537,6 @@ export async function* streamChatResponse(
   const baseSystemMessage = buildSystemMessage(
     context,
     repoDetails,
-    allNodesContext,
     canvasContext,
     readmeContent,
     specificFile,
@@ -574,7 +570,7 @@ export async function* streamChatResponse(
   }
 
   // ── Tool-assisted path: planner loop ──
-  const workingState = createWorkingCanvasState(canvasContext, allNodesContext, repoDetails);
+  const workingState = createWorkingCanvasState(canvasContext, repoDetails);
   const transcript: ToolTranscriptEntry[] = [];
   const requiresCanvasWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message);
   let fallbackFinalContent: string | undefined;

@@ -69,9 +69,7 @@ export async function POST(req: NextRequest) {
         const {
             message,
             chatMode,
-            context,
             repoDetails,
-            allNodesContext,
             canvasContext,
             modelSettings,
             history,
@@ -81,6 +79,11 @@ export async function POST(req: NextRequest) {
         if (!message) {
             return NextResponse.json({ error: "Message is required" }, { status: 400 });
         }
+
+        // Derive context from canvasContext using selectedNodeId (avoids redundant payload)
+        const context = canvasContext?.selectedNodeId
+            ? canvasContext.nodes?.find((n: { id: string }) => n.id === canvasContext.selectedNodeId) ?? null
+            : null;
 
         // Detect what content we need to fetch
         const { needsReadme, specificFile } = detectFileQueryIntent(message);
@@ -212,7 +215,6 @@ export async function POST(req: NextRequest) {
             mode,
             context: context || null,
             repoDetails,
-            allNodesContext,
             canvasContext,
             readmeContent,
             specificFile: specificFile ? { path: specificFile, content: fileContent } : null,
