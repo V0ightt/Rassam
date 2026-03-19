@@ -82,6 +82,12 @@ export type ToolTranscriptEntry = {
   result: unknown;
 };
 
+export type ToolTranscriptSummaryMode = 'planner' | 'final';
+
+interface SummarizeToolTranscriptOptions {
+  mode?: ToolTranscriptSummaryMode;
+}
+
 // ── Canvas state constructors / queries ──
 
 export function createWorkingCanvasState(
@@ -126,28 +132,159 @@ export function summarizeCanvasState(state: WorkingCanvasState): string {
   ].join('\n');
 }
 
-export function summarizeToolTranscript(transcript: ToolTranscriptEntry[]): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function formatPlannerResult(entry: ToolTranscriptEntry): string {
+  if (typeof entry.result === 'string') {
+    return entry.result;
+  }
+
+  const result = isRecord(entry.result) ? entry.result : null;
+  if (entry.tool === 'read' && typeof result?.content === 'string') {
+    const content = result.content;
+    const truncatedContent = content.length > 10000
+      ? `${content.slice(0, 10000)}\n... (truncated ${content.length - 10000} chars)`
+      : content;
+    return JSON.stringify({ ...result, content: truncatedContent }, null, 2);
+  }
+
+  return JSON.stringify(entry.result, null, 2);
+}
+
+function summarizeFinalReadResult(result: Record<string, unknown>): Record<string, unknown> {
+  const content = typeof result.content === 'string' ? result.content : null;
+  const candidates = Array.isArray(result.candidates)
+    ? result.candidates.filter((value): value is string => typeof value === 'string').slice(0, 10)
+    : undefined;
+  const truncated = typeof content === 'string'
+    && (
+      content.includes('\n...\n')
+      || content.includes('... (truncated)')
+      || content.includes('[tail]')
+    );
+
+  return {
+    ok: result.ok === true,
+    path: typeof result.path === 'string' ? result.path : undefined,
+    resolvedPath: typeof result.resolvedPath === 'string' ? result.resolvedPath : undefined,
+    resolutionStrategy: typeof result.resolutionStrategy === 'string' ? result.resolutionStrategy : undefined,
+    candidates,
+    source: typeof result.source === 'string' ? result.source : undefined,
+    contentChars: content?.length ?? 0,
+    contentTruncated: truncated,
+    error: typeof result.error === 'string' ? result.error : undefined,
+  };
+}
+
+function summarizeFinalSessionResult(
+  input: Record<string, unknown> | undefined,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    ok: result.ok === true,
+    action: typeof input?.action === 'string' ? input.action : typeof result.action === 'string' ? result.action : undefined,
+    scope: typeof input?.scope === 'string' ? input.scope : typeof result.scope === 'string' ? result.scope : undefined,
+    entity: typeof input?.entity === 'string' ? input.entity : typeof result.entity === 'string' ? result.entity : undefined,
+    query: typeof input?.query === 'string' ? input.query : typeof result.query === 'string' ? result.query : undefined,
+    nodeCount: typeof result.nodeCount === 'number' ? result.nodeCount : undefined,
+    edgeCount: typeof result.edgeCount === 'number' ? result.edgeCount : undefined,
+    totalNodes: typeof result.totalNodes === 'number' ? result.totalNodes : undefined,
+    totalEdges: typeof result.totalEdges === 'number' ? result.totalEdges : undefined,
+    selectedNodeId: typeof result.selectedNodeId === 'string' ? result.selectedNodeId : undefined,
+    selectedNodeLabel: typeof result.selectedNodeLabel === 'string' ? result.selectedNodeLabel : undefined,
+    nodeId: isRecord(result.node) && typeof result.node.id === 'string' ? result.node.id : undefined,
+    nodeLabel: isRecord(result.node) && typeof result.node.label === 'string' ? result.node.label : undefined,
+    edgeId: isRecord(result.edge) && typeof result.edge.id === 'string' ? result.edge.id : undefined,
+    matches: Array.isArray(result.nodes) || Array.isArray(result.edges)
+      ? {
+          nodes: Array.isArray(result.nodes) ? result.nodes.length : 0,
+          edges: Array.isArray(result.edges) ? result.edges.length : 0,
+        }
+      : undefined,
+    error: typeof result.error === 'string' ? result.error : undefined,
+  };
+
+  return Object.fromEntries(
+    Object.entries(summary).filter(([, value]) => value !== undefined),
+  );
+}
+
+function summarizeFinalWriteResult(
+  tool: ToolTranscriptEntry['tool'],
+  input: Record<string, unknown> | undefined,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const target = isRecord(input?.target) ? input?.target : undefined;
+  const edgeInput = isRecord(input?.edge) ? input?.edge : undefined;
+  const nodeInput = isRecord(input?.node) ? input?.node : undefined;
+
+  const action = typeof input?.action === 'string'
+    ? input.action
+    : typeof result.action === 'string'
+      ? result.action
+      : undefined;
+
+  const summary: Record<string, unknown> = {
+    tool,
+    ok: result.ok === true,
+    action,
+    operationCount: tool === 'write_batch' && Array.isArray(input?.operations) ? input.operations.length : undefined,
+    nodeId: typeof result.nodeId === 'string' ? result.nodeId : typeof input?.id === 'string' ? input.id : undefined,
+    edgeId: typeof result.edgeId === 'string' ? result.edgeId : undefined,
+    label: typeof result.label === 'string'
+      ? result.label
+      : typeof nodeInput?.label === 'string'
+        ? nodeInput.label
+        : typeof target?.label === 'string'
+          ? target.label
+          : typeof input?.label === 'string'
+            ? input.label
+            : undefined,
+    sourceLabel: typeof edgeInput?.sourceLabel === 'string' ? edgeInput.sourceLabel : undefined,
+    targetLabel: typeof edgeInput?.targetLabel === 'string' ? edgeInput.targetLabel : undefined,
+    sourceId: typeof result.sourceId === 'string' ? result.sourceId : undefined,
+    targetId: typeof result.targetId === 'string' ? result.targetId : undefined,
+    error: typeof result.error === 'string' ? result.error : undefined,
+  };
+
+  return Object.fromEntries(
+    Object.entries(summary).filter(([, value]) => value !== undefined),
+  );
+}
+
+function formatFinalResult(entry: ToolTranscriptEntry): string {
+  if (!isRecord(entry.result)) {
+    return typeof entry.result === 'string'
+      ? JSON.stringify({ text: stripLargeContent(entry.result, 300) }, null, 2)
+      : JSON.stringify(entry.result, null, 2);
+  }
+
+  if (entry.tool === 'read') {
+    return JSON.stringify(summarizeFinalReadResult(entry.result), null, 2);
+  }
+
+  if (entry.tool === 'session') {
+    return JSON.stringify(summarizeFinalSessionResult(entry.input, entry.result), null, 2);
+  }
+
+  return JSON.stringify(summarizeFinalWriteResult(entry.tool, entry.input, entry.result), null, 2);
+}
+
+export function summarizeToolTranscript(
+  transcript: ToolTranscriptEntry[],
+  options: SummarizeToolTranscriptOptions = {},
+): string {
   if (transcript.length === 0) return 'No tool calls yet.';
 
+  const mode = options.mode || 'planner';
+
   return transcript.map((entry, index) => {
-    let resultText: string;
-    if (typeof entry.result === 'string') {
-      resultText = entry.result;
-    } else {
-      // For read results with file content, keep more content
-      // so the planner has enough context to build architecture diagrams
-      const result = entry.result as Record<string, unknown> | null;
-      if (entry.tool === 'read' && result?.content && typeof result.content === 'string') {
-        const content = result.content as string;
-        // Keep up to 10000 chars of file content for architecture analysis
-        const truncatedContent = content.length > 10000
-          ? `${content.slice(0, 10000)}\n... (truncated ${content.length - 10000} chars)`
-          : content;
-        resultText = JSON.stringify({ ...result, content: truncatedContent }, null, 2);
-      } else {
-        resultText = JSON.stringify(entry.result, null, 2);
-      }
-    }
+    const resultText = mode === 'final'
+      ? formatFinalResult(entry)
+      : formatPlannerResult(entry);
+
     return [
       `Step ${index + 1}`,
       `Tool: ${entry.tool}`,

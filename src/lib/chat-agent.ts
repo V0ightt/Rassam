@@ -1,6 +1,7 @@
 import { buildSystemMessage } from '@/lib/ai';
+import type { FileResolutionStrategy } from '@/lib/chat-file-resolution';
 import { getProvider } from '@/lib/llm';
-import type { ChatHistoryMessage } from '@/lib/llm/types';
+import type { ChatHistoryMessage, LLMProvider } from '@/lib/llm/types';
 import type {
   CanvasSyncSnapshot,
   ChatCanvasWriteOperation,
@@ -20,7 +21,6 @@ import {
 } from '@/lib/chat-parse';
 import type { PlannerDecision, WritePlanResult } from '@/lib/chat-parse';
 import {
-  autoLayoutWorkingState,
   executeReadTool,
   executeSessionTool,
   executeWriteBatch,
@@ -40,6 +40,9 @@ interface ReadToolResult {
   content: string | null;
   source: 'cache' | 'github' | 'missing';
   path: string;
+  resolvedPath?: string | null;
+  resolutionStrategy?: FileResolutionStrategy;
+  candidates?: string[];
 }
 
 interface ReadToolContext {
@@ -57,6 +60,7 @@ interface StreamChatResponseParams extends ReadToolContext {
   runtimeSettings?: ChatRuntimeSettings;
   history?: ChatHistoryMessage[];
   cachedFiles?: Record<string, string> | null;
+  providerOverride?: LLMProvider;
 }
 
 export type ChatStreamEvent =
@@ -78,6 +82,10 @@ function clampMaxTokens(value?: number): number {
 function clampTemperature(value?: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0.7;
   return Math.min(1, Math.max(0, value));
+}
+
+function supportsStructuredOutput(provider: LLMProvider): boolean {
+  return provider.id === 'openai' || provider.id === 'deepseek';
 }
 
 // ── Prompt builders ──
@@ -204,7 +212,7 @@ function buildPlannerMessage(
     summarizeCanvasState(state),
     '',
     'Tool transcript so far:',
-    summarizeToolTranscript(transcript),
+    summarizeToolTranscript(transcript, { mode: 'planner' }),
   ];
 
   if (needsWriteReminder) {
@@ -260,6 +268,17 @@ function buildFallbackWriteSystemPrompt(): string {
   ].join('\n');
 }
 
+function buildRepairWriteSystemPrompt(): string {
+  return [
+    'You repair invalid model output into a valid Rassam canvas write plan.',
+    'Return EXACTLY one raw JSON object and nothing else.',
+    'Required schema: {"operations":[...],"summary":"..."}',
+    'Allowed actions: add_node, edit_node, delete_node, add_edge, edit_edge, delete_edge.',
+    'Preserve the user intent and existing operation details when possible.',
+    'If the draft does not contain usable canvas writes, return {"operations":[],"summary":"No valid canvas operations could be repaired."}.',
+  ].join('\n');
+}
+
 function buildFinalSystemMessage(
   baseSystemMessage: string,
   mode: ChatMode,
@@ -276,8 +295,8 @@ function buildFinalSystemMessage(
     'LIVE CANVAS STATE FOR THIS TURN:',
     summarizeCanvasState(state),
     '',
-    'TOOL TRANSCRIPT FOR THIS TURN:',
-    summarizeToolTranscript(transcript),
+    'TOOL ACTIVITY SUMMARY FOR THIS TURN:',
+    summarizeToolTranscript(transcript, { mode: 'final' }),
     '',
     'FINAL RESPONSE RULES:',
     '- Answer the user directly and clearly.',
@@ -285,6 +304,105 @@ function buildFinalSystemMessage(
     `- ${modeInstruction}`,
     '- Keep markdown readable and concise.',
   ].join('\n');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isPositionOnlyNodeEdit(operation: ChatCanvasWriteOperation): boolean {
+  return operation.action === 'edit_node'
+    && Object.keys(operation.changes).length === 1
+    && 'position' in operation.changes;
+}
+
+function formatList(items: string[], limit = 8): string {
+  if (items.length <= limit) return items.join(', ');
+  return `${items.slice(0, limit).join(', ')}, and ${items.length - limit} more`;
+}
+
+function resolveNodeLabelById(state: WorkingCanvasState, nodeId: string): string {
+  return state.nodes.find((node) => node.id === nodeId)?.label || nodeId;
+}
+
+function buildTransactionalWriteSuccessSummary(
+  operations: ChatCanvasWriteOperation[],
+  state: WorkingCanvasState,
+): string {
+  const addedNodes = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'add_node' }> => operation.action === 'add_node')
+    .map((operation) => operation.node.data.label);
+  const editedNodes = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'edit_node' }> => operation.action === 'edit_node' && !isPositionOnlyNodeEdit(operation))
+    .map((operation) => resolveNodeLabelById(state, operation.nodeId));
+  const deletedNodes = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'delete_node' }> => operation.action === 'delete_node')
+    .map((operation) => operation.nodeId);
+  const addedEdges = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'add_edge' }> => operation.action === 'add_edge')
+    .map((operation) => `${resolveNodeLabelById(state, operation.edge.source)} -> ${resolveNodeLabelById(state, operation.edge.target)}`);
+  const editedEdges = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'edit_edge' }> => operation.action === 'edit_edge')
+    .map((operation) => operation.edgeId);
+  const deletedEdges = operations
+    .filter((operation): operation is Extract<ChatCanvasWriteOperation, { action: 'delete_edge' }> => operation.action === 'delete_edge')
+    .map((operation) => operation.edgeId);
+  const layoutCount = operations.filter((operation) => isPositionOnlyNodeEdit(operation)).length;
+
+  const summaryParts: string[] = [];
+  if (addedNodes.length) summaryParts.push(`added ${addedNodes.length} node${addedNodes.length === 1 ? '' : 's'}`);
+  if (editedNodes.length) summaryParts.push(`updated ${editedNodes.length} node${editedNodes.length === 1 ? '' : 's'}`);
+  if (deletedNodes.length) summaryParts.push(`deleted ${deletedNodes.length} node${deletedNodes.length === 1 ? '' : 's'}`);
+  if (addedEdges.length) summaryParts.push(`added ${addedEdges.length} edge${addedEdges.length === 1 ? '' : 's'}`);
+  if (editedEdges.length) summaryParts.push(`updated ${editedEdges.length} edge${editedEdges.length === 1 ? '' : 's'}`);
+  if (deletedEdges.length) summaryParts.push(`deleted ${deletedEdges.length} edge${deletedEdges.length === 1 ? '' : 's'}`);
+
+  const lines = [
+    `Updated the live canvas${summaryParts.length ? `: ${summaryParts.join(', ')}.` : '.'}`,
+  ];
+
+  if (addedNodes.length > 0) {
+    lines.push(`Nodes: ${formatList(addedNodes)}`);
+  }
+
+  if (addedEdges.length > 0) {
+    lines.push(`Edges: ${formatList(addedEdges)}`);
+  }
+
+  if (editedNodes.length > 0) {
+    lines.push(`Updated nodes: ${formatList(editedNodes)}`);
+  }
+
+  if (layoutCount > 0) {
+    lines.push(`Auto-layout repositioned ${layoutCount} node${layoutCount === 1 ? '' : 's'}.`);
+  }
+
+  lines.push('Use Sync if you want later chat turns to use this exact canvas snapshot.');
+  return lines.join('\n\n');
+}
+
+function buildTransactionalWriteFailureMessage(transcript: ToolTranscriptEntry[]): string {
+  const lastFailure = [...transcript].reverse().find((entry) => {
+    if (!isRecord(entry.result)) return false;
+    return entry.result.ok === false || entry.result.error;
+  });
+
+  if (lastFailure && isRecord(lastFailure.result)) {
+    const result = lastFailure.result;
+    if (
+      result.resolutionStrategy === 'ambiguous'
+      && Array.isArray(result.candidates)
+      && result.candidates.length > 0
+    ) {
+      return `I could not update the canvas because the file reference was ambiguous. Choose one of: ${result.candidates.join(', ')}. No canvas changes were applied.`;
+    }
+
+    if (typeof result.error === 'string' && result.error.trim()) {
+      return `I could not update the canvas. ${result.error.trim()} No canvas changes were applied.`;
+    }
+  }
+
+  return 'I could not apply any canvas changes for this request. No canvas changes were applied.';
 }
 
 // ── Intent detection ──
@@ -400,9 +518,9 @@ async function planNextStep(
   mode: ChatMode,
   state: WorkingCanvasState,
   transcript: ToolTranscriptEntry[],
+  provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
 ): Promise<PlannerDecision> {
-  const provider = getProvider(runtimeSettings?.providerId);
   const hasReadInTranscript = transcript.some((e) => e.tool === 'read');
   const hasWriteInTranscript = hasSuccessfulWrite(transcript);
   const needsWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message) && hasReadInTranscript && !hasWriteInTranscript;
@@ -419,6 +537,7 @@ async function planNextStep(
         temperature: attempt === 0 ? 0.15 : 0.05, // Lower temperature on retries
         maxTokens: 4096,
         model: runtimeSettings?.model || undefined,
+        structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
       });
 
       const decision = safeJsonParse(raw);
@@ -461,10 +580,9 @@ async function generateFallbackWritePlan(
   message: string,
   state: WorkingCanvasState,
   transcript: ToolTranscriptEntry[],
+  provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
 ): Promise<WritePlanResult | null> {
-  const provider = getProvider(runtimeSettings?.providerId);
-
   try {
     const raw = await provider.chat({
       system: buildFallbackWriteSystemPrompt(),
@@ -475,21 +593,61 @@ async function generateFallbackWritePlan(
         summarizeCanvasState(state),
         '',
         'Tool transcript:',
-        summarizeToolTranscript(transcript),
+        summarizeToolTranscript(transcript, { mode: 'planner' }),
         '',
         'OUTPUT ONLY THE JSON OBJECT. No code blocks. No explanation.',
       ].join('\n'),
       temperature: 0.1,
       maxTokens: 4096,
       model: runtimeSettings?.model || undefined,
+      structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
     });
 
-    // Try standard JSON parse first
     const jsonResult = safeJsonParseWritePlan(raw);
     if (jsonResult) return jsonResult;
 
-    // Fall back to code-output extraction (handles Python dicts, code blocks, etc.)
+    const repaired = await repairFallbackWritePlan(raw, message, state, transcript, provider, runtimeSettings);
+    if (repaired) return repaired;
+
     return tryExtractWriteBatchFromCodeOutput(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function repairFallbackWritePlan(
+  rawDraft: string,
+  message: string,
+  state: WorkingCanvasState,
+  transcript: ToolTranscriptEntry[],
+  provider: LLMProvider,
+  runtimeSettings: ChatRuntimeSettings | undefined,
+): Promise<WritePlanResult | null> {
+  try {
+    const repairedRaw = await provider.chat({
+      system: buildRepairWriteSystemPrompt(),
+      message: [
+        `Original user request: ${message}`,
+        '',
+        'Current canvas state:',
+        summarizeCanvasState(state),
+        '',
+        'Tool transcript:',
+        summarizeToolTranscript(transcript, { mode: 'planner' }),
+        '',
+        'Invalid draft response to repair:',
+        rawDraft.slice(0, 12000),
+      ].join('\n'),
+      temperature: 0,
+      maxTokens: 4096,
+      model: runtimeSettings?.model || undefined,
+      structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+    });
+
+    const jsonResult = safeJsonParseWritePlan(repairedRaw);
+    if (jsonResult) return jsonResult;
+
+    return tryExtractWriteBatchFromCodeOutput(repairedRaw);
   } catch {
     return null;
   }
@@ -516,6 +674,14 @@ async function* streamTextContent(text: string): AsyncIterable<ChatStreamEvent> 
 
 // ── Main entry point ──
 
+export const __test__ = {
+  buildPlannerMessage,
+  buildFinalSystemMessage,
+  requestLikelyNeedsCanvasWrite,
+  buildTransactionalWriteSuccessSummary,
+  buildTransactionalWriteFailureMessage,
+};
+
 export async function* streamChatResponse(
   params: StreamChatResponseParams,
 ): AsyncIterable<ChatStreamEvent> {
@@ -531,9 +697,10 @@ export async function* streamChatResponse(
     history,
     cachedFiles,
     readFile,
+    providerOverride,
   } = params;
 
-  const provider = getProvider(runtimeSettings?.providerId);
+  const provider = providerOverride || getProvider(runtimeSettings?.providerId);
   const baseSystemMessage = buildSystemMessage(
     context,
     repoDetails,
@@ -573,6 +740,7 @@ export async function* streamChatResponse(
   const workingState = createWorkingCanvasState(canvasContext, repoDetails);
   const transcript: ToolTranscriptEntry[] = [];
   const requiresCanvasWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message);
+  const appliedOperations: ChatCanvasWriteOperation[] = [];
   let fallbackFinalContent: string | undefined;
 
   for (let step = 0; step < 25; step += 1) {
@@ -581,6 +749,7 @@ export async function* streamChatResponse(
       mode,
       workingState,
       transcript,
+      provider,
       runtimeSettings,
     );
 
@@ -620,6 +789,7 @@ export async function* streamChatResponse(
       // Emit each successful write operation to client
       for (const { result, operation } of results) {
         if (operation) {
+          appliedOperations.push(operation);
           yield {
             type: 'write' as const,
             operation,
@@ -637,6 +807,7 @@ export async function* streamChatResponse(
       if (layoutOps.length > 0) {
         yield { type: 'status' as const, text: `Auto-laying out ${workingState.nodes.length} nodes` };
         for (const layoutOp of layoutOps) {
+          appliedOperations.push(layoutOp);
           yield {
             type: 'write' as const,
             operation: layoutOp,
@@ -652,6 +823,7 @@ export async function* streamChatResponse(
     const { result, operation } = executeWriteTool(workingState, input, transcript);
     transcript.push({ tool: 'write', input, result });
     if (operation) {
+      appliedOperations.push(operation);
       yield {
         type: 'write',
         operation,
@@ -670,6 +842,7 @@ export async function* streamChatResponse(
       message,
       workingState,
       transcript,
+      provider,
       runtimeSettings,
     );
 
@@ -677,26 +850,33 @@ export async function* streamChatResponse(
       fallbackFinalContent = fallbackPlan.summary;
     }
 
-    // Execute fallback operations
-    for (const operationInput of fallbackPlan?.operations || []) {
-      const { result, operation } = executeWriteTool(workingState, operationInput, transcript);
-      transcript.push({ tool: 'write', input: operationInput, result });
+    if (fallbackPlan?.operations?.length) {
+      const { results, layoutOps } = executeWriteBatch(
+        workingState,
+        { operations: fallbackPlan.operations },
+        transcript,
+      );
 
-      if (operation) {
-        yield {
-          type: 'write',
-          operation,
-          text: operation.summary || 'Applied canvas change.',
-        };
+      for (const { result, operation } of results) {
+        if (operation) {
+          appliedOperations.push(operation);
+          yield {
+            type: 'write',
+            operation,
+            text: operation.summary || 'Applied canvas change.',
+          };
+        }
+
+        if (isRecord(result) && result.ok === false) {
+          const errMsg = typeof result.error === 'string' ? result.error : 'Write operation failed';
+          yield { type: 'status', text: `⚠ ${errMsg}` };
+        }
       }
-    }
 
-    // Auto-layout after fallback writes too
-    if (hasSuccessfulWrite(transcript)) {
-      const layoutOps = autoLayoutWorkingState(workingState);
       if (layoutOps.length > 0) {
         yield { type: 'status', text: `Auto-laying out ${workingState.nodes.length} nodes` };
         for (const layoutOp of layoutOps) {
+          appliedOperations.push(layoutOp);
           yield {
             type: 'write',
             operation: layoutOp,
@@ -705,6 +885,19 @@ export async function* streamChatResponse(
         }
       }
     }
+  }
+
+  if (requiresCanvasWrite) {
+    if (!hasSuccessfulWrite(transcript)) {
+      yield { type: 'error', text: buildTransactionalWriteFailureMessage(transcript) };
+      yield { type: 'done' };
+      return;
+    }
+
+    const summaryText = buildTransactionalWriteSuccessSummary(appliedOperations, workingState);
+    yield* streamTextContent(summaryText);
+    yield { type: 'done' };
+    return;
   }
 
   try {

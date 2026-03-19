@@ -21,11 +21,18 @@ export async function POST(req: NextRequest) {
 
     const content = await getFileContent(owner, repo, path);
 
+    if (content === null) {
+      return NextResponse.json(
+        { error: 'File content not available' },
+        { status: 404 },
+      );
+    }
+
     return NextResponse.json({ path, content });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('File fetch error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch file' },
+      { error: error instanceof Error ? error.message : 'Failed to fetch file' },
       { status: 500 },
     );
   }

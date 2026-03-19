@@ -1,4 +1,5 @@
 import dagre from 'dagre';
+import type { FileResolutionStrategy } from '@/lib/chat-file-resolution';
 import type {
   ChatCanvasWriteOperation,
   EdgeData,
@@ -17,8 +18,8 @@ import {
   normalizeNodeData,
   omitKeys,
   resolveEdgeEndpoint,
-  stripLargeContent,
 } from '@/lib/chat-canvas';
+import { summarizeFileContent } from '@/lib/chat-file-summary';
 
 // ── Types ──
 
@@ -26,6 +27,9 @@ export interface ReadToolResult {
   content: string | null;
   source: 'cache' | 'github' | 'missing';
   path: string;
+  resolvedPath?: string | null;
+  resolutionStrategy?: FileResolutionStrategy;
+  candidates?: string[];
 }
 
 export interface ReadToolContext {
@@ -44,15 +48,29 @@ export async function executeReadTool(
   }
 
   const result = await context.readFile(path);
-  if (!result.content) {
-    return { ok: false, path: result.path, source: result.source, error: 'File content not available.' };
+  if (result.content === null) {
+    const isAmbiguous = result.resolutionStrategy === 'ambiguous' && Array.isArray(result.candidates) && result.candidates.length > 0;
+    return {
+      ok: false,
+      path: result.path,
+      resolvedPath: result.resolvedPath || null,
+      resolutionStrategy: result.resolutionStrategy || 'missing',
+      candidates: result.candidates,
+      source: result.source,
+      error: isAmbiguous
+        ? `Ambiguous file reference. Choose one of: ${result.candidates?.join(', ')}`
+        : 'File content not available.',
+    };
   }
 
   return {
     ok: true,
     path: result.path,
+    resolvedPath: result.resolvedPath || result.path,
+    resolutionStrategy: result.resolutionStrategy || 'exact',
+    candidates: result.candidates,
     source: result.source,
-    content: stripLargeContent(result.content, 12000),
+    content: summarizeFileContent(result.resolvedPath || result.path, result.content, { maxChars: 12000 }),
   };
 }
 
@@ -514,6 +532,11 @@ export function executeWriteBatch(
   const operations = Array.isArray(input?.operations) ? input.operations : [];
 
   if (operations.length === 0) {
+    transcript.push({
+      tool: 'write_batch',
+      input,
+      result: { ok: false, error: 'No operations provided for write_batch.' },
+    });
     return {
       results: [{ result: { ok: false, error: 'No operations provided for write_batch.' } }],
       layoutOps: [],
@@ -542,14 +565,12 @@ export function executeWriteBatch(
     const writeResult = executeWriteTool(state, op as Record<string, unknown>, transcript);
     results.push(writeResult);
 
-    // Record in transcript for subsequent edge resolution
-    if (writeResult.operation) {
-      transcript.push({
-        tool: 'write',
-        input: op as Record<string, unknown>,
-        result: writeResult.result,
-      });
-    }
+    // Record every batch item so later planner steps can see both successes and failures.
+    transcript.push({
+      tool: 'write',
+      input: op as Record<string, unknown>,
+      result: writeResult.result,
+    });
   }
 
   // Auto-layout after all operations

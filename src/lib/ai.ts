@@ -1,6 +1,8 @@
 import { NodeCategory, NodeData, SyncedCanvasNode, SyncedCanvasEdge, CanvasSyncSnapshot } from "@/types";
 import { getProvider } from "@/lib/llm";
 import type { ChatHistoryMessage } from "@/lib/llm/types";
+import type { FileResolutionStrategy } from "@/lib/chat-file-resolution";
+import { summarizeFileContent } from "@/lib/chat-file-summary";
 
 interface ChatRuntimeSettings {
   providerId?: string | null;
@@ -154,7 +156,13 @@ export function buildSystemMessage(
   repoDetails?: { owner: string; repo: string } | null,
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
-  specificFile?: { path: string; content: string | null } | null,
+  specificFile?: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+    resolutionStrategy?: FileResolutionStrategy;
+    candidates?: string[];
+  } | null,
   message?: string,
   cachedFiles?: Record<string, string> | null,
 ): string {
@@ -183,8 +191,10 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     ? `\n\n📄 README.md CONTENT (Use this as the primary source for setup/installation instructions):\n\`\`\`markdown\n${readmeContent.slice(0, 8000)}${readmeContent.length > 8000 ? '\n... (truncated)' : ''}\n\`\`\``
     : '';
 
-  const fileSection = specificFile?.content
-    ? `\n\n📁 FILE CONTENT (${specificFile.path}):\n\`\`\`\n${specificFile.content.slice(0, 6000)}${specificFile.content.length > 6000 ? '\n... (truncated)' : ''}\n\`\`\``
+  const fileSection = specificFile?.content !== null && specificFile?.content !== undefined
+    ? `\n\n📁 FILE SUMMARY (${specificFile.resolvedPath || specificFile.path}${specificFile.resolutionStrategy && specificFile.resolutionStrategy !== 'exact' ? ` via ${specificFile.resolutionStrategy}` : ''}):\n\`\`\`\n${summarizeFileContent(specificFile.resolvedPath || specificFile.path, specificFile.content, { maxChars: 7000 })}\n\`\`\``
+    : specificFile?.resolutionStrategy === 'ambiguous'
+      ? `\n\n⚠️ File reference was ambiguous for: ${specificFile.path}\nCandidates: ${(specificFile.candidates || []).join(', ')}`
     : specificFile?.path
       ? `\n\n⚠️ Could not fetch content for file: ${specificFile.path}`
       : '';
@@ -197,12 +207,13 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     let usedChars = 0;
     const sections: string[] = [];
     for (const [path, content] of entries) {
-      if (!content) continue;
-      const budget = Math.min(content.length, maxTotalChars - usedChars);
-      if (budget <= 0) break;
-      const truncated = content.slice(0, budget);
-      sections.push(`📄 ${path}:\n\`\`\`\n${truncated}${truncated.length < content.length ? '\n... (truncated)' : ''}\n\`\`\``);
-      usedChars += truncated.length;
+      if (content === null || content === undefined) continue;
+      const remaining = maxTotalChars - usedChars;
+      if (remaining <= 0) break;
+      const budget = remaining < 1400 ? remaining : Math.min(2600, remaining);
+      const summarized = summarizeFileContent(path, content, { maxChars: budget });
+      sections.push(`📄 ${path}:\n\`\`\`\n${summarized}\n\`\`\``);
+      usedChars += summarized.length;
     }
     if (sections.length > 0) {
       cachedFilesSection = `\n\nCACHED FILE CONTENTS (${sections.length} files from local file explorer):\n${sections.join('\n\n')}`;

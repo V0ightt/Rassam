@@ -59,19 +59,22 @@ This document is designed to help future coding agents understand the architectu
     -   **Undo / Redo**: **Ctrl+Z** undoes the last canvas change (up to 10 steps). **Ctrl+Shift+Z** or **Ctrl+Y** redoes. Any new edit clears the redo (future) stack.
     -   **Inline editing**: **Double-click** a node's label or description to edit it in-place. Press **Enter** to commit, **Escape** to cancel.
     -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
-    -   Chat uses the latest synced snapshot as primary context (with live-canvas fallback when no snapshot exists).
+    -   Chat prefers the latest synced snapshot, but automatically switches to live canvas context whenever the canvas has changed more recently than the last manual sync.
     -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
     -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
-    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, and runs the chat agent loop.
+    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, receives up to **2000** available blob paths from the active project, and runs the chat agent loop.
     -   Chat now supports **two modes**: `ask` (read + session inspection tools only) and `agent` (read + session + canvas write/write_batch tools).
     -   Tool calls are streamed as structured NDJSON events (`status`, `text`, `write`, `error`, `done`), and the client renders tool progress inline in the assistant reply.
     -   `write` tool events mutate the live React Flow canvas client-side without automatically updating the synced AI snapshot.
+    -   Agent-mode **write-intent** turns are transactional: if planner + fallback/repair apply zero successful writes, the turn emits an explicit failure and does not degrade into a normal assistant explanation.
+    -   Successful agent-mode mutation turns end with a **deterministic operation summary** generated from applied canvas writes, not a second open-ended LLM completion.
     -   Chat message updates are **session-scoped**: an in-flight streamed reply keeps writing to the originating project/chat session even if the user switches to another chat before the stream finishes.
     -   Before sending a chat request, the client collects **cached file contents** (from IndexedDB) relevant to the selected node and the user's query, and sends them as `cachedFiles` in the payload.
-    -   The API route prefers cached file contents over GitHub fetches for README.md and specific file queries, falling back to GitHub when not cached.
+    -   The API route prefers cached file contents over GitHub fetches for README.md and specific file queries, and file resolution now supports exact path, case-insensitive path, unique basename, and unique suffix/contains matches. Ambiguous matches return candidates instead of guessing.
     -   The AI system prompt includes a `CACHED FILE CONTENTS` section when cached files are available, enabling deeper code-aware answers.
+    -   Large file context is summarized in a file-type-aware way instead of prefix-only truncation. HTML summaries keep title, DOM ids/classes, inline scripts, event-listener hints, and head/tail excerpts so bottom-of-file scripts remain visible to the agent.
     -   The frontend reads the stream incrementally and updates the chat UI in real time, providing a typewriter-style experience.
     -   **Streaming cancellation**: An `AbortController` backs every chat request. While streaming, the Send button becomes a red **Stop** button (`Square` icon) that aborts the fetch—partially streamed content is kept in the chat.
 
@@ -80,6 +83,7 @@ This document is designed to help future coding agents understand the architectu
 ### `src/app`
 -   `page.tsx`: Thin orchestration shell. Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`, `useFileExplorer`, `useEditorTabs`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
   -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), Activity Bar panel state, editor tab state, and canvas-specific handlers (node CRUD, search, layout change).
+  -   Tracks `canvasLastModifiedAt` so chat can prefer live canvas context whenever the user or agent has modified the canvas since the last manual sync.
   -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, pane resizing, file explorer, and editor tabs are delegated to hooks.
   -   The top-center floating header (URL input, Visualize button) and repo info badge have been removed. Export/import and repo stats are now in the ActivityBar bottom section.
   -   A **TabBar** is always visible above the main content area. Canvas is the default tab; clicking files in the explorer opens them in new tabs with syntax-highlighted code.
@@ -87,13 +91,13 @@ This document is designed to help future coding agents understand the architectu
 -   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
 -   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
 -   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Returns file tree alongside nodes/edges. Supports PUT for re-layout.
--   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, validates the selected mode/provider, uses `cachedFiles` from client when available, falls back to GitHub, and returns NDJSON chat events for streamed text, tool status, and live canvas write operations.
+-   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, validates the selected mode/provider, uses `cachedFiles` plus `availableFiles` from client when available, resolves filenames against project blob paths, falls back to GitHub when needed, and returns NDJSON chat events for streamed text, tool status, and live canvas write operations.
 -   `api/files/route.ts`: POST endpoint that fetches a single file's content from GitHub via Octokit. Used by the File Explorer to populate the IndexedDB cache.
 -   `api/settings/models/route.ts`: Returns provider metadata and live availability checks used by Settings and chat selector.
 
 ### `src/lib`
--   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths). Accepts optional `cachedFiles` to enrich system prompt with file contents from the local store.
--   `chat-agent.ts`: Chat agent orchestration for ask/agent modes. Plans tool calls, executes `read`, `session`, `write`, and `write_batch` tools, maintains per-turn working canvas state, emits structured stream events consumed by the chat UI. Supports up to 25 planning steps per turn with up to 3 retries per step for write-needed scenarios. `write_batch` accepts an array of operations (nodes first, then edges), executes them in order, and auto-layouts all nodes using dagre. Falls back to a write-plan LLM pass when the planner reads/searches but fails to mutate the canvas for an edit request. Includes `tryExtractWriteBatchFromCodeOutput` to rescue LLM responses that output code blocks or Python dicts instead of raw JSON tool calls. Planner uses 4096 maxTokens for sufficient room for large write_batch operations.
+-   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths). Accepts optional `cachedFiles` to enrich system prompt with file contents from the local store, and uses file-type-aware summaries for large non-README file context.
+-   `chat-agent.ts`: Chat agent orchestration for ask/agent modes. Plans tool calls, executes `read`, `session`, `write`, and `write_batch` tools, maintains per-turn working canvas state, emits structured stream events consumed by the chat UI, and treats explicit write-intent turns as transactional mutation turns. Supports up to 25 planning steps per turn with up to 3 retries per step for write-needed scenarios. `write_batch` accepts an array of operations (nodes first, then edges), executes them in order, and auto-layouts all nodes using dagre. Planner/fallback calls request structured JSON where supported, run a single repair pass for invalid write-plan output, and end successful mutation turns with deterministic summaries.
 -   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests (validates token format before use).
 -   `file-store.ts`: IndexedDB wrapper for per-project file content caching. Provides `cacheFile`, `getCachedFile`, `getCachedFiles`, `getCachedPaths`, and `clearProjectFiles`.
 -   `import.ts`: JSON import utility. `parseAndValidateImportJson()` validates exported JSON, regenerates node/edge IDs to avoid collisions, applies defaults for missing fields, and derives project metadata.
@@ -144,9 +148,10 @@ This document is designed to help future coding agents understand the architectu
 ### `src/components/sidebar`
 -   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.
   -   Header controls are icon-only actions for chat history, new chat, settings, close, plus an ask/agent mode toggle.
-  -   Sends `canvasContext` payload (synced snapshot preferred, live graph fallback) to `/api/chat`.
+  -   Sends `canvasContext` payload to `/api/chat`, preferring synced context unless the live canvas has been modified more recently. Also sends `availableFiles` derived from the active project's blob paths.
   -   Before each request, collects relevant cached file contents from IndexedDB (selected node files, files mentioned in the query, key files like README.md) and sends them as `cachedFiles`.
   -   Reads the NDJSON streaming response via `ReadableStream` / `TextDecoder`, updating the assistant message in real time and applying streamed canvas write operations.
+  -   Starts a single history transaction before the first streamed agent write so multi-step write batches undo as one canvas change.
   -   Includes both node-level context and graph-level relationships to improve architectural responses.
 -   `MarkdownRenderer.tsx`: Custom markdown renderer with syntax highlighting and file path detection.
 

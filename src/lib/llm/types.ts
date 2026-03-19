@@ -20,6 +20,7 @@ export interface ChatInput {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  structuredOutput?: { type: 'json_object' };
 }
 
 export interface LLMProvider {

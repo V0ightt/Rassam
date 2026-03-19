@@ -56,7 +56,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 ### AI Context Sync
 - **Manual Sync button**: Capture a canonical snapshot of your current canvas
 - **Snapshot includes**: nodes, edges, node positions, selected node, and layout direction
-- **Chat-aware context**: AI uses the latest synced snapshot first, then falls back to live canvas if needed
+- **Chat-aware context**: AI uses the synced snapshot unless the live canvas has changed more recently, preventing stale synced context from overriding newer edits
 - **Future-ready prompting**: Keeps architecture context accurate for richer AI interactions and exports
 
 
@@ -74,7 +74,10 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **Context-aware responses**: Understands the selected node's context
 - **Canvas-aware responses**: Understands graph relationships and architecture flow from synced snapshots
 - **Two chat modes**: `ask` mode can inspect files and session state; `agent` mode can also edit canvas nodes and edges
-- **Write fallback in agent mode**: if the planner stalls after reading/searching, Rassam runs a backup write-planning pass so file-to-flowchart requests still place nodes and edges on the canvas
+- **Transactional agent writes**: explicit draw/edit requests in `agent` mode now fail closed if no canvas mutation succeeds, instead of silently falling back to prose
+- **Deterministic agent summaries**: after successful canvas mutations, the final assistant message is generated from the applied operations instead of another open-ended LLM pass
+- **Grounded file reads**: chat requests send up to 2000 project blob paths so basename and suffix file requests can resolve explicitly instead of guessing
+- **Write fallback in agent mode**: if the planner stalls after reading/searching, Rassam runs a structured backup write-planning + repair pass before failing the turn
 - **Tool-call streaming**: Tool activity is streamed into the chat response with live status updates like read, session, and write actions
 - **Model selector**: Choose between enabled provider/model pairs directly in chat
 - **Markdown support**: Code blocks with syntax highlighting
@@ -82,6 +85,7 @@ GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert
 - **Quick actions**: Pre-built prompts for common questions
 - **Chat history**: Persistent conversation within session
 - **Session-safe streaming**: In-flight AI replies stay attached to the chat session where they started, even if you switch chats mid-response
+- **Single-step undo for agent batches**: streamed agent write events are grouped into one history snapshot so a generated flowchart undoes in one step
 
 ### AI Settings
 - **Dedicated settings page**: Open `/settings` to manage AI runtime behavior

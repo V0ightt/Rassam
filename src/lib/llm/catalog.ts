@@ -40,7 +40,7 @@ const providerCatalog: Record<LLMProviderId, ProviderCatalogConfig> = {
     envKey: "ANTHROPIC_API_KEY",
     modelEnv: "ANTHROPIC_MODEL",
     modelsEnv: "ANTHROPIC_MODELS",
-    defaultModels: ["claude-3-5-sonnet-20241022", "claude-3-7-sonnet-latest"],
+    defaultModels: ["claude-haiku-4-5", "claude-3-7-sonnet-latest"],
   },
   google: {
     label: "Google",

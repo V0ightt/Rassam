@@ -8,7 +8,9 @@ import ReactFlow, {
     BackgroundVariant,
     Connection,
     addEdge,
+    EdgeChange,
     Node,
+    NodeChange,
     useReactFlow,
     ReactFlowProvider,
     ConnectionLineType,
@@ -43,6 +45,7 @@ import { useProjects } from '@/hooks/useProjects';
 import { useFileExplorer } from '@/hooks/useFileExplorer';
 import { useEditorTabs } from '@/hooks/useEditorTabs';
 import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
+import { buildAvailableFiles } from '@/lib/chat-request';
 import TabBar from '@/components/editor/TabBar';
 import FileViewer from '@/components/editor/FileViewer';
 import { ChatCanvasWriteOperation, EdgeData, NodeCategory, NodeData } from '@/types';
@@ -67,6 +70,7 @@ function FlowCanvas() {
     const [showMinimap, setShowMinimap] = useState(true);
     const [snapToGrid, setSnapToGrid] = useState(true);
     const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
+    const [canvasLastModifiedAt, setCanvasLastModifiedAt] = useState<string | null>(null);
 
     // ── Extracted hooks ───────────────────────────────────────
     const { saveToHistory, handleUndo, handleRedo, canUndo, canRedo } =
@@ -147,6 +151,10 @@ function FlowCanvas() {
     // ── Stable type maps (prevent ReactFlow re-registration) ──
     const memoNodeTypes = useMemo(() => nodeTypes, []);
     const memoEdgeTypes = useMemo(() => edgeTypes, []);
+    const availableFiles = useMemo(
+        () => buildAvailableFiles(proj.activeProject?.fileTree || [], 2000),
+        [proj.activeProject?.fileTree],
+    );
 
     // ── Refs for stable chatbot getter (avoids re-render on every drag) ──
     const nodesRef = useRef(nodes);
@@ -157,18 +165,40 @@ function FlowCanvas() {
         nodes: nodesRef.current,
         edges: edgesRef.current,
     }), []);
+    const markCanvasModified = useCallback(() => {
+        setCanvasLastModifiedAt(new Date().toISOString());
+    }, []);
+
+    useEffect(() => {
+        setCanvasLastModifiedAt(null);
+    }, [proj.activeProjectId, proj.activeProject?.lastSyncedAt]);
 
     // ── Canvas interaction ────────────────────────────────────
 
+    const handleNodesChange = useCallback((changes: NodeChange[]) => {
+        if (changes.some((change) => change.type !== 'select')) {
+            markCanvasModified();
+        }
+        onNodesChange(changes);
+    }, [markCanvasModified, onNodesChange]);
+
+    const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+        if (changes.some((change) => change.type !== 'select')) {
+            markCanvasModified();
+        }
+        onEdgesChange(changes);
+    }, [markCanvasModified, onEdgesChange]);
+
     const onConnect = useCallback((params: Connection) => {
         saveToHistory();
+        markCanvasModified();
         setEdges((eds) =>
             addEdge(
                 { ...params, type: 'custom', animated: false, data: { type: 'dependency', strength: 'normal' } },
                 eds,
             ),
         );
-    }, [setEdges, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setEdges]);
 
     const onSelectionChange = useCallback(({ nodes: sel }: OnSelectionChangeParams) => {
         setSelectedNodes(sel);
@@ -186,6 +216,7 @@ function FlowCanvas() {
 
     const handleAddNode = useCallback((nodeData: EditableNodeInput) => {
         saveToHistory();
+        markCanvasModified();
         setNodes((nds) => [
             ...nds,
             {
@@ -195,40 +226,44 @@ function FlowCanvas() {
                 data: { ...nodeData, category: nodeData.category || 'default', complexity: 'low' },
             },
         ]);
-    }, [setNodes, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setNodes]);
 
     const handleDeleteNode = useCallback((nodeId: string) => {
         saveToHistory();
+        markCanvasModified();
         setNodes((nds) => nds.filter((n) => n.id !== nodeId));
         setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
         setSelectedNode(null);
-    }, [setNodes, setEdges, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setEdges, setNodes]);
 
     const handleBatchDelete = useCallback((nodeIds: string[]) => {
         if (!nodeIds.length) return;
         saveToHistory();
+        markCanvasModified();
         const ids = new Set(nodeIds);
         setNodes((nds) => nds.filter((n) => !ids.has(n.id)));
         setEdges((eds) => eds.filter((e) => !ids.has(e.source) && !ids.has(e.target)));
         setSelectedNode(null);
         setSelectedNodes([]);
-    }, [setNodes, setEdges, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setEdges, setNodes]);
 
     const handleBatchUpdateCategory = useCallback((nodeIds: string[], category: string) => {
         if (!nodeIds.length) return;
         saveToHistory();
+        markCanvasModified();
         const ids = new Set(nodeIds);
         const nextCategory = category as NodeCategory;
         setNodes((nds) => nds.map((n) => (ids.has(n.id) ? { ...n, data: { ...n.data, category: nextCategory } } : n)));
-    }, [setNodes, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setNodes]);
 
     const handleUpdateNode = useCallback((nodeId: string, data: Partial<NodeData>) => {
         saveToHistory();
+        markCanvasModified();
         setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n)));
-    }, [setNodes, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, setNodes]);
 
     const handleApplyChatWrite = useCallback((operation: ChatCanvasWriteOperation) => {
-        saveToHistory();
+        markCanvasModified();
 
         switch (operation.action) {
             case 'add_node': {
@@ -316,7 +351,12 @@ function FlowCanvas() {
                 break;
             }
         }
-    }, [saveToHistory, selectedNode, setEdges, setNodes]);
+    }, [markCanvasModified, selectedNode, setEdges, setNodes]);
+
+    const handleBeginChatWriteTransaction = useCallback(() => {
+        saveToHistory();
+        markCanvasModified();
+    }, [markCanvasModified, saveToHistory]);
 
     const nodeEditCtx = useMemo(() => ({ onUpdateNode: handleUpdateNode }), [handleUpdateNode]);
 
@@ -347,6 +387,7 @@ function FlowCanvas() {
     const handleDuplicateSelected = useCallback(() => {
         if (!selectedNode) return;
         saveToHistory();
+        markCanvasModified();
         setNodes((nds) => [
             ...nds,
             {
@@ -356,7 +397,22 @@ function FlowCanvas() {
                 selected: false,
             },
         ]);
-    }, [selectedNode, setNodes, saveToHistory]);
+    }, [markCanvasModified, saveToHistory, selectedNode, setNodes]);
+
+    const handleUndoWithMetadata = useCallback(() => {
+        handleUndo();
+        markCanvasModified();
+    }, [handleUndo, markCanvasModified]);
+
+    const handleRedoWithMetadata = useCallback(() => {
+        handleRedo();
+        markCanvasModified();
+    }, [handleRedo, markCanvasModified]);
+
+    const handlePasteWithMetadata = useCallback(() => {
+        handlePaste();
+        markCanvasModified();
+    }, [handlePaste, markCanvasModified]);
 
     const handleToggleSnapToGrid = useCallback(() => setSnapToGrid((s) => !s), []);
 
@@ -372,6 +428,7 @@ function FlowCanvas() {
                 });
                 if (res.ok) {
                     const data = await res.json();
+                    markCanvasModified();
                     setNodes(data.nodes);
                     setEdges(data.edges);
                     setTimeout(() => fitView({ padding: 0.2 }), 100);
@@ -380,7 +437,7 @@ function FlowCanvas() {
                 console.error('Layout change failed:', err);
             }
         },
-        [nodes, edges, setNodes, setEdges, fitView],
+        [edges, fitView, markCanvasModified, nodes, setEdges, setNodes],
     );
 
     // ── Keyboard shortcuts (single stable effect) ─────────────
@@ -391,10 +448,10 @@ function FlowCanvas() {
         setSelectedNode,
         handleDeleteNode,
         handleBatchDelete,
-        handleUndo,
-        handleRedo,
+        handleUndo: handleUndoWithMetadata,
+        handleRedo: handleRedoWithMetadata,
         handleCopy,
-        handlePaste,
+        handlePaste: handlePasteWithMetadata,
         handleSelectAll,
         handleDuplicateSelected,
         handleToggleSnapToGrid,
@@ -535,8 +592,8 @@ function FlowCanvas() {
                         onUpdateNode={handleUpdateNode}
                         onBatchDelete={handleBatchDelete}
                         onBatchUpdateCategory={handleBatchUpdateCategory}
-                        onUndo={canUndo ? handleUndo : undefined}
-                        onRedo={canRedo ? handleRedo : undefined}
+                        onUndo={canUndo ? handleUndoWithMetadata : undefined}
+                        onRedo={canRedo ? handleRedoWithMetadata : undefined}
                     />
                     <FlowControls
                         onSearch={handleSearch}
@@ -584,8 +641,8 @@ function FlowCanvas() {
                     <ReactFlow
                         nodes={nodes}
                         edges={edges}
-                        onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange}
+                        onNodesChange={handleNodesChange}
+                        onEdgesChange={handleEdgesChange}
                         onConnect={onConnect}
                         onNodeClick={onNodeClick}
                         onPaneClick={onPaneClick}
@@ -668,6 +725,7 @@ function FlowCanvas() {
                             projectName={proj.activeProject?.name}
                             layoutDirection={layoutDirection}
                             syncedCanvasContext={proj.activeProject?.aiContextSnapshot || null}
+                            liveCanvasLastModifiedAt={canvasLastModifiedAt}
                             chatSessions={proj.activeProject?.chatSessions || []}
                             activeChatSessionId={proj.activeProject?.activeChatSessionId || null}
                             onUpdateMessages={proj.updateChatMessages}
@@ -676,6 +734,8 @@ function FlowCanvas() {
                             onDeleteChat={proj.deleteChatSession}
                             getCachedFiles={handleGetCachedFiles}
                             cachedFilePaths={fileExplorer.cachedPaths}
+                            availableFiles={availableFiles}
+                            onBeginCanvasWriteTransaction={handleBeginChatWriteTransaction}
                             onApplyCanvasWrite={handleApplyChatWrite}
                             onClose={() => setIsChatOpen(false)}
                         />

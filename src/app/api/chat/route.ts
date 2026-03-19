@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { streamChatResponse } from "@/lib/chat-agent";
+import type { FileResolutionStrategy } from "@/lib/chat-file-resolution";
+import {
+    normalizeRepoPath,
+    resolveAvailableFilePath,
+    sanitizeAvailableFiles,
+} from "@/lib/chat-file-resolution";
 import { getFileContent } from "@/lib/github";
 import { getProviderAvailability } from "@/lib/llm";
 import { normalizeProviderId } from "@/lib/llm/registry";
@@ -49,12 +55,13 @@ function detectFileQueryIntent(message: string): { needsReadme: boolean; specifi
         /show (?:me )?(?:the )?(?:content(?:s)? of )?[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /read [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /explain [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
+        /how .*?[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?\s+works/i,
         /[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]? (?:file )?content/i,
     ];
     
     let specificFile: string | null = null;
     for (const pattern of filePatterns) {
-        const match = lowerMessage.match(pattern);
+        const match = message.match(pattern);
         if (match && match[1]) {
             specificFile = match[1];
             break;
@@ -74,6 +81,7 @@ export async function POST(req: NextRequest) {
             modelSettings,
             history,
             cachedFiles,
+            availableFiles,
         } = await req.json();
 
         if (!message) {
@@ -90,25 +98,124 @@ export async function POST(req: NextRequest) {
         
         // Normalize cached files object
         const cached: Record<string, string> = (cachedFiles && typeof cachedFiles === 'object') ? cachedFiles : {};
+        const availableFileList = sanitizeAvailableFiles(availableFiles, 2000);
+        const knownFiles = sanitizeAvailableFiles(
+            [...availableFileList, ...Object.keys(cached)],
+            Math.max(availableFileList.length + Object.keys(cached).length, 2000),
+        );
+
+        const getCachedContent = (path: string): { resolvedPath: string; content: string } | null => {
+            const normalizedPath = normalizeRepoPath(path);
+            if (!normalizedPath) return null;
+            if (Object.prototype.hasOwnProperty.call(cached, normalizedPath)) {
+                return { resolvedPath: normalizedPath, content: cached[normalizedPath] };
+            }
+
+            const caseInsensitiveHit = Object.entries(cached).find(([cachedPath]) => (
+                normalizeRepoPath(cachedPath).toLowerCase() === normalizedPath.toLowerCase()
+            ));
+
+            return caseInsensitiveHit
+                ? {
+                    resolvedPath: normalizeRepoPath(caseInsensitiveHit[0]),
+                    content: caseInsensitiveHit[1],
+                }
+                : null;
+        };
+
+        const resolveAndReadFile = async (requestedPath: string): Promise<{
+            path: string;
+            content: string | null;
+            source: 'cache' | 'github' | 'missing';
+            resolvedPath?: string | null;
+            resolutionStrategy?: FileResolutionStrategy;
+            candidates?: string[];
+        }> => {
+            const normalizedRequestedPath = normalizeRepoPath(requestedPath);
+            if (!normalizedRequestedPath) {
+                return { path: requestedPath, content: null, source: 'missing', resolvedPath: null, resolutionStrategy: 'missing' };
+            }
+
+            const resolution = resolveAvailableFilePath(normalizedRequestedPath, knownFiles);
+            if (resolution.status === 'ambiguous') {
+                return {
+                    path: normalizedRequestedPath,
+                    content: null,
+                    source: 'missing',
+                    resolvedPath: null,
+                    resolutionStrategy: resolution.resolutionStrategy,
+                    candidates: resolution.candidates,
+                };
+            }
+
+            const resolvedPath = resolution.status === 'resolved'
+                ? resolution.resolvedPath
+                : normalizedRequestedPath;
+            const cachedHit = getCachedContent(resolvedPath);
+            if (cachedHit) {
+                return {
+                    path: normalizedRequestedPath,
+                    content: cachedHit.content,
+                    source: 'cache',
+                    resolvedPath: cachedHit.resolvedPath,
+                    resolutionStrategy: resolution.status === 'resolved'
+                        ? resolution.resolutionStrategy
+                        : 'exact',
+                };
+            }
+
+            if (repoDetails?.owner && repoDetails?.repo) {
+                try {
+                    const content = await getFileContent(repoDetails.owner, repoDetails.repo, resolvedPath);
+                    if (content !== null) {
+                        return {
+                            path: normalizedRequestedPath,
+                            content,
+                            source: 'github',
+                            resolvedPath,
+                            resolutionStrategy: resolution.status === 'resolved'
+                                ? resolution.resolutionStrategy
+                                : 'exact',
+                        };
+                    }
+                } catch (e) {
+                    console.log('Could not fetch specific file:', e);
+                }
+            }
+
+            return {
+                path: normalizedRequestedPath,
+                content: null,
+                source: 'missing',
+                resolvedPath: resolution.status === 'resolved' ? resolvedPath : null,
+                resolutionStrategy: resolution.resolutionStrategy,
+            };
+        };
 
         let readmeContent: string | null = null;
-        let fileContent: string | null = null;
+        let specificFilePayload: {
+            path: string;
+            content: string | null;
+            resolvedPath?: string | null;
+            resolutionStrategy?: FileResolutionStrategy;
+            candidates?: string[];
+        } | null = null;
         
         // Fetch README – prefer cached version
         if (needsReadme) {
             const readmeKeys = ['README.md', 'readme.md', 'README.MD', 'Readme.md', 'README', 'readme'];
             for (const key of readmeKeys) {
-                if (cached[key]) {
+                if (Object.prototype.hasOwnProperty.call(cached, key)) {
                     readmeContent = cached[key];
                     break;
                 }
             }
             // Fall back to GitHub if not cached
-            if (!readmeContent && repoDetails?.owner && repoDetails?.repo) {
+            if (readmeContent === null && repoDetails?.owner && repoDetails?.repo) {
                 try {
                     for (const filename of readmeKeys) {
                         const content = await getFileContent(repoDetails.owner, repoDetails.repo, filename);
-                        if (content) {
+                        if (content !== null) {
                             readmeContent = content;
                             break;
                         }
@@ -121,22 +228,23 @@ export async function POST(req: NextRequest) {
         
         // Fetch specific file – prefer cached version
         if (specificFile) {
-            fileContent = cached[specificFile] || null;
-            if (!fileContent && repoDetails?.owner && repoDetails?.repo) {
-                try {
-                    fileContent = await getFileContent(repoDetails.owner, repoDetails.repo, specificFile);
-                } catch (e) {
-                    console.log('Could not fetch specific file:', e);
-                }
-            }
+            const resolvedFile = await resolveAndReadFile(specificFile);
+            specificFilePayload = {
+                path: resolvedFile.path,
+                content: resolvedFile.content,
+                resolvedPath: resolvedFile.resolvedPath || null,
+                resolutionStrategy: resolvedFile.resolutionStrategy,
+                candidates: resolvedFile.candidates,
+            };
         }
 
         // Build supplementary cached files context (beyond README and specificFile)
         const supplementaryFiles: Record<string, string> = {};
+        const excludedSpecificPath = specificFilePayload?.resolvedPath || specificFilePayload?.path || specificFile || null;
         for (const [path, content] of Object.entries(cached)) {
-            if (path === specificFile) continue;
-            if (/readme/i.test(path) && readmeContent) continue;
-            if (content && typeof content === 'string') {
+            if (excludedSpecificPath && normalizeRepoPath(path) === normalizeRepoPath(excludedSpecificPath)) continue;
+            if (/readme/i.test(path) && readmeContent !== null) continue;
+            if (typeof content === 'string') {
                 supplementaryFiles[path] = content;
             }
         }
@@ -183,31 +291,7 @@ export async function POST(req: NextRequest) {
         const mode: ChatMode = chatMode === 'agent' ? 'agent' : 'ask';
 
         const readFile = async (requestedPath: string) => {
-            const normalizedPath = requestedPath.trim();
-            if (!normalizedPath) {
-                return { path: requestedPath, content: null, source: 'missing' as const };
-            }
-
-            const exactCacheHit = cached[normalizedPath];
-            if (exactCacheHit) {
-                return { path: normalizedPath, content: exactCacheHit, source: 'cache' as const };
-            }
-
-            const caseInsensitiveHit = Object.entries(cached).find(([path]) => path.toLowerCase() === normalizedPath.toLowerCase());
-            if (caseInsensitiveHit) {
-                return { path: caseInsensitiveHit[0], content: caseInsensitiveHit[1], source: 'cache' as const };
-            }
-
-            if (repoDetails?.owner && repoDetails?.repo) {
-                const content = await getFileContent(repoDetails.owner, repoDetails.repo, normalizedPath);
-                return {
-                    path: normalizedPath,
-                    content: content || null,
-                    source: content ? 'github' as const : 'missing' as const,
-                };
-            }
-
-            return { path: normalizedPath, content: null, source: 'missing' as const };
+            return resolveAndReadFile(requestedPath);
         };
 
         const eventStream = streamChatResponse({
@@ -217,7 +301,7 @@ export async function POST(req: NextRequest) {
             repoDetails,
             canvasContext,
             readmeContent,
-            specificFile: specificFile ? { path: specificFile, content: fileContent } : null,
+            specificFile: specificFilePayload,
             runtimeSettings: {
                 providerId,
                 model,

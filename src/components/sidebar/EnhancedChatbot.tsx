@@ -26,6 +26,7 @@ import {
   X,
   Square
 } from 'lucide-react';
+import { selectCanvasContextForChat } from '@/lib/chat-request';
 import { cn } from '@/lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -50,6 +51,7 @@ interface ChatbotProps {
   projectName?: string;
   layoutDirection?: 'TB' | 'LR';
   syncedCanvasContext?: CanvasSyncSnapshot | null;
+  liveCanvasLastModifiedAt?: string | null;
   chatSessions: ChatSession[];
   activeChatSessionId: string | null;
   onUpdateMessages: (projectId: string, sessionId: string, messages: ChatMessage[]) => void;
@@ -60,7 +62,10 @@ interface ChatbotProps {
   getCachedFiles?: (paths: string[]) => Promise<Record<string, string>>;
   /** All file paths that are cached for the current project. */
   cachedFilePaths?: Set<string>;
+  availableFiles?: string[];
+  onBeginCanvasWriteTransaction?: () => void;
   onApplyCanvasWrite?: (operation: ChatCanvasWriteOperation) => void;
+  onEndCanvasWriteTransaction?: () => void;
   onClose?: () => void;
 }
 
@@ -104,6 +109,7 @@ export default memo(function EnhancedChatbot({
   projectName,
   layoutDirection = 'TB',
   syncedCanvasContext,
+  liveCanvasLastModifiedAt,
   chatSessions,
   activeChatSessionId,
   onUpdateMessages,
@@ -112,7 +118,10 @@ export default memo(function EnhancedChatbot({
   onDeleteChat,
   getCachedFiles,
   cachedFilePaths,
+  availableFiles,
+  onBeginCanvasWriteTransaction,
   onApplyCanvasWrite,
+  onEndCanvasWriteTransaction,
   onClose,
 }: ChatbotProps) {
   const [input, setInput] = useState("");
@@ -331,10 +340,11 @@ export default memo(function EnhancedChatbot({
     setInput("");
     setLoading(true);
     setShowQuickActions(false);
+    let writeTransactionStarted = false;
 
     try {
       const liveCanvasContext: CanvasSyncSnapshot = {
-        syncedAt: new Date().toISOString(),
+        syncedAt: liveCanvasLastModifiedAt || new Date().toISOString(),
         project: {
           id: 'live-canvas',
           name: projectName || (repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : 'Untitled Project'),
@@ -366,7 +376,11 @@ export default memo(function EnhancedChatbot({
         })),
       };
 
-      const canvasContext = syncedCanvasContext || liveCanvasContext;
+      const canvasContext = selectCanvasContextForChat(
+        liveCanvasContext,
+        syncedCanvasContext,
+        liveCanvasLastModifiedAt,
+      );
 
       // Create AbortController for this request
       const abortController = new AbortController();
@@ -419,6 +433,7 @@ export default memo(function EnhancedChatbot({
           chatMode,
           repoDetails: repoDetails,
           canvasContext,
+          availableFiles,
           cachedFiles: cachedFileContents,
           modelSettings: {
             providerId: selectedOption.providerId,
@@ -482,6 +497,10 @@ export default memo(function EnhancedChatbot({
             event = { type: 'text', text: line };
           }
 
+          if (event.type === 'write' && !writeTransactionStarted) {
+            onBeginCanvasWriteTransaction?.();
+            writeTransactionStarted = true;
+          }
           streamedContent = applyStreamEvent(event, streamedContent);
           const updated = messagesWithAssistant.map(m =>
             m.id === assistantMsgId ? { ...m, content: streamedContent } : m
@@ -493,6 +512,10 @@ export default memo(function EnhancedChatbot({
       if (buffer.trim()) {
         try {
           const event = JSON.parse(buffer) as ChatStreamEvent;
+          if (event.type === 'write' && !writeTransactionStarted) {
+            onBeginCanvasWriteTransaction?.();
+            writeTransactionStarted = true;
+          }
           streamedContent = applyStreamEvent(event, streamedContent);
         } catch {
           streamedContent += buffer;
@@ -526,6 +549,9 @@ export default memo(function EnhancedChatbot({
       };
       updateTargetSessionMessages(targetSessionId, [...updatedMessages, errorMsg]);
     } finally {
+      if (writeTransactionStarted) {
+        onEndCanvasWriteTransaction?.();
+      }
       abortControllerRef.current = null;
       setLoading(false);
     }
