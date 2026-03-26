@@ -69,6 +69,8 @@ interface StreamChatResponseParams extends ReadToolContext {
   history?: ChatHistoryMessage[];
   cachedFiles?: Record<string, string> | null;
   providerOverride?: LLMProvider;
+  /** AbortSignal to cancel the request when the client disconnects */
+  signal?: AbortSignal;
 }
 
 export type ChatStreamEvent =
@@ -556,6 +558,7 @@ async function planNextStep(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  signal?: AbortSignal,
 ): Promise<PlannerDecision> {
   const hasReadInTranscript = transcript.some((e) => e.tool === 'read');
   const hasWriteInTranscript = hasSuccessfulWrite(transcript);
@@ -564,6 +567,7 @@ async function planNextStep(
   // Try up to 3 attempts — more attempts for write-needed scenarios
   const maxAttempts = needsWrite ? 3 : 2;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) return { type: 'final' };
     try {
       const raw = await provider.chat({
         system: buildPlannerSystemPrompt(mode),
@@ -574,6 +578,7 @@ async function planNextStep(
         maxTokens: 4096,
         model: runtimeSettings?.model || undefined,
         structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+        signal,
       });
 
       const decision = safeJsonParse(raw);
@@ -618,7 +623,9 @@ async function generateFallbackWritePlan(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  signal?: AbortSignal,
 ): Promise<WritePlanResult | null> {
+  if (signal?.aborted) return null;
   try {
     const raw = await provider.chat({
       system: buildFallbackWriteSystemPrompt(),
@@ -637,12 +644,13 @@ async function generateFallbackWritePlan(
       maxTokens: 4096,
       model: runtimeSettings?.model || undefined,
       structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+      signal,
     });
 
     const jsonResult = safeJsonParseWritePlan(raw);
     if (jsonResult) return jsonResult;
 
-    const repaired = await repairFallbackWritePlan(raw, message, state, transcript, provider, runtimeSettings);
+    const repaired = await repairFallbackWritePlan(raw, message, state, transcript, provider, runtimeSettings, signal);
     if (repaired) return repaired;
 
     return tryExtractWriteBatchFromCodeOutput(raw);
@@ -658,7 +666,9 @@ async function repairFallbackWritePlan(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  signal?: AbortSignal,
 ): Promise<WritePlanResult | null> {
+  if (signal?.aborted) return null;
   try {
     const repairedRaw = await provider.chat({
       system: buildRepairWriteSystemPrompt(),
@@ -678,6 +688,7 @@ async function repairFallbackWritePlan(
       maxTokens: 4096,
       model: runtimeSettings?.model || undefined,
       structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+      signal,
     });
 
     const jsonResult = safeJsonParseWritePlan(repairedRaw);
@@ -736,6 +747,7 @@ export async function* streamChatResponse(
     cachedFiles,
     readFile,
     providerOverride,
+    signal,
   } = params;
 
   const provider = providerOverride || getProvider(runtimeSettings?.providerId);
@@ -763,10 +775,16 @@ export async function* streamChatResponse(
         temperature: clampTemperature(runtimeSettings?.temperature),
         maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
         model: runtimeSettings?.model || undefined,
+        signal,
       })) {
+        if (signal?.aborted) break;
         yield { type: 'text', text: chunk };
       }
     } catch (error) {
+      if (signal?.aborted) {
+        yield { type: 'done' };
+        return;
+      }
       const messageText = error instanceof Error ? error.message : 'Unable to generate a response.';
       yield { type: 'error', text: messageText };
     }
@@ -782,6 +800,7 @@ export async function* streamChatResponse(
   let fallbackFinalContent: string | undefined;
 
   for (let step = 0; step < 25; step += 1) {
+    if (signal?.aborted) break;
     const decision = await planNextStep(
       message,
       mode,
@@ -789,6 +808,7 @@ export async function* streamChatResponse(
       transcript,
       provider,
       runtimeSettings,
+      signal,
     );
 
     if (decision.type === 'final') {
@@ -882,6 +902,10 @@ export async function* streamChatResponse(
   }
 
   if (requiresCanvasWrite && !hasSuccessfulWrite(transcript)) {
+    if (signal?.aborted) {
+      yield { type: 'done' };
+      return;
+    }
     yield {
       type: 'status',
       text: 'Generating concrete canvas edits from the file and current graph.',
@@ -893,6 +917,7 @@ export async function* streamChatResponse(
       transcript,
       provider,
       runtimeSettings,
+      signal,
     );
 
     if (fallbackPlan?.summary && !fallbackFinalContent) {
@@ -949,6 +974,11 @@ export async function* streamChatResponse(
     return;
   }
 
+  if (signal?.aborted) {
+    yield { type: 'done' };
+    return;
+  }
+
   try {
     const finalSystemMessage = buildFinalSystemMessage(baseSystemMessage, mode, workingState, transcript);
     let emittedText = false;
@@ -960,7 +990,9 @@ export async function* streamChatResponse(
       temperature: clampTemperature(runtimeSettings?.temperature),
       maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
       model: runtimeSettings?.model || undefined,
+      signal,
     })) {
+      if (signal?.aborted) break;
       emittedText = true;
       yield { type: 'text', text: chunk };
     }
@@ -969,6 +1001,10 @@ export async function* streamChatResponse(
       yield* streamTextContent(fallbackFinalContent);
     }
   } catch (error) {
+    if (signal?.aborted) {
+      yield { type: 'done' };
+      return;
+    }
     if (fallbackFinalContent) {
       yield* streamTextContent(fallbackFinalContent);
     } else {

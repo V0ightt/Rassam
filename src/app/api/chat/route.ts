@@ -297,6 +297,9 @@ export async function POST(req: NextRequest) {
             return resolveAndReadFile(requestedPath);
         };
 
+        // Use request signal to detect client disconnect
+        const signal = req.signal;
+
         const eventStream = streamChatResponse({
             message,
             mode,
@@ -315,6 +318,7 @@ export async function POST(req: NextRequest) {
             history: sanitizedHistory,
             cachedFiles: supplementaryFiles,
             readFile,
+            signal,
         });
 
         const encoder = new TextEncoder();
@@ -322,10 +326,19 @@ export async function POST(req: NextRequest) {
             async start(controller) {
                 try {
                     for await (const event of eventStream) {
+                        if (signal.aborted) {
+                            controller.close();
+                            return;
+                        }
                         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
                     }
                     controller.close();
                 } catch (err) {
+                    // Don't emit error if client disconnected
+                    if (signal.aborted) {
+                        controller.close();
+                        return;
+                    }
                     const errorMsg = err instanceof Error ? err.message : 'Streaming failed';
                     controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'error', text: errorMsg })}\n`));
                     controller.close();
