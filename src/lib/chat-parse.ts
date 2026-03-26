@@ -10,7 +10,7 @@ import {
 export type PlannerDecision =
   | {
       type: 'tool';
-      tool: 'read' | 'session' | 'write' | 'write_batch';
+      tool: 'grep' | 'read' | 'session' | 'write' | 'write_batch';
       input?: Record<string, unknown>;
       status?: string;
     }

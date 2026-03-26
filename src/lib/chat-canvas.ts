@@ -77,7 +77,7 @@ export type WorkingCanvasState = {
 };
 
 export type ToolTranscriptEntry = {
-  tool: 'read' | 'session' | 'write' | 'write_batch';
+  tool: 'grep' | 'read' | 'session' | 'write' | 'write_batch';
   input: Record<string, unknown> | undefined;
   result: unknown;
 };
@@ -142,6 +142,30 @@ function formatPlannerResult(entry: ToolTranscriptEntry): string {
   }
 
   const result = isRecord(entry.result) ? entry.result : null;
+  if (entry.tool === 'grep') {
+    const pathMatches = Array.isArray(result?.pathMatches)
+      ? result.pathMatches.filter((value): value is string => typeof value === 'string').slice(0, 20)
+      : [];
+    const contentMatches = Array.isArray(result?.contentMatches)
+      ? result.contentMatches
+          .filter((value): value is Record<string, unknown> => isRecord(value))
+          .slice(0, 20)
+      : [];
+    const summarizedContentMatches = contentMatches.map((match) => ({
+      path: typeof match.path === 'string' ? match.path : undefined,
+      line: typeof match.line === 'number' ? match.line : undefined,
+      snippet: typeof match.snippet === 'string'
+        ? stripLargeContent(match.snippet, 180)
+        : undefined,
+    }));
+
+    return JSON.stringify({
+      ...result,
+      pathMatches,
+      contentMatches: summarizedContentMatches,
+    }, null, 2);
+  }
+
   if (entry.tool === 'read' && typeof result?.content === 'string') {
     const content = result.content;
     const truncatedContent = content.length > 10000
@@ -170,12 +194,47 @@ function summarizeFinalReadResult(result: Record<string, unknown>): Record<strin
     path: typeof result.path === 'string' ? result.path : undefined,
     resolvedPath: typeof result.resolvedPath === 'string' ? result.resolvedPath : undefined,
     resolutionStrategy: typeof result.resolutionStrategy === 'string' ? result.resolutionStrategy : undefined,
+    startLine: typeof result.startLine === 'number' ? result.startLine : undefined,
+    endLine: typeof result.endLine === 'number' ? result.endLine : undefined,
+    totalLines: typeof result.totalLines === 'number' ? result.totalLines : undefined,
     candidates,
     source: typeof result.source === 'string' ? result.source : undefined,
     contentChars: content?.length ?? 0,
     contentTruncated: truncated,
     error: typeof result.error === 'string' ? result.error : undefined,
   };
+}
+
+function summarizeFinalGrepResult(result: Record<string, unknown>): Record<string, unknown> {
+  const pathMatches = Array.isArray(result.pathMatches)
+    ? result.pathMatches.filter((value): value is string => typeof value === 'string').slice(0, 5)
+    : undefined;
+  const contentMatches = Array.isArray(result.contentMatches)
+    ? result.contentMatches
+        .filter((value): value is Record<string, unknown> => isRecord(value))
+        .slice(0, 5)
+        .map((match) => ({
+          path: typeof match.path === 'string' ? match.path : undefined,
+          line: typeof match.line === 'number' ? match.line : undefined,
+        }))
+    : undefined;
+
+  return Object.fromEntries(
+    Object.entries({
+      ok: result.ok === true,
+      query: typeof result.query === 'string' ? result.query : undefined,
+      pathFilter: typeof result.pathFilter === 'string' ? result.pathFilter : undefined,
+      found: result.found === true,
+      searchedPathCount: typeof result.searchedPathCount === 'number' ? result.searchedPathCount : undefined,
+      searchedContentFileCount: typeof result.searchedContentFileCount === 'number' ? result.searchedContentFileCount : undefined,
+      pathMatchCount: Array.isArray(result.pathMatches) ? result.pathMatches.length : 0,
+      contentMatchCount: Array.isArray(result.contentMatches) ? result.contentMatches.length : 0,
+      pathMatches,
+      contentMatches,
+      truncated: result.truncated === true,
+      error: typeof result.error === 'string' ? result.error : undefined,
+    }).filter(([, value]) => value !== undefined),
+  );
 }
 
 function summarizeFinalSessionResult(
@@ -259,6 +318,10 @@ function formatFinalResult(entry: ToolTranscriptEntry): string {
     return typeof entry.result === 'string'
       ? JSON.stringify({ text: stripLargeContent(entry.result, 300) }, null, 2)
       : JSON.stringify(entry.result, null, 2);
+  }
+
+  if (entry.tool === 'grep') {
+    return JSON.stringify(summarizeFinalGrepResult(entry.result), null, 2);
   }
 
   if (entry.tool === 'read') {

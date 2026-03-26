@@ -80,6 +80,57 @@ export function estimateComplexity(files: string[]): 'low' | 'medium' | 'high' {
   return 'high';
 }
 
+function extractRequestedLineRange(message?: string): { startLine: number; endLine: number } | null {
+  if (!message) return null;
+
+  const rangeMatch = message.match(/\blines?\s+(\d+)\s*(?:-|to|through)\s*(\d+)\b/i);
+  if (rangeMatch) {
+    const startLine = Number(rangeMatch[1]);
+    const endLine = Number(rangeMatch[2]);
+    if (Number.isFinite(startLine) && Number.isFinite(endLine) && startLine > 0 && endLine >= startLine) {
+      return { startLine, endLine };
+    }
+  }
+
+  const singleLineMatch = message.match(/\bline\s+(\d+)\b/i);
+  if (singleLineMatch) {
+    const line = Number(singleLineMatch[1]);
+    if (Number.isFinite(line) && line > 0) {
+      return { startLine: line, endLine: line };
+    }
+  }
+
+  return null;
+}
+
+function buildRequestedLineSection(
+  specificFile: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+    resolutionStrategy?: FileResolutionStrategy;
+  } | null | undefined,
+  message?: string,
+): string {
+  if (!specificFile?.content) return '';
+
+  const requestedLineRange = extractRequestedLineRange(message);
+  if (!requestedLineRange) return '';
+
+  const lines = specificFile.content.split(/\r?\n/);
+  if (requestedLineRange.startLine > lines.length) {
+    return `\n\nRequested file lines (${specificFile.resolvedPath || specificFile.path}): requested line ${requestedLineRange.startLine} is outside the file. Total lines: ${lines.length}.`;
+  }
+
+  const endLine = Math.min(requestedLineRange.endLine, lines.length);
+  const excerpt = lines
+    .slice(requestedLineRange.startLine - 1, endLine)
+    .map((line, index) => `${requestedLineRange.startLine + index}: ${line}`)
+    .join('\n');
+
+  return `\n\nREQUESTED FILE LINES (${specificFile.resolvedPath || specificFile.path}${specificFile.resolutionStrategy && specificFile.resolutionStrategy !== 'exact' ? ` via ${specificFile.resolutionStrategy}` : ''}):\n\`\`\`\n${excerpt}\n\`\`\``;
+}
+
 export async function analyzeRepoStructure(fileStructure: string[]) {
   const prompt = `You are an expert software architect analyzing a codebase.
 
@@ -191,6 +242,8 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     ? `\n\n📄 README.md CONTENT (Use this as the primary source for setup/installation instructions):\n\`\`\`markdown\n${readmeContent.slice(0, 8000)}${readmeContent.length > 8000 ? '\n... (truncated)' : ''}\n\`\`\``
     : '';
 
+  const requestedLineSection = buildRequestedLineSection(specificFile, message);
+
   const fileSection = specificFile?.content !== null && specificFile?.content !== undefined
     ? `\n\n📁 FILE SUMMARY (${specificFile.resolvedPath || specificFile.path}${specificFile.resolutionStrategy && specificFile.resolutionStrategy !== 'exact' ? ` via ${specificFile.resolutionStrategy}` : ''}):\n\`\`\`\n${summarizeFileContent(specificFile.resolvedPath || specificFile.path, specificFile.content, { maxChars: 7000 })}\n\`\`\``
     : specificFile?.resolutionStrategy === 'ambiguous'
@@ -255,6 +308,7 @@ ${repoDetails ? `- Repository: ${repoDetails.owner}/${repoDetails.repo}` : ''}
 ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
+${requestedLineSection}
 ${fileSection}
 ${cachedFilesSection}
 ${runInstructions}
@@ -278,6 +332,7 @@ ${repoDetails ? `The user is exploring the repository: ${repoDetails.owner}/${re
 ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
+${requestedLineSection}
 ${fileSection}
 ${cachedFilesSection}
 ${runInstructions}

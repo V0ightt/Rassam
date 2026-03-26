@@ -21,6 +21,7 @@ import {
 } from '@/lib/chat-parse';
 import type { PlannerDecision, WritePlanResult } from '@/lib/chat-parse';
 import {
+  executeGrepTool,
   executeReadTool,
   executeSessionTool,
   executeWriteBatch,
@@ -55,8 +56,15 @@ interface StreamChatResponseParams extends ReadToolContext {
   context: NodeData | null;
   repoDetails?: { owner: string; repo: string } | null;
   canvasContext?: CanvasSyncSnapshot | null;
+  availableFiles?: string[];
   readmeContent?: string | null;
-  specificFile?: { path: string; content: string | null } | null;
+  specificFile?: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+    resolutionStrategy?: FileResolutionStrategy;
+    candidates?: string[];
+  } | null;
   runtimeSettings?: ChatRuntimeSettings;
   history?: ChatHistoryMessage[];
   cachedFiles?: Record<string, string> | null;
@@ -92,7 +100,8 @@ function supportsStructuredOutput(provider: LLMProvider): boolean {
 
 function buildPlannerSystemPrompt(mode: ChatMode): string {
   const commonTools = [
-    'read: { "path": "src/app/page.tsx" } → read a repository file, preferring cached content when available.',
+    'grep: { "query": "auth", "path"?: "src/lib", "limit"?: 8, "caseSensitive"?: false } → search repo paths plus current-turn cached file snippets. Use this first to locate likely files, references, imports, TODOs, or exact mentions before calling read.',
+    'read: { "path": "src/app/page.tsx", "line"?: 199, "startLine"?: 190, "endLine"?: 205 } → read a repository file, preferring cached content when available. Use line/startLine/endLine for exact line questions; otherwise it returns a compact file summary.',
     'session: { "action": "search", "query": "auth", "entity": "nodes" | "edges" | "all", "limit": 10 } → search the current canvas session.',
     'session: { "action": "get", "scope": "summary" | "selected" | "node" | "edge", "id"?: "...", "label"?: "...", "sourceId"?: "...", "targetId"?: "..." } → fetch session or graph details.',
   ];
@@ -132,6 +141,7 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
     '3. ALWAYS prefer write_batch over individual write calls when creating 2+ nodes.',
     '4. DO NOT specify position coordinates — dagre auto-layouts all nodes.',
     '5. Use session/search BEFORE editing/deleting to discover existing node/edge IDs.',
+    '5a. Use grep BEFORE read when the user asks to find references, usages, TODOs, imports, exact mentions, or likely files.',
     '6. When the user asks to edit/update/change/modify/restructure/rebuild/create the canvas/flowchart/diagram:',
     '   a) FIRST read any relevant files to understand the architecture',
     '   b) THEN call write_batch with ALL nodes and edges in a single step',
@@ -156,6 +166,8 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
     'Rules:',
     '- You output EXACTLY ONE raw JSON object per invocation. NO markdown. NO code fences. NO prose.',
     '- You control one tool per step (up to 25 steps total).',
+    '- Use grep first when you need to locate files or exact snippets; use read only after grep when you need deeper file understanding.',
+    '- For questions about exact line numbers or line ranges, use read with line/startLine/endLine.',
     '- Use tools when you need exact file contents, IDs, or current graph state.',
     '- write and write_batch are FORBIDDEN in ask mode. Never call them.',
     '- Return {"type":"final"} once you have enough information to answer.',
@@ -425,6 +437,7 @@ function messageLikelyNeedsTools(message: string, mode: ChatMode): boolean {
     /(?:look at|check|read|open|inspect|examine|analyze|review)\s+(?:the\s+)?(?:file|source|contents?\s+of)\s/,
     /(?:show|display|print)\s+(?:me\s+)?(?:the\s+)?(?:code|file|source)\s/,
     /what(?:'s| is| are)\s+(?:in|inside)\s+[`"']?[\w/.-]+\.\w+/,
+    /(?:line|lines)\s+\d+(?:\s*(?:-|to|through)\s*\d+)?\s+(?:in|of)\s+[`"']?[\w/.-]+\.\w+/,
   ];
 
   // Session/canvas inspection that benefits from the search tool
@@ -434,8 +447,17 @@ function messageLikelyNeedsTools(message: string, mode: ChatMode): boolean {
     /(?:find|search|look\s*for|filter)\s+(?:nodes?|edges?)/,
   ];
 
+  const grepPatterns = [
+    /\bgrep\b/,
+    /(?:where\s+(?:is|are)|find|search|look\s*for)\s+(?:the\s+)?(?:references?|usages?|mentions?|imports?|todo|todos|definition|definitions)\b/,
+    /which\s+file\s+(?:defines?|mentions?|uses?|contains?|imports?)\b/,
+    /find\s+(?:references?|usages?|mentions?|imports?|todo|todos)\b/,
+    /where\s+(?:is|are)\s+[`"']?[\w./-]+[`"']?/,
+  ];
+
   if (fileReadPatterns.some(p => p.test(normalized))) return true;
   if (sessionPatterns.some(p => p.test(normalized))) return true;
+  if (grepPatterns.some(p => p.test(normalized))) return true;
 
   return false;
 }
@@ -494,8 +516,22 @@ function hasSuccessfulWrite(transcript: ToolTranscriptEntry[]): boolean {
 }
 
 function createPlannerStatus(tool: PlannerToolName, input: Record<string, unknown> | undefined): string {
+  if (tool === 'grep') {
+    const query = typeof input?.query === 'string' ? input.query : 'query';
+    return `Calling tool grep for ${query}`;
+  }
+
   if (tool === 'read') {
     const path = typeof input?.path === 'string' ? input.path : 'file';
+    const line = typeof input?.line === 'number' ? Math.floor(input.line) : null;
+    const startLine = typeof input?.startLine === 'number' ? Math.floor(input.startLine) : null;
+    const endLine = typeof input?.endLine === 'number' ? Math.floor(input.endLine) : null;
+    if (line && line > 0) {
+      return `Calling tool read for ${path}:${line}`;
+    }
+    if (startLine && endLine && startLine > 0 && endLine >= startLine) {
+      return `Calling tool read for ${path}:${startLine}-${endLine}`;
+    }
     return `Calling tool read for ${path}`;
   }
 
@@ -677,6 +713,7 @@ async function* streamTextContent(text: string): AsyncIterable<ChatStreamEvent> 
 export const __test__ = {
   buildPlannerMessage,
   buildFinalSystemMessage,
+  messageLikelyNeedsTools,
   requestLikelyNeedsCanvasWrite,
   buildTransactionalWriteSuccessSummary,
   buildTransactionalWriteFailureMessage,
@@ -691,6 +728,7 @@ export async function* streamChatResponse(
     context,
     repoDetails,
     canvasContext,
+    availableFiles,
     readmeContent,
     specificFile,
     runtimeSettings,
@@ -760,6 +798,17 @@ export async function* streamChatResponse(
 
     const input = decision.input as Record<string, unknown> | undefined;
     yield { type: 'status', text: decision.status || createPlannerStatus(decision.tool, input) };
+
+    if (decision.tool === 'grep') {
+      const result = executeGrepTool(input, {
+        availableFiles,
+        readmeContent,
+        specificFile,
+        cachedFiles,
+      });
+      transcript.push({ tool: 'grep', input, result });
+      continue;
+    }
 
     if (decision.tool === 'read') {
       const result = await executeReadTool(input, { readFile });

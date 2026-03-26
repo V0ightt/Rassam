@@ -52,10 +52,13 @@ function detectFileQueryIntent(message: string): { needsReadme: boolean; specifi
     // Detect specific file queries like "what's in src/app/page.tsx"
     const filePatterns = [
         /what(?:'s| is) (?:in|inside) (?:the )?[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
+        /what(?:'s| is) (?:on|at|in) line \d+(?:\s*(?:-|to|through)\s*\d+)? (?:in|of) [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /show (?:me )?(?:the )?(?:content(?:s)? of )?[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
+        /show (?:me )?(?:line|lines) \d+(?:\s*(?:-|to|through)\s*\d+)? (?:in|of) [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /read [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /explain [`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /how .*?[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?\s+works/i,
+        /(?:line|lines)\s+\d+(?:\s*(?:-|to|through)\s*\d+)?\s+(?:in|of)\s+[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]?/i,
         /[`"]?([a-zA-Z0-9_\-./]+\.[a-zA-Z]+)[`"]? (?:file )?content/i,
     ];
     
@@ -300,6 +303,7 @@ export async function POST(req: NextRequest) {
             context: context || null,
             repoDetails,
             canvasContext,
+            availableFiles: availableFileList,
             readmeContent,
             specificFile: specificFilePayload,
             runtimeSettings: {

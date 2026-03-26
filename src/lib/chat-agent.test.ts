@@ -38,23 +38,29 @@ async function collectEvents(iterable: AsyncIterable<unknown>) {
   return events;
 }
 
-function createStubProvider(responses: string[]) {
+function createStubProvider(responses: string[], streamChunks: string[] = ["unexpected"]) {
   let index = 0;
   let chatStreamCalls = 0;
+  const chatInputs: Array<Record<string, unknown>> = [];
+  const chatStreamInputs: Array<Record<string, unknown>> = [];
 
   const provider: LLMProvider = {
     id: "openai",
     async generateStructure() {
       return "{}";
     },
-    async chat() {
+    async chat(input) {
+      chatInputs.push((input as unknown as Record<string, unknown>) || {});
       const next = responses[index];
       index += 1;
       return next ?? '{"type":"final"}';
     },
-    async *chatStream() {
+    async *chatStream(input) {
       chatStreamCalls += 1;
-      yield "unexpected";
+      chatStreamInputs.push((input as unknown as Record<string, unknown>) || {});
+      for (const chunk of streamChunks) {
+        yield chunk;
+      }
     },
   };
 
@@ -65,6 +71,12 @@ function createStubProvider(responses: string[]) {
     },
     get chatStreamCalls() {
       return chatStreamCalls;
+    },
+    get chatInputs() {
+      return chatInputs;
+    },
+    get chatStreamInputs() {
+      return chatStreamInputs;
     },
   };
 }
@@ -116,6 +128,20 @@ test("chat-agent planner prompt keeps detailed transcript content while final pr
 test("chat-agent detects write intent for file-based draw requests", () => {
   assert.equal(
     __test__.requestLikelyNeedsCanvasWrite("draw a detailed flowchart of how iraq-ascii.html works"),
+    true,
+  );
+});
+
+test("chat-agent routes grep-style search prompts through the tool planner", () => {
+  assert.equal(
+    __test__.messageLikelyNeedsTools("find references to auth middleware", "ask"),
+    true,
+  );
+});
+
+test("chat-agent routes line-specific file questions through the tool planner", () => {
+  assert.equal(
+    __test__.messageLikelyNeedsTools("what is in line 199 in chatbot.py?", "ask"),
     true,
   );
 });
@@ -232,4 +258,57 @@ test("streamChatResponse emits deterministic summaries after successful write-in
   assert.match(text, /Edges: HTML UI -> ASCII Renderer/);
   assert.match(text, /Use Sync if you want later chat turns to use this exact canvas snapshot\./);
   assert.equal(stub.chatStreamCalls, 0);
+});
+
+test("streamChatResponse can execute grep and keep the final prompt compact", async () => {
+  const stub = createStubProvider([
+    JSON.stringify({
+      type: "tool",
+      tool: "grep",
+      status: "Searching auth references",
+      input: {
+        query: "auth",
+        path: "src",
+      },
+    }),
+    '{"type":"final"}',
+  ], ["Found auth references in the repo."]);
+
+  const events = await collectEvents(streamChatResponse({
+    message: "find references to auth",
+    mode: "ask",
+    context: null,
+    availableFiles: ["src/auth.ts", "src/db.ts", "docs/auth.md"],
+    cachedFiles: {
+      "src/auth.ts": "const authHandler = true;\nexport function login() {}",
+    },
+    runtimeSettings: {
+      providerId: "openai",
+      model: "test-model",
+    },
+    providerOverride: stub.provider,
+    readFile: async (path: string) => ({
+      path,
+      content: null,
+      source: "missing",
+    }),
+  }));
+
+  const text = events
+    .filter((event): event is { type: string; text?: string } => (
+      typeof event === "object" && event !== null && "type" in event
+    ))
+    .map((event) => event.text || "")
+    .join("\n");
+  const finalSystem = String(stub.chatStreamInputs[0]?.system || "");
+  const toolSummary = finalSystem.split("TOOL ACTIVITY SUMMARY FOR THIS TURN:")[1] || "";
+
+  assert.equal(stub.chatCalls, 2);
+  assert.equal(stub.chatStreamCalls, 1);
+  assert.match(text, /Searching auth references/);
+  assert.match(text, /Found auth references in the repo\./);
+  assert.match(toolSummary, /"query": "auth"/);
+  assert.match(toolSummary, /"pathMatchCount": 1/);
+  assert.match(toolSummary, /"contentMatchCount": 1/);
+  assert.doesNotMatch(toolSummary, /authHandler = true/);
 });
