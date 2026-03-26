@@ -74,7 +74,9 @@ export async function getCachedFiles(
     for (const fp of filePaths) {
       const req = store.get([projectId, fp]);
       req.onsuccess = () => {
-        if (req.result?.content) result[fp] = req.result.content;
+        if (req.result && typeof req.result.content === 'string') {
+          result[fp] = req.result.content;
+        }
         if (--remaining === 0) resolve(result);
       };
       req.onerror = () => {

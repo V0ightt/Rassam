@@ -12,9 +12,9 @@ test("normalizeProviderId handles known values", () => {
 });
 
 test("getProviderIdFromEnv falls back to deepseek", () => {
-  assert.equal(getProviderIdFromEnv({}), "deepseek");
-  assert.equal(getProviderIdFromEnv({ LLM_PROVIDER: "openai" }), "openai");
-  assert.equal(getProviderIdFromEnv({ LLM_PROVIDER: "unknown" }), "deepseek");
+  assert.equal(getProviderIdFromEnv({} as NodeJS.ProcessEnv), "deepseek");
+  assert.equal(getProviderIdFromEnv({ LLM_PROVIDER: "openai" } as unknown as NodeJS.ProcessEnv), "openai");
+  assert.equal(getProviderIdFromEnv({ LLM_PROVIDER: "unknown" } as unknown as NodeJS.ProcessEnv), "deepseek");
 });
 
 test("getProvider returns matching adapter", () => {

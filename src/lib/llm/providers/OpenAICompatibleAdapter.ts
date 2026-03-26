@@ -38,6 +38,9 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
+    const responseFormat = input.structuredOutput && (this.id === 'openai' || this.id === 'deepseek')
+      ? ({ type: input.structuredOutput.type } as const)
+      : undefined;
     const response = await this.client.chat.completions.create({
       model: input.model || this.model,
       messages: [
@@ -47,6 +50,7 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
       ],
       temperature: input.temperature ?? 0.7,
       max_tokens: input.maxTokens ?? 2000,
+      response_format: responseFormat,
     });
 
     return response.choices[0]?.message?.content || "";
@@ -57,19 +61,23 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
-    const stream = await this.client.chat.completions.create({
-      model: input.model || this.model,
-      messages: [
-        { role: "system", content: input.system },
-        ...historyMessages,
-        { role: "user", content: input.message },
-      ],
-      temperature: input.temperature ?? 0.7,
-      max_tokens: input.maxTokens ?? 2000,
-      stream: true,
-    });
+    const stream = await this.client.chat.completions.create(
+      {
+        model: input.model || this.model,
+        messages: [
+          { role: "system", content: input.system },
+          ...historyMessages,
+          { role: "user", content: input.message },
+        ],
+        temperature: input.temperature ?? 0.7,
+        max_tokens: input.maxTokens ?? 2000,
+        stream: true,
+      },
+      { signal: input.signal },
+    );
 
     for await (const chunk of stream) {
+      if (input.signal?.aborted) break;
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) yield delta;
     }

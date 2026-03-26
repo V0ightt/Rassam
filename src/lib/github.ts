@@ -47,7 +47,7 @@ export async function getRepoStructure(owner: string, repo: string): Promise<Rep
   }
 }
 
-export async function getFileContent(owner: string, repo: string, path: string): Promise<string> {
+export async function getFileContent(owner: string, repo: string, path: string): Promise<string | null> {
     try {
         const { data } = await octokit.rest.repos.getContent({
             owner,
@@ -58,9 +58,9 @@ export async function getFileContent(owner: string, repo: string, path: string):
         if ('content' in data && data.encoding === 'base64') {
             return Buffer.from(data.content, 'base64').toString('utf-8');
         }
-        return "";
+        return null;
     } catch (error) {
         console.error("Error fetching file content:", error);
-        return "";
+        return null;
     }
 }

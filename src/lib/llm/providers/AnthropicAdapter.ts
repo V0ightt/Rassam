@@ -53,6 +53,7 @@ export class AnthropicAdapter implements LLMProvider {
         max_tokens: input.maxTokens ?? 2000,
         stream: true,
       }),
+      signal: input.signal,
     });
 
     if (!response.ok) {
@@ -68,6 +69,7 @@ export class AnthropicAdapter implements LLMProvider {
 
     try {
       while (true) {
+        if (input.signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
 

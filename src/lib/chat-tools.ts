@@ -1,4 +1,8 @@
 import dagre from 'dagre';
+import {
+  normalizeRepoPath,
+  type FileResolutionStrategy,
+} from '@/lib/chat-file-resolution';
 import type {
   ChatCanvasWriteOperation,
   EdgeData,
@@ -17,8 +21,8 @@ import {
   normalizeNodeData,
   omitKeys,
   resolveEdgeEndpoint,
-  stripLargeContent,
 } from '@/lib/chat-canvas';
+import { summarizeFileContent } from '@/lib/chat-file-summary';
 
 // ── Types ──
 
@@ -26,6 +30,9 @@ export interface ReadToolResult {
   content: string | null;
   source: 'cache' | 'github' | 'missing';
   path: string;
+  resolvedPath?: string | null;
+  resolutionStrategy?: FileResolutionStrategy;
+  candidates?: string[];
 }
 
 export interface ReadToolContext {
@@ -33,6 +40,207 @@ export interface ReadToolContext {
 }
 
 // ── Read tool ──
+
+export interface GrepToolContext {
+  availableFiles?: string[];
+  readmeContent?: string | null;
+  specificFile?: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+  } | null;
+  cachedFiles?: Record<string, string> | null;
+}
+
+interface GrepContentMatch {
+  path: string;
+  line: number;
+  snippet: string;
+}
+
+function clampGrepLimit(value: unknown): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 8;
+  return Math.max(1, Math.min(20, Math.floor(value)));
+}
+
+function normalizeSearchValue(value: string, caseSensitive: boolean): string {
+  return caseSensitive ? value : value.toLowerCase();
+}
+
+function buildGrepSnippet(line: string, query: string, caseSensitive: boolean): string {
+  const normalizedLine = normalizeSearchValue(line, caseSensitive);
+  const normalizedQuery = normalizeSearchValue(query, caseSensitive);
+  const matchIndex = normalizedLine.indexOf(normalizedQuery);
+  const trimmedLine = line.trim();
+
+  if (matchIndex < 0) {
+    return trimmedLine.length > 180 ? `${trimmedLine.slice(0, 177)}...` : trimmedLine;
+  }
+
+  const snippetRadius = 72;
+  const start = Math.max(0, matchIndex - snippetRadius);
+  const end = Math.min(line.length, matchIndex + query.length + snippetRadius);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < line.length ? '...' : '';
+  return `${prefix}${line.slice(start, end).trim()}${suffix}`;
+}
+
+function buildGrepContentCorpus(context: GrepToolContext): Array<{ path: string; content: string }> {
+  const files = new Map<string, string>();
+
+  if (typeof context.readmeContent === 'string') {
+    files.set('README.md', context.readmeContent);
+  }
+
+  if (context.specificFile?.content !== null && typeof context.specificFile?.content === 'string') {
+    const path = normalizeRepoPath(context.specificFile.resolvedPath || context.specificFile.path);
+    if (path) {
+      files.set(path, context.specificFile.content);
+    }
+  }
+
+  for (const [path, content] of Object.entries(context.cachedFiles || {})) {
+    if (typeof content !== 'string') continue;
+    const normalizedPath = normalizeRepoPath(path);
+    if (!normalizedPath) continue;
+    files.set(normalizedPath, content);
+  }
+
+  return Array.from(files.entries()).map(([path, content]) => ({ path, content }));
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const parsed = Math.floor(value);
+    return parsed > 0 ? parsed : null;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      const normalized = Math.floor(parsed);
+      return normalized > 0 ? normalized : null;
+    }
+  }
+
+  return null;
+}
+
+function parseRequestedLineRange(input: Record<string, unknown> | undefined): { startLine: number; endLine: number } | null {
+  const line = parsePositiveInt(input?.line);
+  const startLine = parsePositiveInt(input?.startLine);
+  const endLine = parsePositiveInt(input?.endLine);
+
+  if (line !== null) {
+    return { startLine: line, endLine: line };
+  }
+
+  if (startLine !== null || endLine !== null) {
+    const normalizedStart = startLine ?? endLine;
+    const normalizedEnd = endLine ?? startLine;
+    if (!normalizedStart || !normalizedEnd || normalizedStart > normalizedEnd) {
+      return null;
+    }
+    return { startLine: normalizedStart, endLine: normalizedEnd };
+  }
+
+  return null;
+}
+
+function formatExactLineRange(content: string, startLine: number, endLine: number): { ok: true; content: string; totalLines: number } | { ok: false; totalLines: number; error: string } {
+  const lines = content.split(/\r?\n/);
+  const totalLines = lines.length;
+
+  if (startLine > totalLines) {
+    return {
+      ok: false,
+      totalLines,
+      error: `Requested line ${startLine} is outside the file. The file has ${totalLines} lines.`,
+    };
+  }
+
+  const safeEnd = Math.min(endLine, totalLines);
+  const excerpt = lines
+    .slice(startLine - 1, safeEnd)
+    .map((line, index) => `${startLine + index}: ${line}`)
+    .join('\n');
+
+  return {
+    ok: true,
+    content: excerpt || `${startLine}: `,
+    totalLines,
+  };
+}
+
+export function executeGrepTool(
+  input: Record<string, unknown> | undefined,
+  context: GrepToolContext,
+): unknown {
+  const rawQuery = typeof input?.query === 'string' ? input.query.trim() : '';
+  if (!rawQuery) {
+    return { ok: false, error: 'Missing query for grep tool.' };
+  }
+
+  const caseSensitive = input?.caseSensitive === true;
+  const limit = clampGrepLimit(input?.limit);
+  const rawPathFilter = typeof input?.path === 'string' ? normalizeRepoPath(input.path) : '';
+  const normalizedQuery = normalizeSearchValue(rawQuery, caseSensitive);
+  const normalizedPathFilter = rawPathFilter.toLowerCase();
+  const matchesPathFilter = (path: string): boolean => (
+    !rawPathFilter || path.toLowerCase().includes(normalizedPathFilter)
+  );
+
+  const availableFiles = Array.isArray(context.availableFiles)
+    ? context.availableFiles
+        .filter((value): value is string => typeof value === 'string')
+        .map((path) => normalizeRepoPath(path))
+        .filter(Boolean)
+    : [];
+  const filteredPaths = availableFiles.filter(matchesPathFilter);
+  const pathMatches: string[] = [];
+  let truncated = false;
+
+  for (const path of filteredPaths) {
+    if (!normalizeSearchValue(path, caseSensitive).includes(normalizedQuery)) continue;
+    if (pathMatches.length >= limit) {
+      truncated = true;
+      break;
+    }
+    pathMatches.push(path);
+  }
+
+  const contentCorpus = buildGrepContentCorpus(context).filter((entry) => matchesPathFilter(entry.path));
+  const contentMatches: GrepContentMatch[] = [];
+
+  for (const entry of contentCorpus) {
+    const lines = entry.content.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!normalizeSearchValue(lines[index], caseSensitive).includes(normalizedQuery)) continue;
+      if (contentMatches.length >= limit) {
+        truncated = true;
+        break;
+      }
+      contentMatches.push({
+        path: entry.path,
+        line: index + 1,
+        snippet: buildGrepSnippet(lines[index], rawQuery, caseSensitive),
+      });
+    }
+    if (contentMatches.length >= limit) break;
+  }
+
+  return {
+    ok: true,
+    query: rawQuery,
+    pathFilter: rawPathFilter || undefined,
+    found: pathMatches.length > 0 || contentMatches.length > 0,
+    pathMatches,
+    contentMatches,
+    searchedPathCount: filteredPaths.length,
+    searchedContentFileCount: contentCorpus.length,
+    truncated,
+  };
+}
 
 export async function executeReadTool(
   input: Record<string, unknown> | undefined,
@@ -44,15 +252,64 @@ export async function executeReadTool(
   }
 
   const result = await context.readFile(path);
-  if (!result.content) {
-    return { ok: false, path: result.path, source: result.source, error: 'File content not available.' };
+  if (result.content === null) {
+    const isAmbiguous = result.resolutionStrategy === 'ambiguous' && Array.isArray(result.candidates) && result.candidates.length > 0;
+    return {
+      ok: false,
+      path: result.path,
+      resolvedPath: result.resolvedPath || null,
+      resolutionStrategy: result.resolutionStrategy || 'missing',
+      candidates: result.candidates,
+      source: result.source,
+      error: isAmbiguous
+        ? `Ambiguous file reference. Choose one of: ${result.candidates?.join(', ')}`
+        : 'File content not available.',
+    };
+  }
+
+  const requestedLineRange = parseRequestedLineRange(input);
+  if (requestedLineRange) {
+    const exactRange = formatExactLineRange(
+      result.content,
+      requestedLineRange.startLine,
+      requestedLineRange.endLine,
+    );
+
+    if (!exactRange.ok) {
+      return {
+        ok: false,
+        path: result.path,
+        resolvedPath: result.resolvedPath || result.path,
+        resolutionStrategy: result.resolutionStrategy || 'exact',
+        candidates: result.candidates,
+        source: result.source,
+        totalLines: exactRange.totalLines,
+        error: exactRange.error,
+      };
+    }
+
+    return {
+      ok: true,
+      path: result.path,
+      resolvedPath: result.resolvedPath || result.path,
+      resolutionStrategy: result.resolutionStrategy || 'exact',
+      candidates: result.candidates,
+      source: result.source,
+      totalLines: exactRange.totalLines,
+      startLine: requestedLineRange.startLine,
+      endLine: requestedLineRange.endLine,
+      content: exactRange.content,
+    };
   }
 
   return {
     ok: true,
     path: result.path,
+    resolvedPath: result.resolvedPath || result.path,
+    resolutionStrategy: result.resolutionStrategy || 'exact',
+    candidates: result.candidates,
     source: result.source,
-    content: stripLargeContent(result.content, 12000),
+    content: summarizeFileContent(result.resolvedPath || result.path, result.content, { maxChars: 12000 }),
   };
 }
 
@@ -514,6 +771,11 @@ export function executeWriteBatch(
   const operations = Array.isArray(input?.operations) ? input.operations : [];
 
   if (operations.length === 0) {
+    transcript.push({
+      tool: 'write_batch',
+      input,
+      result: { ok: false, error: 'No operations provided for write_batch.' },
+    });
     return {
       results: [{ result: { ok: false, error: 'No operations provided for write_batch.' } }],
       layoutOps: [],
@@ -542,14 +804,12 @@ export function executeWriteBatch(
     const writeResult = executeWriteTool(state, op as Record<string, unknown>, transcript);
     results.push(writeResult);
 
-    // Record in transcript for subsequent edge resolution
-    if (writeResult.operation) {
-      transcript.push({
-        tool: 'write',
-        input: op as Record<string, unknown>,
-        result: writeResult.result,
-      });
-    }
+    // Record every batch item so later planner steps can see both successes and failures.
+    transcript.push({
+      tool: 'write',
+      input: op as Record<string, unknown>,
+      result: writeResult.result,
+    });
   }
 
   // Auto-layout after all operations

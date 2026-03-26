@@ -1,6 +1,8 @@
 import { NodeCategory, NodeData, SyncedCanvasNode, SyncedCanvasEdge, CanvasSyncSnapshot } from "@/types";
 import { getProvider } from "@/lib/llm";
 import type { ChatHistoryMessage } from "@/lib/llm/types";
+import type { FileResolutionStrategy } from "@/lib/chat-file-resolution";
+import { summarizeFileContent } from "@/lib/chat-file-summary";
 
 interface ChatRuntimeSettings {
   providerId?: string | null;
@@ -78,6 +80,57 @@ export function estimateComplexity(files: string[]): 'low' | 'medium' | 'high' {
   return 'high';
 }
 
+function extractRequestedLineRange(message?: string): { startLine: number; endLine: number } | null {
+  if (!message) return null;
+
+  const rangeMatch = message.match(/\blines?\s+(\d+)\s*(?:-|to|through)\s*(\d+)\b/i);
+  if (rangeMatch) {
+    const startLine = Number(rangeMatch[1]);
+    const endLine = Number(rangeMatch[2]);
+    if (Number.isFinite(startLine) && Number.isFinite(endLine) && startLine > 0 && endLine >= startLine) {
+      return { startLine, endLine };
+    }
+  }
+
+  const singleLineMatch = message.match(/\bline\s+(\d+)\b/i);
+  if (singleLineMatch) {
+    const line = Number(singleLineMatch[1]);
+    if (Number.isFinite(line) && line > 0) {
+      return { startLine: line, endLine: line };
+    }
+  }
+
+  return null;
+}
+
+function buildRequestedLineSection(
+  specificFile: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+    resolutionStrategy?: FileResolutionStrategy;
+  } | null | undefined,
+  message?: string,
+): string {
+  if (!specificFile?.content) return '';
+
+  const requestedLineRange = extractRequestedLineRange(message);
+  if (!requestedLineRange) return '';
+
+  const lines = specificFile.content.split(/\r?\n/);
+  if (requestedLineRange.startLine > lines.length) {
+    return `\n\nRequested file lines (${specificFile.resolvedPath || specificFile.path}): requested line ${requestedLineRange.startLine} is outside the file. Total lines: ${lines.length}.`;
+  }
+
+  const endLine = Math.min(requestedLineRange.endLine, lines.length);
+  const excerpt = lines
+    .slice(requestedLineRange.startLine - 1, endLine)
+    .map((line, index) => `${requestedLineRange.startLine + index}: ${line}`)
+    .join('\n');
+
+  return `\n\nREQUESTED FILE LINES (${specificFile.resolvedPath || specificFile.path}${specificFile.resolutionStrategy && specificFile.resolutionStrategy !== 'exact' ? ` via ${specificFile.resolutionStrategy}` : ''}):\n\`\`\`\n${excerpt}\n\`\`\``;
+}
+
 export async function analyzeRepoStructure(fileStructure: string[]) {
   const prompt = `You are an expert software architect analyzing a codebase.
 
@@ -152,15 +205,19 @@ Return JSON in this exact format:
 export function buildSystemMessage(
   context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: SyncedCanvasNode[] | null,
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
-  specificFile?: { path: string; content: string | null } | null,
+  specificFile?: {
+    path: string;
+    content: string | null;
+    resolvedPath?: string | null;
+    resolutionStrategy?: FileResolutionStrategy;
+    candidates?: string[];
+  } | null,
   message?: string,
   cachedFiles?: Record<string, string> | null,
 ): string {
-  const snapshotNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
-  const normalizedNodes: SyncedCanvasNode[] = snapshotNodes.length > 0 ? snapshotNodes : (allNodesContext || []);
+  const normalizedNodes: SyncedCanvasNode[] = canvasContext?.nodes || [];
 
   const projectOverview = normalizedNodes.length > 0
     ? `\n\nPROJECT OVERVIEW (${normalizedNodes.length} components):
@@ -172,7 +229,7 @@ ${normalizedNodes.map((node: SyncedCanvasNode) => `- **${node.label}** (${node.c
     ? `\n\nCANVAS STRUCTURE:
 - Project: ${canvasContext.project?.name || 'Untitled'}${canvasContext.project?.source ? ` (${canvasContext.project.source})` : ''}
 - Layout: ${canvasContext.layoutDirection || 'TB'}
-- Nodes: ${snapshotNodes.length}
+- Nodes: ${normalizedNodes.length}
 - Edges: ${snapshotEdges.length}
 - Selected Node: ${canvasContext.selectedNodeLabel || 'None'}
 - Last Sync: ${canvasContext.syncedAt || 'Unknown'}
@@ -185,8 +242,12 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     ? `\n\n📄 README.md CONTENT (Use this as the primary source for setup/installation instructions):\n\`\`\`markdown\n${readmeContent.slice(0, 8000)}${readmeContent.length > 8000 ? '\n... (truncated)' : ''}\n\`\`\``
     : '';
 
-  const fileSection = specificFile?.content
-    ? `\n\n📁 FILE CONTENT (${specificFile.path}):\n\`\`\`\n${specificFile.content.slice(0, 6000)}${specificFile.content.length > 6000 ? '\n... (truncated)' : ''}\n\`\`\``
+  const requestedLineSection = buildRequestedLineSection(specificFile, message);
+
+  const fileSection = specificFile?.content !== null && specificFile?.content !== undefined
+    ? `\n\n📁 FILE SUMMARY (${specificFile.resolvedPath || specificFile.path}${specificFile.resolutionStrategy && specificFile.resolutionStrategy !== 'exact' ? ` via ${specificFile.resolutionStrategy}` : ''}):\n\`\`\`\n${summarizeFileContent(specificFile.resolvedPath || specificFile.path, specificFile.content, { maxChars: 7000 })}\n\`\`\``
+    : specificFile?.resolutionStrategy === 'ambiguous'
+      ? `\n\n⚠️ File reference was ambiguous for: ${specificFile.path}\nCandidates: ${(specificFile.candidates || []).join(', ')}`
     : specificFile?.path
       ? `\n\n⚠️ Could not fetch content for file: ${specificFile.path}`
       : '';
@@ -199,12 +260,13 @@ ${snapshotEdges.length > 0 ? snapshotEdges.slice(0, 120).map((edge: SyncedCanvas
     let usedChars = 0;
     const sections: string[] = [];
     for (const [path, content] of entries) {
-      if (!content) continue;
-      const budget = Math.min(content.length, maxTotalChars - usedChars);
-      if (budget <= 0) break;
-      const truncated = content.slice(0, budget);
-      sections.push(`📄 ${path}:\n\`\`\`\n${truncated}${truncated.length < content.length ? '\n... (truncated)' : ''}\n\`\`\``);
-      usedChars += truncated.length;
+      if (content === null || content === undefined) continue;
+      const remaining = maxTotalChars - usedChars;
+      if (remaining <= 0) break;
+      const budget = remaining < 1400 ? remaining : Math.min(2600, remaining);
+      const summarized = summarizeFileContent(path, content, { maxChars: budget });
+      sections.push(`📄 ${path}:\n\`\`\`\n${summarized}\n\`\`\``);
+      usedChars += summarized.length;
     }
     if (sections.length > 0) {
       cachedFilesSection = `\n\nCACHED FILE CONTENTS (${sections.length} files from local file explorer):\n${sections.join('\n\n')}`;
@@ -246,6 +308,7 @@ ${repoDetails ? `- Repository: ${repoDetails.owner}/${repoDetails.repo}` : ''}
 ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
+${requestedLineSection}
 ${fileSection}
 ${cachedFilesSection}
 ${runInstructions}
@@ -269,6 +332,7 @@ ${repoDetails ? `The user is exploring the repository: ${repoDetails.owner}/${re
 ${projectOverview}
 ${canvasStructure}
 ${readmeSection}
+${requestedLineSection}
 ${fileSection}
 ${cachedFilesSection}
 ${runInstructions}
@@ -290,7 +354,6 @@ export function chatStreamWithContext(
   message: string,
   context: NodeData | null,
   repoDetails?: { owner: string; repo: string } | null,
-  allNodesContext?: SyncedCanvasNode[] | null,
   canvasContext?: CanvasSyncSnapshot | null,
   readmeContent?: string | null,
   specificFile?: { path: string; content: string | null } | null,
@@ -299,7 +362,7 @@ export function chatStreamWithContext(
   cachedFiles?: Record<string, string> | null,
 ): AsyncIterable<string> {
   const systemMessage = buildSystemMessage(
-    context, repoDetails, allNodesContext, canvasContext,
+    context, repoDetails, canvasContext,
     readmeContent, specificFile, message, cachedFiles
   );
 

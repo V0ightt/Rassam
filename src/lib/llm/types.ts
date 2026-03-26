@@ -20,6 +20,9 @@ export interface ChatInput {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  structuredOutput?: { type: 'json_object' };
+  /** AbortSignal to cancel the request when the client disconnects */
+  signal?: AbortSignal;
 }
 
 export interface LLMProvider {
