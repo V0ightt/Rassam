@@ -1,6 +1,6 @@
 import { detectAgentActivity } from "./agents";
 import { diffBlueprints } from "./blueprint-diff";
-import { BLUEPRINT_PATH, type Blueprint, type BlueprintIssue, type Selector, type Severity } from "./schema";
+import { BLUEPRINT_PATH, type Blueprint, type BlueprintComponent, type BlueprintIssue, type Selector, type Severity } from "./schema";
 import { ENGINE_NAME, ENGINE_VERSION } from "./constants";
 import { detectVerificationWeakening, matchTripwires } from "./diff";
 import { compileGlob } from "./glob";
@@ -228,56 +228,107 @@ function literalPrefix(glob: string): string {
 }
 
 /**
- * A new or re-scoped component whose globs sit inside a rule-constrained
- * component takes over those paths (it wins by specificity or priority), so
- * files created there later escape the rules. Reported unless head rules
- * select the new component wherever they select the constrained one.
+ * A representative file path a glob matches: wildcards become a placeholder
+ * segment, brace and class alternatives take their first option, and
+ * directory patterns get a file name ("src/ui/**" → "src/ui/x/rassam-probe.ts").
+ */
+export function probePathFor(glob: string): string {
+  const raw = glob.trim().replace(/^\.?\//, "");
+  let probe = raw
+    .replace(/\{([^,}]*)[^}]*\}/g, "$1")
+    .replace(/\[(!?)([^\]])[^\]]*\]/g, (_match, negated: string, first: string) => (negated ? "q" : first));
+  if (probe.endsWith("/")) probe = `${probe}**`;
+  const directoryLike = probe.endsWith("**") || (!/[*?]/.test(probe) && !(probe.split("/").pop() ?? "").includes("."));
+  probe = probe.replace(/\*\*/g, "x").replace(/[*?]/g, "x");
+  return directoryLike ? `${probe}/rassam-probe.ts` : probe;
+}
+
+function membershipChanged(base: BlueprintComponent | undefined, head: BlueprintComponent): boolean {
+  if (!base) return true;
+  return JSON.stringify(base.paths) !== JSON.stringify(head.paths)
+    || JSON.stringify(base.exclude ?? []) !== JSON.stringify(head.exclude ?? [])
+    || (base.priority ?? 0) !== (head.priority ?? 0)
+    || Boolean(base.external) !== Boolean(head.external);
+}
+
+/**
+ * Paths that would leave a rule-constrained component under the head
+ * blueprint even though no file there exists yet: a new or re-scoped glob,
+ * a raised priority, a more specific pattern or a lowered priority on the
+ * constrained component itself. Each relevant glob is turned into a probe
+ * path and its owner is compared under both blueprints, so files created
+ * there later cannot silently escape the rules. Reported unless head rules
+ * select the new owner wherever they selected the constrained component.
  */
 function claimedPaths(base: Blueprint, head: Blueprint, alreadyReported: Set<string>, approved: boolean): Violation[] {
   const constrained = ruleReferencedComponents(base);
+  if (!constrained.size) return [];
   const baseById = new Map(base.components.map((component) => [component.id, component]));
-  const findings: Violation[] = [];
-  for (const component of head.components) {
-    if (component.external || constrained.has(component.id)) continue;
-    const before = baseById.get(component.id);
-    const newGlobs = component.paths.filter((glob) => !before?.paths.includes(glob));
-    for (const targetId of constrained) {
-      const target = baseById.get(targetId);
-      if (!target || target.id === component.id || alreadyReported.has(`${targetId}\u0000${component.id}`)) continue;
-      const inside = newGlobs.filter((glob) => {
-        const prefix = literalPrefix(glob);
-        return target.paths.some((outer) => {
-          const outerPrefix = literalPrefix(outer);
-          return prefix.length > outerPrefix.length && prefix.startsWith(outerPrefix);
-        });
-      });
-      if (!inside.length) continue;
-      const coveredBySameRules = base.rules.every((rule) => {
-        const headRule = head.rules.find((candidate) => candidate.id === rule.id);
-        const selects = (blueprint: Blueprint, candidate: Blueprint["rules"][number] | undefined, id: string) => {
-          if (!candidate) return false;
-          const selectors: Selector[] = candidate.kind === "forbid" || candidate.kind === "allow-only"
-            ? [candidate.from, candidate.to]
-            : candidate.kind === "layers" ? candidate.layers
-              : candidate.kind === "secret-access" ? [candidate.allow]
-                : candidate.kind === "no-cycles" && candidate.scope ? [candidate.scope] : [];
-          return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
-        };
-        return !selects(base, rule, targetId) || selects(head, headRule, component.id);
-      });
-      if (coveredBySameRules) continue;
-      findings.push({
-        id: fingerprint("contract-weakened", "claim", component.id, targetId, inside.join("|")),
-        kind: "contract-weakened",
-        severity: approved ? "info" : "error",
-        title: `Contract weakened: "${component.name}" claims ${inside.join(", ")} inside rule-constrained "${target.name}"`,
-        message: approved
-          ? "A human approved this contract change."
-          : `Files under ${inside.join(", ")} would belong to "${component.name}" instead of "${target.name}" and escape the rules that constrain it. Add the new component to those rules, or get explicit human approval.`,
-        components: [targetId, component.id],
-        locations: [{ path: BLUEPRINT_PATH }],
-      });
+  const headById = new Map(head.components.map((component) => [component.id, component]));
+  const changed = head.components.filter((component) => membershipChanged(baseById.get(component.id), component));
+  if (!changed.length) return [];
+
+  const constrainedPrefixes = [...constrained].flatMap((id) => (baseById.get(id)?.paths ?? []).map(literalPrefix));
+  const probes = new Set<string>();
+  const addProbes = (glob: string) => {
+    const normalized = glob.trim().replace(/^\.?\//, "");
+    probes.add(probePathFor(normalized));
+    // A broader glob ("src/**/*.legacy.tsx", "*.admin.tsx") overlaps a constrained
+    // area below its own prefix: probe its tail inside that area as well.
+    const own = literalPrefix(normalized);
+    for (const prefix of constrainedPrefixes) {
+      if (prefix !== own && prefix.startsWith(own)) probes.add(`${prefix}${probePathFor(normalized.slice(own.length))}`);
     }
+  };
+  for (const component of changed) for (const glob of component.paths) addProbes(glob);
+  for (const id of constrained) for (const glob of baseById.get(id)?.paths ?? []) addProbes(glob);
+
+  const list = [...probes];
+  const before = assignComponents(list, base).fileToComponent;
+  const after = assignComponents(list, head).fileToComponent;
+  const moves = new Map<string, string[]>();
+  for (const probe of list) {
+    const from = before.get(probe);
+    const to = after.get(probe);
+    // Losing coverage outright (no owner) is already a field-level weakening of the component's paths.
+    if (!from || !to || to === from || !constrained.has(from)) continue;
+    const key = `${from}\u0000${to}`;
+    moves.set(key, [...(moves.get(key) ?? []), probe]);
+  }
+
+  const selects = (blueprint: Blueprint, rule: Blueprint["rules"][number] | undefined, id: string): boolean => {
+    if (!rule) return false;
+    const selectors: Selector[] = rule.kind === "forbid" || rule.kind === "allow-only"
+      ? [rule.from, rule.to]
+      : rule.kind === "layers" ? rule.layers
+        : rule.kind === "secret-access" ? [rule.allow]
+          : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
+    return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
+  };
+
+  const findings: Violation[] = [];
+  for (const [key, probePaths] of moves) {
+    const [targetId, ownerId] = key.split("\u0000");
+    if (alreadyReported.has(key)) continue;
+    const coveredBySameRules = base.rules.every((rule) => (
+      !selects(base, rule, targetId) || selects(head, head.rules.find((candidate) => candidate.id === rule.id), ownerId)
+    ));
+    if (coveredBySameRules) continue;
+    const owner = headById.get(ownerId);
+    const target = baseById.get(targetId);
+    const globs = (owner?.paths ?? []).filter((glob) => probePaths.some((probe) => compileGlob(glob).test(probe)));
+    const where = globs.length ? globs.join(", ") : probePaths.slice(0, 3).join(", ");
+    findings.push({
+      id: fingerprint("contract-weakened", "claim", ownerId, targetId, where),
+      kind: "contract-weakened",
+      severity: approved ? "info" : "error",
+      title: `Contract weakened: "${owner?.name ?? ownerId}" claims ${where} inside rule-constrained "${target?.name ?? targetId}"`,
+      message: approved
+        ? "A human approved this contract change."
+        : `Files under ${where} would belong to "${owner?.name ?? ownerId}" instead of "${target?.name ?? targetId}" and escape the rules that constrain it. Add that component to those rules, or get explicit human approval.`,
+      components: [targetId, ownerId],
+      locations: [{ path: BLUEPRINT_PATH }],
+    });
   }
   return findings;
 }

@@ -295,7 +295,12 @@ function diffComponent(base: BlueprintComponent, head: BlueprintComponent, refs:
     parts.push(`exclude (${describeSetDiff(exclude)})`);
     if (referenced && exclude.added.length) weakens = true;
   }
-  if (base.priority !== head.priority) parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
+  if (base.priority !== head.priority) {
+    parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
+    // A constrained component with lower priority can lose paths to overlapping components.
+    // (Raised priorities elsewhere are checked against actual ownership by the gate.)
+    if (referenced && (head.priority ?? 0) < (base.priority ?? 0)) weakens = true;
+  }
 
   const tags = setDiff(base.tags, head.tags);
   if (hasDiff(tags)) {

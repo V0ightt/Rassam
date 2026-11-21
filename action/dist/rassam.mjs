@@ -26825,7 +26825,10 @@ function diffComponent(base, head, refs) {
     parts.push(`exclude (${describeSetDiff(exclude)})`);
     if (referenced && exclude.added.length) weakens = true;
   }
-  if (base.priority !== head.priority) parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
+  if (base.priority !== head.priority) {
+    parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
+    if (referenced && (head.priority ?? 0) < (base.priority ?? 0)) weakens = true;
+  }
   const tags = setDiff(base.tags, head.tags);
   if (hasDiff(tags)) {
     parts.push(`tags (${describeSetDiff(tags)})`);
@@ -27858,45 +27861,72 @@ function literalPrefix(glob) {
   const literal2 = (cut < 0 ? glob : glob.slice(0, cut)).replace(/^\.?\//, "");
   return literal2.slice(0, literal2.lastIndexOf("/") + 1);
 }
+function probePathFor(glob) {
+  const raw = glob.trim().replace(/^\.?\//, "");
+  let probe = raw.replace(/\{([^,}]*)[^}]*\}/g, "$1").replace(/\[(!?)([^\]])[^\]]*\]/g, (_match, negated, first) => negated ? "q" : first);
+  if (probe.endsWith("/")) probe = `${probe}**`;
+  const directoryLike = probe.endsWith("**") || !/[*?]/.test(probe) && !(probe.split("/").pop() ?? "").includes(".");
+  probe = probe.replace(/\*\*/g, "x").replace(/[*?]/g, "x");
+  return directoryLike ? `${probe}/rassam-probe.ts` : probe;
+}
+function membershipChanged(base, head) {
+  if (!base) return true;
+  return JSON.stringify(base.paths) !== JSON.stringify(head.paths) || JSON.stringify(base.exclude ?? []) !== JSON.stringify(head.exclude ?? []) || (base.priority ?? 0) !== (head.priority ?? 0) || Boolean(base.external) !== Boolean(head.external);
+}
 function claimedPaths(base, head, alreadyReported, approved) {
   const constrained = ruleReferencedComponents(base);
+  if (!constrained.size) return [];
   const baseById = new Map(base.components.map((component) => [component.id, component]));
-  const findings = [];
-  for (const component of head.components) {
-    if (component.external || constrained.has(component.id)) continue;
-    const before = baseById.get(component.id);
-    const newGlobs = component.paths.filter((glob) => !before?.paths.includes(glob));
-    for (const targetId of constrained) {
-      const target = baseById.get(targetId);
-      if (!target || target.id === component.id || alreadyReported.has(`${targetId}\0${component.id}`)) continue;
-      const inside = newGlobs.filter((glob) => {
-        const prefix = literalPrefix(glob);
-        return target.paths.some((outer) => {
-          const outerPrefix = literalPrefix(outer);
-          return prefix.length > outerPrefix.length && prefix.startsWith(outerPrefix);
-        });
-      });
-      if (!inside.length) continue;
-      const coveredBySameRules = base.rules.every((rule) => {
-        const headRule = head.rules.find((candidate) => candidate.id === rule.id);
-        const selects = (blueprint, candidate, id) => {
-          if (!candidate) return false;
-          const selectors = candidate.kind === "forbid" || candidate.kind === "allow-only" ? [candidate.from, candidate.to] : candidate.kind === "layers" ? candidate.layers : candidate.kind === "secret-access" ? [candidate.allow] : candidate.kind === "no-cycles" && candidate.scope ? [candidate.scope] : [];
-          return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
-        };
-        return !selects(base, rule, targetId) || selects(head, headRule, component.id);
-      });
-      if (coveredBySameRules) continue;
-      findings.push({
-        id: fingerprint("contract-weakened", "claim", component.id, targetId, inside.join("|")),
-        kind: "contract-weakened",
-        severity: approved ? "info" : "error",
-        title: `Contract weakened: "${component.name}" claims ${inside.join(", ")} inside rule-constrained "${target.name}"`,
-        message: approved ? "A human approved this contract change." : `Files under ${inside.join(", ")} would belong to "${component.name}" instead of "${target.name}" and escape the rules that constrain it. Add the new component to those rules, or get explicit human approval.`,
-        components: [targetId, component.id],
-        locations: [{ path: BLUEPRINT_PATH }]
-      });
+  const headById = new Map(head.components.map((component) => [component.id, component]));
+  const changed = head.components.filter((component) => membershipChanged(baseById.get(component.id), component));
+  if (!changed.length) return [];
+  const constrainedPrefixes = [...constrained].flatMap((id) => (baseById.get(id)?.paths ?? []).map(literalPrefix));
+  const probes = /* @__PURE__ */ new Set();
+  const addProbes = (glob) => {
+    const normalized = glob.trim().replace(/^\.?\//, "");
+    probes.add(probePathFor(normalized));
+    const own2 = literalPrefix(normalized);
+    for (const prefix of constrainedPrefixes) {
+      if (prefix !== own2 && prefix.startsWith(own2)) probes.add(`${prefix}${probePathFor(normalized.slice(own2.length))}`);
     }
+  };
+  for (const component of changed) for (const glob of component.paths) addProbes(glob);
+  for (const id of constrained) for (const glob of baseById.get(id)?.paths ?? []) addProbes(glob);
+  const list = [...probes];
+  const before = assignComponents(list, base).fileToComponent;
+  const after = assignComponents(list, head).fileToComponent;
+  const moves = /* @__PURE__ */ new Map();
+  for (const probe of list) {
+    const from = before.get(probe);
+    const to = after.get(probe);
+    if (!from || !to || to === from || !constrained.has(from)) continue;
+    const key = `${from}\0${to}`;
+    moves.set(key, [...moves.get(key) ?? [], probe]);
+  }
+  const selects = (blueprint, rule, id) => {
+    if (!rule) return false;
+    const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "secret-access" ? [rule.allow] : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
+    return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
+  };
+  const findings = [];
+  for (const [key, probePaths] of moves) {
+    const [targetId, ownerId] = key.split("\0");
+    if (alreadyReported.has(key)) continue;
+    const coveredBySameRules = base.rules.every((rule) => !selects(base, rule, targetId) || selects(head, head.rules.find((candidate) => candidate.id === rule.id), ownerId));
+    if (coveredBySameRules) continue;
+    const owner = headById.get(ownerId);
+    const target = baseById.get(targetId);
+    const globs = (owner?.paths ?? []).filter((glob) => probePaths.some((probe) => compileGlob(glob).test(probe)));
+    const where = globs.length ? globs.join(", ") : probePaths.slice(0, 3).join(", ");
+    findings.push({
+      id: fingerprint("contract-weakened", "claim", ownerId, targetId, where),
+      kind: "contract-weakened",
+      severity: approved ? "info" : "error",
+      title: `Contract weakened: "${owner?.name ?? ownerId}" claims ${where} inside rule-constrained "${target?.name ?? targetId}"`,
+      message: approved ? "A human approved this contract change." : `Files under ${where} would belong to "${owner?.name ?? ownerId}" instead of "${target?.name ?? targetId}" and escape the rules that constrain it. Add that component to those rules, or get explicit human approval.`,
+      components: [targetId, ownerId],
+      locations: [{ path: BLUEPRINT_PATH }]
+    });
   }
   return findings;
 }

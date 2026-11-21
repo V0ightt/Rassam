@@ -386,3 +386,44 @@ describe("syncBlueprint", () => {
     expect(byKind(report.findings, "unmapped-file")).toEqual([]);
   });
 });
+
+describe("future paths that change owner", () => {
+  const changes: ChangedFile[] = [{ path: ".rassam/blueprint.json", status: "modified", added: [], removed: [] }];
+  const withComponents = (extra: BlueprintInput["components"], patch?: (component: NonNullable<BlueprintInput["components"]>[number]) => NonNullable<BlueprintInput["components"]>[number]) =>
+    blueprintSchema.parse({ ...blueprintInput, components: [...blueprintInput.components!.map((component) => (patch ? patch(component) : component)), ...(extra ?? [])] });
+  const claims = (base: Blueprint, head: Blueprint) => byKind(
+    runCheck({ files, blueprint: head, baseBlueprint: base, changes, baseFiles: [] }).findings,
+    "contract-weakened",
+  ).map((finding) => finding.title).filter((title) => title.includes("claims"));
+
+  it("flags raising the priority of an existing overlapping component", () => {
+    const base = withComponents([{ id: "legacy-ui", name: "Legacy UI", kind: "component", paths: ["src/**/*.legacy.tsx"], priority: -5 }]);
+    const head = withComponents([{ id: "legacy-ui", name: "Legacy UI", kind: "component", paths: ["src/**/*.legacy.tsx"], priority: 50 }]);
+    expect(claims(base, base)).toEqual([]);
+    expect(claims(base, head).some((title) => title.includes('"Legacy UI" claims src/**/*.legacy.tsx inside rule-constrained "Storefront UI"'))).toBe(true);
+  });
+
+  it("flags a broad component that now outranks a constrained one", () => {
+    const base = withComponents([{ id: "everything", name: "Everything", kind: "core", paths: ["src/**"], priority: -10 }]);
+    const head = withComponents([{ id: "everything", name: "Everything", kind: "core", paths: ["src/**"], priority: 10 }]);
+    // Existing files move too, so the gate reports the concrete move instead of a duplicate claim.
+    const weakening = byKind(runCheck({ files, blueprint: head, baseBlueprint: base, changes, baseFiles: [] }).findings, "contract-weakened")
+      .map((finding) => finding.title);
+    expect(weakening.some((title) => title.includes('moved out of "Storefront UI"') && title.includes('"Everything"'))).toBe(true);
+  });
+
+  it("does not flag priority changes that move nothing", () => {
+    const base = withComponents([{ id: "docs-site", name: "Docs", kind: "core", paths: ["website/**"] }]);
+    const head = withComponents([{ id: "docs-site", name: "Docs", kind: "core", paths: ["website/**"], priority: 20 }]);
+    expect(claims(base, head)).toEqual([]);
+  });
+
+  it("builds probe paths from globs", async () => {
+    const { probePathFor } = await import("./check");
+    expect(probePathFor("src/ui/**")).toBe("src/ui/x/rassam-probe.ts");
+    expect(probePathFor("src/**/*.legacy.tsx")).toBe("src/x/x.legacy.tsx");
+    expect(probePathFor("{lib,src}/a.ts")).toBe("lib/a.ts");
+    expect(probePathFor("src/lib")).toBe("src/lib/rassam-probe.ts");
+    expect(probePathFor("src/ui/Cart.tsx")).toBe("src/ui/Cart.tsx");
+  });
+});
