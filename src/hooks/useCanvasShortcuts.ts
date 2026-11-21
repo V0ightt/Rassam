@@ -23,18 +23,29 @@ export interface CanvasShortcutHandlers {
  */
 export function useCanvasShortcuts(handlers: CanvasShortcutHandlers) {
     const ref = useRef(handlers);
-    ref.current = handlers;
+
+    useEffect(() => {
+        ref.current = handlers;
+    }, [handlers]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Skip if user is typing in an input / textarea
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+            const target = e.target instanceof HTMLElement ? e.target : null;
+            const isInteractive = target?.closest(
+                'input, textarea, select, button, a, [contenteditable="true"], [role="dialog"], [data-canvas-shortcuts="off"]',
+            );
+            const canvasHasFocus = target?.closest('[data-canvas-shortcuts="on"]')
+                || document.activeElement instanceof HTMLElement
+                    && document.activeElement.closest('[data-canvas-shortcuts="on"]');
+
+            if (isInteractive || !canvasHasFocus) {
                 return;
             }
 
             const h = ref.current;
 
             if (e.key === 'Delete') {
+                e.preventDefault();
                 if (h.selectedNodes.length > 1) {
                     h.handleBatchDelete(h.selectedNodes.map(n => n.id));
                 } else if (h.selectedNode) {
@@ -52,15 +63,15 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers) {
                 e.preventDefault();
                 h.handleRedo();
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
                 e.preventDefault();
                 h.handleCopy();
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
                 e.preventDefault();
                 h.handlePaste();
             }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
                 e.preventDefault();
                 h.handleSelectAll();
             }

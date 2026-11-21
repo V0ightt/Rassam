@@ -1,67 +1,65 @@
-import { useState, useCallback } from 'react';
-import { Node, Edge } from 'reactflow';
+import { useCallback, useRef } from 'react';
+import type { Edge, Node } from 'reactflow';
 
 interface ClipboardState {
     nodes: Node[];
     edges: Edge[];
 }
 
-/**
- * Manages copy/paste of nodes (and their internal edges) on the canvas.
- * Generates fresh IDs on paste to avoid collisions, with a positional offset.
- */
+/** Project-scoped in-memory canvas clipboard. */
 export function useClipboard(
+    projectId: string | null,
+    nodes: Node[],
     selectedNodes: Node[],
     selectedNode: Node | null,
     edges: Edge[],
     saveToHistory: () => void,
-    setNodes: (nodes: Node[] | ((prev: Node[]) => Node[])) => void,
-    setEdges: (edges: Edge[] | ((prev: Edge[]) => Edge[])) => void,
+    commit: (nodes: Node[], edges: Edge[]) => void,
 ) {
-    const [clipboard, setClipboard] = useState<ClipboardState | null>(null);
+    const clipboardsRef = useRef(new Map<string, ClipboardState>());
 
     const handleCopy = useCallback(() => {
+        if (!projectId) return;
         const nodesToCopy = selectedNodes.length > 0
             ? selectedNodes
             : (selectedNode ? [selectedNode] : []);
         if (nodesToCopy.length === 0) return;
-
-        const nodeIds = new Set(nodesToCopy.map(n => n.id));
-        // Only copy edges fully within the selection
-        const edgesToCopy = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
-        setClipboard({ nodes: nodesToCopy, edges: edgesToCopy });
-    }, [selectedNodes, selectedNode, edges]);
+        const nodeIds = new Set(nodesToCopy.map((node) => node.id));
+        clipboardsRef.current.set(projectId, {
+            nodes: nodesToCopy.map((node) => ({ ...node, data: { ...node.data } })),
+            edges: edges
+                .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+                .map((edge) => ({ ...edge, data: edge.data ? { ...edge.data } : edge.data })),
+        });
+    }, [edges, projectId, selectedNode, selectedNodes]);
 
     const handlePaste = useCallback(() => {
-        if (!clipboard || clipboard.nodes.length === 0) return;
+        if (!projectId) return;
+        const clipboard = clipboardsRef.current.get(projectId);
+        if (!clipboard?.nodes.length) return;
         saveToHistory();
 
-        const OFFSET = 60;
-        const idMap = new Map<string, string>();
-        clipboard.nodes.forEach(n => {
-            idMap.set(n.id, `node-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`);
-        });
-
-        const newNodes: Node[] = clipboard.nodes.map(n => ({
-            ...n,
-            id: idMap.get(n.id)!,
-            position: { x: n.position.x + OFFSET, y: n.position.y + OFFSET },
+        const idMap = new Map(clipboard.nodes.map((node) => [node.id, crypto.randomUUID()]));
+        const newNodes = clipboard.nodes.map((node) => ({
+            ...node,
+            id: idMap.get(node.id)!,
+            position: { x: node.position.x + 60, y: node.position.y + 60 },
             selected: false,
-            data: { ...n.data },
+            data: { ...node.data },
         }));
-
-        const newEdges: Edge[] = clipboard.edges.map(e => ({
-            ...e,
-            id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-            source: idMap.get(e.source) || e.source,
-            target: idMap.get(e.target) || e.target,
+        const newEdges = clipboard.edges.map((edge) => ({
+            ...edge,
+            id: crypto.randomUUID(),
+            source: idMap.get(edge.source) || edge.source,
+            target: idMap.get(edge.target) || edge.target,
             selected: false,
-            data: e.data ? { ...e.data } : undefined,
+            data: edge.data ? { ...edge.data } : undefined,
         }));
+        commit([...nodes, ...newNodes], [...edges, ...newEdges]);
+    }, [commit, edges, nodes, projectId, saveToHistory]);
 
-        setNodes(nds => [...(nds as Node[]), ...newNodes]);
-        setEdges(eds => [...(eds as Edge[]), ...newEdges]);
-    }, [clipboard, saveToHistory, setNodes, setEdges]);
-
-    return { clipboard, handleCopy, handlePaste };
+    return {
+        handleCopy,
+        handlePaste,
+    };
 }

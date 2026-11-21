@@ -1,0 +1,1349 @@
+{
+  "$id": "https://rassam.dev/schema/blueprint-0.1.json",
+  "title": "Rassam Blueprint",
+  "description": "A human-owned architecture contract for agent-built software. See https://rassam.dev",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "version": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "system": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "repository": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "policy": {
+      "default": {
+        "undeclaredDependencies": "warning",
+        "unmappedFiles": "info",
+        "includeTypeOnly": true,
+        "tripwires": {
+          "defaults": true
+        },
+        "verificationHeuristics": true,
+        "ignore": []
+      },
+      "type": "object",
+      "properties": {
+        "undeclaredDependencies": {
+          "default": "warning",
+          "type": "string",
+          "enum": [
+            "off",
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "unmappedFiles": {
+          "default": "info",
+          "type": "string",
+          "enum": [
+            "off",
+            "info",
+            "warning"
+          ]
+        },
+        "includeTypeOnly": {
+          "default": true,
+          "type": "boolean"
+        },
+        "tripwires": {
+          "default": {
+            "defaults": true
+          },
+          "type": "object",
+          "properties": {
+            "defaults": {
+              "default": true,
+              "type": "boolean"
+            },
+            "paths": {
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "verificationHeuristics": {
+          "default": true,
+          "type": "boolean"
+        },
+        "ignore": {
+          "default": [],
+          "maxItems": 500,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "components": {
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "default": "default",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,39}$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "intent": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "paths": {
+            "default": [],
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400
+            }
+          },
+          "exclude": {
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -100,
+            "maximum": 100
+          },
+          "external": {
+            "type": "boolean"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "tags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "owners": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "assurance": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "untested",
+              "tested",
+              "property-tested",
+              "formally-verified"
+            ]
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "derived",
+                  "agent"
+                ]
+              },
+              "by": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "verified": {
+            "type": "object",
+            "properties": {
+              "by": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "default": [],
+      "maxItems": 5000,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "imports",
+              "calls",
+              "reads",
+              "writes",
+              "sends",
+              "receives",
+              "uses"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "derived",
+                  "agent"
+                ]
+              },
+              "by": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "verified": {
+            "type": "object",
+            "properties": {
+              "by": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rules": {
+      "default": [],
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "forbid"
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              },
+              "includeTypeOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "allow-only"
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              },
+              "includeTypeOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "layers"
+              },
+              "layers": {
+                "minItems": 2,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    },
+                    {
+                      "minItems": 1,
+                      "maxItems": 100,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  ]
+                }
+              },
+              "includeTypeOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "layers"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "no-cycles"
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              },
+              "includeTypeOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "protect"
+              },
+              "paths": {
+                "minItems": 1,
+                "maxItems": 200,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                }
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "paths"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "derived",
+                      "agent"
+                    ]
+                  },
+                  "by": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "verified": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 40
+                  },
+                  "commit": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              "kind": {
+                "type": "string",
+                "const": "secret-access"
+              },
+              "secrets": {
+                "minItems": 1,
+                "maxItems": 200,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "allow": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "secrets",
+              "allow"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "invariants": {
+      "default": [],
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "components": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+            }
+          },
+          "check": {
+            "type": "object",
+            "properties": {
+              "run": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "tests": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "derived",
+                  "agent"
+                ]
+              },
+              "by": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "verified": {
+            "type": "object",
+            "properties": {
+              "by": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "statement"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "default": [],
+      "maxItems": 500,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "accepted",
+              "superseded",
+              "deprecated"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 40
+          },
+          "components": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+            }
+          },
+          "context": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "decision": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "consequences": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "supersededBy": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"
+          },
+          "links": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "derived",
+                  "agent"
+                ]
+              },
+              "by": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "at": {
+                "type": "string",
+                "minLength": 4,
+                "maxLength": 40
+              },
+              "commit": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "decision"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "system",
+    "components"
+  ],
+  "additionalProperties": false
+}

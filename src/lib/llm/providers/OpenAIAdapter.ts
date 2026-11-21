@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { ChatInput, GenerateStructureInput, LLMProvider } from "../types";
+import { reportLlmUsage } from "../usage";
 
 function isMaxTokensUnsupported(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -139,39 +140,58 @@ export class OpenAIAdapter implements LLMProvider {
 
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const response = await this.client.chat.completions.create({
-          model,
-          messages: [
-            { role: "system", content: input.system },
-            ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-            { role: "user", content: input.message },
-          ],
-          ...(includeTemperature ? { temperature } : {}),
-          ...(useMaxCompletionTokens
-            ? { max_completion_tokens: maxTokens }
-            : { max_tokens: maxTokens }),
-        });
+        const response = await this.client.chat.completions.create(
+          {
+            model,
+            messages: [
+              { role: "system", content: input.system },
+              ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+              { role: "user", content: input.message },
+            ],
+            ...(includeTemperature ? { temperature } : {}),
+            ...(useMaxCompletionTokens
+              ? { max_completion_tokens: maxTokens }
+              : { max_tokens: maxTokens }),
+          },
+          { signal: input.signal },
+        );
 
         const text = extractMessageText(response.choices[0]?.message);
         if (text) {
+          reportLlmUsage(input, {
+            inputTokens: response.usage?.prompt_tokens,
+            outputTokens: response.usage?.completion_tokens,
+            totalTokens: response.usage?.total_tokens,
+            finishReason: response.choices[0]?.finish_reason ?? undefined,
+          });
           return text;
         }
 
-        const fallbackResponse = await this.client.responses.create({
-          model,
-          input: [
-            { role: "system", content: input.system },
-            ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-            { role: "user", content: input.message },
-          ],
-          ...(includeTemperature ? { temperature } : {}),
-          max_output_tokens: maxTokens,
-        });
+        const fallbackResponse = await this.client.responses.create(
+          {
+            model,
+            input: [
+              { role: "system", content: input.system },
+              ...(input.history || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+              { role: "user", content: input.message },
+            ],
+            ...(includeTemperature ? { temperature } : {}),
+            max_output_tokens: maxTokens,
+          },
+          { signal: input.signal },
+        );
 
         const fallbackText = extractResponsesText(fallbackResponse);
         if (!fallbackText) {
           throw new Error("OpenAI returned an empty response");
         }
+
+        reportLlmUsage(input, {
+          inputTokens: fallbackResponse.usage?.input_tokens,
+          outputTokens: fallbackResponse.usage?.output_tokens,
+          totalTokens: fallbackResponse.usage?.total_tokens,
+          finishReason: fallbackResponse.status ?? undefined,
+        });
 
         return fallbackText;
       } catch (error) {
@@ -212,22 +232,34 @@ export class OpenAIAdapter implements LLMProvider {
 
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const stream = await this.client.chat.completions.create({
-          model,
-          messages: [
-            { role: "system", content: input.system },
-            ...historyMessages,
-            { role: "user", content: input.message },
-          ],
-          ...(includeTemperature ? { temperature } : {}),
-          ...(useMaxCompletionTokens
-            ? { max_completion_tokens: maxTokens }
-            : { max_tokens: maxTokens }),
-          stream: true,
-        });
+        const stream = await this.client.chat.completions.create(
+          {
+            model,
+            messages: [
+              { role: "system", content: input.system },
+              ...historyMessages,
+              { role: "user", content: input.message },
+            ],
+            ...(includeTemperature ? { temperature } : {}),
+            ...(useMaxCompletionTokens
+              ? { max_completion_tokens: maxTokens }
+              : { max_tokens: maxTokens }),
+            stream: true,
+            stream_options: { include_usage: true },
+          },
+          { signal: input.signal },
+        );
 
         let emittedText = false;
+        let inputTokens: number | undefined;
+        let outputTokens: number | undefined;
+        let totalTokens: number | undefined;
+        let finishReason: string | undefined;
         for await (const chunk of stream) {
+          inputTokens = chunk.usage?.prompt_tokens ?? inputTokens;
+          outputTokens = chunk.usage?.completion_tokens ?? outputTokens;
+          totalTokens = chunk.usage?.total_tokens ?? totalTokens;
+          finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
           const delta = chunk.choices[0]?.delta?.content;
           if (delta) {
             emittedText = true;
@@ -241,6 +273,8 @@ export class OpenAIAdapter implements LLMProvider {
           if (fallbackText) {
             yield fallbackText;
           }
+        } else {
+          reportLlmUsage(input, { inputTokens, outputTokens, totalTokens, finishReason });
         }
 
         return;

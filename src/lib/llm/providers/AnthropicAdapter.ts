@@ -1,4 +1,5 @@
-import { ChatInput, GenerateStructureInput, LLMProvider } from "../types";
+import { ChatInput, GenerateStructureInput, LLMProvider, type LLMUsageMetadata } from "../types";
+import { reportLlmUsage } from "../usage";
 
 type AnthropicMessage = {
   role: "user" | "assistant";
@@ -31,7 +32,7 @@ export class AnthropicAdapter implements LLMProvider {
     return this.sendMessage([
       ...historyMessages,
       { role: "user", content: input.message },
-    ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000, input.model);
+    ], input.system, input.temperature ?? 0.7, input.maxTokens ?? 2000, input.model, input.signal, input.onUsage);
   }
 
   async *chatStream(input: ChatInput): AsyncIterable<string> {
@@ -66,6 +67,7 @@ export class AnthropicAdapter implements LLMProvider {
 
     const decoder = new TextDecoder();
     let buffer = "";
+    const usage: LLMUsageMetadata = {};
 
     try {
       while (true) {
@@ -83,7 +85,20 @@ export class AnthropicAdapter implements LLMProvider {
           if (!payload || payload === "[DONE]") continue;
 
           try {
-            const event = JSON.parse(payload);
+            const event = JSON.parse(payload) as {
+              type?: string;
+              delta?: { text?: string; stop_reason?: string };
+              message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+              usage?: { input_tokens?: number; output_tokens?: number };
+            };
+            if (event.type === "message_start") {
+              usage.inputTokens = event.message?.usage?.input_tokens;
+              usage.outputTokens = event.message?.usage?.output_tokens;
+            }
+            if (event.type === "message_delta") {
+              usage.outputTokens = event.usage?.output_tokens ?? usage.outputTokens;
+              usage.finishReason = event.delta?.stop_reason ?? usage.finishReason;
+            }
             if (event.type === "content_block_delta" && event.delta?.text) {
               yield event.delta.text;
             }
@@ -94,6 +109,7 @@ export class AnthropicAdapter implements LLMProvider {
       }
     } finally {
       reader.releaseLock();
+      reportLlmUsage(input, usage);
     }
   }
 
@@ -102,7 +118,9 @@ export class AnthropicAdapter implements LLMProvider {
     system: string,
     temperature: number,
     maxTokens: number,
-    model?: string
+    model?: string,
+    signal?: AbortSignal,
+    onUsage?: (metadata: LLMUsageMetadata) => void,
   ): Promise<string> {
     const response = await fetch(this.baseUrl, {
       method: "POST",
@@ -118,6 +136,7 @@ export class AnthropicAdapter implements LLMProvider {
         temperature,
         max_tokens: maxTokens,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -125,7 +144,16 @@ export class AnthropicAdapter implements LLMProvider {
       throw new Error(`Anthropic request failed: ${response.status} ${errorText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as {
+      content?: unknown;
+      usage?: { input_tokens?: number; output_tokens?: number };
+      stop_reason?: string;
+    };
+    reportLlmUsage({ onUsage }, {
+      inputTokens: data.usage?.input_tokens,
+      outputTokens: data.usage?.output_tokens,
+      finishReason: data.stop_reason,
+    });
     const content = Array.isArray(data?.content) ? data.content[0]?.text : data?.content;
     return typeof content === "string" ? content : "";
   }

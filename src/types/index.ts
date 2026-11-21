@@ -1,4 +1,6 @@
 // Node Types
+import type { AnalysisCoverage, EvidenceRef, RepositorySnapshot } from '@/lib/contracts';
+
 export type NodeCategory = 
   // Code-based categories
   | 'api'
@@ -44,6 +46,10 @@ export interface NodeData {
   dependencies?: string[];
   exports?: string[];
   isExpanded?: boolean;
+  evidence?: EvidenceRef[];
+  confidence?: 'low' | 'medium' | 'high';
+  analysisLevel?: 'semantic' | 'structural' | 'manifest';
+  provenance?: string;
 }
 
 export interface EdgeData {
@@ -52,6 +58,8 @@ export interface EdgeData {
   strength?: 'weak' | 'normal' | 'strong';
   direction?: 'one-way' | 'two-way';
   labelOffset?: { x: number; y: number };
+  evidence?: EvidenceRef[];
+  confidence?: 'low' | 'medium' | 'high';
 }
 
 export type ProjectSource = 'github' | 'empty' | 'imported';
@@ -65,6 +73,9 @@ export interface SyncedCanvasNode {
   complexity?: 'low' | 'medium' | 'high';
   dependencies?: string[];
   exports?: string[];
+  evidence?: EvidenceRef[];
+  confidence?: 'low' | 'medium' | 'high';
+  analysisLevel?: 'semantic' | 'structural' | 'manifest';
   position: { x: number; y: number };
 }
 
@@ -76,10 +87,13 @@ export interface SyncedCanvasEdge {
   type?: string;
   strength?: 'weak' | 'normal' | 'strong';
   direction?: 'one-way' | 'two-way';
+  evidence?: EvidenceRef[];
+  confidence?: 'low' | 'medium' | 'high';
 }
 
 export interface CanvasSyncSnapshot {
   syncedAt: string;
+  graphRevision: number;
   project: {
     id: string;
     name: string;
@@ -97,6 +111,10 @@ export interface RepoDetails {
   owner: string;
   repo: string;
   defaultBranch?: string;
+  requestedRef?: string;
+  commitSha?: string;
+  treeSha?: string;
+  sourceGrant?: string;
   description?: string;
   stars?: number;
   language?: string;
@@ -176,6 +194,8 @@ export interface ChatSession {
 
 // Project with all its data
 export interface Project {
+  schemaVersion: 2;
+  graphRevision: number;
   id: string;
   name: string;
   repoUrl: string;
@@ -190,6 +210,10 @@ export interface Project {
   activeChatSessionId: string | null;
   /** Flat list of file paths from the repo (set when creating from GitHub) */
   fileTree?: RepoFileEntry[];
+  repositorySnapshot?: RepositorySnapshot;
+  analysisCoverage?: AnalysisCoverage;
+  analysisWarnings?: string[];
+  analyzer?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -211,6 +235,9 @@ export interface RepoFileEntry {
   path: string;
   type: 'blob' | 'tree';
   sha?: string;
+  size?: number;
+  mode?: string;
+  commitSha?: string;
 }
 
 /** Tree node used by the file explorer UI */
@@ -228,5 +255,10 @@ export interface CachedFileContent {
   projectId: string;
   filePath: string;
   content: string;
+  commitSha?: string;
+  blobSha?: string;
+  sizeBytes: number;
+  isText: boolean;
   fetchedAt: string;
+  lastAccessAt: string;
 }

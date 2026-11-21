@@ -1,26 +1,51 @@
 {
-  "name": "repo-agent",
-  "version": "0.1.0",
+  "name": "rassam-agent",
+  "version": "0.3.0",
   "private": true,
+  "description": "A local-first, evidence-linked architecture workspace for public GitHub repositories.",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/V0ightt/Rassam.git"
+  },
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@10.9.2",
+  "bin": {
+    "rassam": "action/dist/rassam.mjs"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test"
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "bundle:check": "node scripts/check-bundle-budget.mjs",
+    "rassam": "tsx src/cli/index.ts",
+    "build:cli": "node scripts/build-cli.mjs",
+    "blueprint:schema": "tsx scripts/generate-blueprint-schema.ts",
+    "blueprint:check": "tsx src/cli/index.ts check",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run bundle:check"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@tanstack/react-virtual": "^3.14.9",
     "@types/dagre": "^0.7.53",
     "@types/react-syntax-highlighter": "^15.5.13",
     "clsx": "^2.1.1",
     "dagre": "^0.8.5",
-    "framer-motion": "^12.26.2",
+    "dexie": "^4.4.4",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.562.0",
-    "next": "16.1.1",
+    "next": "16.3.0",
     "octokit": "^5.0.5",
     "openai": "^6.16.0",
     "react": "19.2.3",
@@ -29,17 +54,30 @@
     "react-syntax-highlighter": "^16.1.0",
     "reactflow": "^11.11.4",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.10",
+    "esbuild": "0.28.1",
     "eslint": "^9",
-    "eslint-config-next": "16.1.1",
+    "eslint-config-next": "16.3.0",
+    "fast-check": "^4.9.0",
+    "jsdom": "^29.1.1",
+    "msw": "^2.15.0",
     "tailwindcss": "^4",
     "tsx": "^4.19.2",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10",
+    "vitest-axe": "^0.1.0"
   }
 }

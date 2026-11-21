@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { ChatInput, GenerateStructureInput, LLMProvider, LLMProviderId } from "../types";
+import { reportLlmUsage } from "../usage";
 
 /**
  * Base adapter for all OpenAI-compatible LLM providers (DeepSeek, Google, Ollama).
@@ -41,16 +42,26 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
     const responseFormat = input.structuredOutput && (this.id === 'openai' || this.id === 'deepseek')
       ? ({ type: input.structuredOutput.type } as const)
       : undefined;
-    const response = await this.client.chat.completions.create({
-      model: input.model || this.model,
-      messages: [
-        { role: "system", content: input.system },
-        ...historyMessages,
-        { role: "user", content: input.message },
-      ],
-      temperature: input.temperature ?? 0.7,
-      max_tokens: input.maxTokens ?? 2000,
-      response_format: responseFormat,
+    const response = await this.client.chat.completions.create(
+      {
+        model: input.model || this.model,
+        messages: [
+          { role: "system", content: input.system },
+          ...historyMessages,
+          { role: "user", content: input.message },
+        ],
+        temperature: input.temperature ?? 0.7,
+        max_tokens: input.maxTokens ?? 2000,
+        response_format: responseFormat,
+      },
+      { signal: input.signal },
+    );
+
+    reportLlmUsage(input, {
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
+      totalTokens: response.usage?.total_tokens,
+      finishReason: response.choices[0]?.finish_reason ?? undefined,
     });
 
     return response.choices[0]?.message?.content || "";
@@ -76,10 +87,19 @@ export abstract class OpenAICompatibleAdapter implements LLMProvider {
       { signal: input.signal },
     );
 
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let totalTokens: number | undefined;
+    let finishReason: string | undefined;
     for await (const chunk of stream) {
       if (input.signal?.aborted) break;
+      inputTokens = chunk.usage?.prompt_tokens ?? inputTokens;
+      outputTokens = chunk.usage?.completion_tokens ?? outputTokens;
+      totalTokens = chunk.usage?.total_tokens ?? totalTokens;
+      finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) yield delta;
     }
+    reportLlmUsage(input, { inputTokens, outputTokens, totalTokens, finishReason });
   }
 }

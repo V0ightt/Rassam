@@ -1,12 +1,50 @@
-# Repo Visualizer - Agent Guide
+# Rassam - Agent Guide
 
-This document is designed to help future coding agents understand the architecture, logic, and structure of the **Repo Visualizer** project. Read this before making changes to ensure consistency and modularity.
+Read this before making changes. Rassam is checked against its own architecture contract, `.rassam/blueprint.json`. If you are a coding agent, the `rassam` MCP server in `.mcp.json` answers the questions below for you: call `explain_path` before editing a file, `check_dependency` before adding an import, `check_changes` before you finish, and `report_conflict` instead of weakening a test, a check or the blueprint.
 
 ## Project Overview
 
-**Repo Visualizer** is a Next.js application that converts GitHub repository structures into interactive, logical flowcharts. It uses AI (DeepSeek) to categorize files into high-level "nodes" (e.g., Auth, Database, UI) based on their names and paths, rather than just visualizing the file tree directory.
+**Rassam** is the architecture contract for agent-built software. It has four parts that share one isomorphic engine:
 
-**AI Assistant**: The integrated chatbot is named **Rassam** (رسّام - "artist/illustrator" in Arabic), reflecting its ability to visualize and explain codebases.
+1. **The blueprint** (`.rassam/blueprint.json`, spec in `docs/blueprint-spec.md`, schema in `src/blueprint/schema.ts`): components and the files they own, human-written intent, declared dependencies, rules, invariants, decisions and sign-offs.
+2. **The engine** (`src/blueprint/`): import graph, component membership, rule evaluation, the change gate, reach analysis and report rendering. It must stay isomorphic: no `node:` imports, no DOM, no React/Next, no imports from the rest of the app. Only `zod`.
+3. **The Node host** (`src/cli/`): the `rassam` CLI, git and GitHub Actions integration, and the dual-era MCP server. Bundled to `action/dist/rassam.mjs` (`npm run build:cli`; CI checks the bundle is fresh).
+4. **The web workbench** (Next.js app): the Blueprint view (`src/components/blueprint/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `POST /api/blueprint`) and the original Map view with evidence inspector and the Rassam chat.
+
+### Engine module map (`src/blueprint/`)
+
+| Module | Responsibility |
+| --- | --- |
+| `schema.ts` | Blueprint v0.1 zod schema, parse/validate/serialize, JSON Schema |
+| `types.ts`, `constants.ts` | Shared engine types; ignore globs, test patterns, built-in tripwires |
+| `glob.ts`, `paths.ts`, `util.ts` | Isomorphic glob matcher, POSIX paths, hashing |
+| `imports.ts` | Multi-language import extraction and resolution → `FileGraph` |
+| `env.ts`, `reach.ts` | Env/secret reads; agent configs, MCP servers, permissions, inline secrets |
+| `selectors.ts`, `graph.ts` | Selector grammar; component membership, component graph, cycles |
+| `rules.ts`, `stats.ts`, `impact.ts` | Rule and policy evaluation; human-authored ratio; blast radius |
+| `diff.ts`, `blueprint-diff.ts`, `agents.ts` | Unified diff parsing, tripwires, verification-weakening heuristics; semantic contract diff; agent authorship |
+| `check.ts` | `runCheck`: full and diff mode, base-contract judging, new-vs-existing, scoring |
+| `workspace.ts` | Query layer for MCP/CLI/canvas: `explainPath`, `checkDependency`, `impact`, `componentSummary`, `overview`, `graphView` |
+| `derive.ts`, `verify.ts`, `snapshot.ts` | Draft blueprints (`rassam init`); sign-off stamps; compact graph transport |
+| `report.ts` | Text, Markdown sticky comment, SARIF, GitHub annotations, JSON, Mermaid, DOT |
+
+### Non-negotiable behaviors
+
+- A change is judged by the **base** blueprint. Contract-weakening edits are errors until a human applies the approval label. Invariant commands run only from the base blueprint.
+- Only **new** violations fail a change; fingerprints must stay stable (no line numbers in fingerprints).
+- Static analysis is the only source of dependency edges. LLM output never becomes a blueprint fact without human acceptance, and agent proposals go to `.rassam/proposals/`, never into `blueprint.json`.
+- Secrets are never printed: reports carry redacted previews only.
+
+### Working on the blueprint itself
+
+- Changes to architecture should be reflected in `.rassam/blueprint.json` in the same change (new components, paths, declared dependencies). Run `npm run rassam -- check` (full) and `npm run rassam -- check --base main` (as CI does).
+- Edits that weaken rules need a human-approved label on the PR. Do not loosen a rule to make your change pass; use `report_conflict` and explain.
+
+---
+
+# Map workspace (original view)
+
+The sections below describe the original map workspace, which remains available as the **Map** view.
 
 ## Tech Stack
 
@@ -58,16 +96,16 @@ This document is designed to help future coding agents understand the architectu
     -   **Clipboard**: **Ctrl+C** copies selected node(s) (and edges fully within the selection) to an in-memory clipboard. **Ctrl+V** pastes them at a +60px offset with new IDs.
     -   **Undo / Redo**: **Ctrl+Z** undoes the last canvas change (up to 10 steps). **Ctrl+Shift+Z** or **Ctrl+Y** redoes. Any new edit clears the redo (future) stack.
     -   **Inline editing**: **Double-click** a node's label or description to edit it in-place. Press **Enter** to commit, **Escape** to cancel.
-    -   Canvas has a **manual Sync button** in controls. Sync captures a canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction).
-    -   Chat prefers the latest synced snapshot, but automatically switches to live canvas context whenever the canvas has changed more recently than the last manual sync.
-    -   For architecture-sensitive prompts, agents should sync after major canvas edits before relying on chat answers.
+    -   Canvas sync is **automatic**. A canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction) is refreshed after canvas edits and selection changes.
+    -   Chat prefers the latest synced snapshot, but automatically switches to live canvas context whenever the canvas has changed more recently than the last completed auto-sync.
+    -   Undo/redo restores also trigger auto-sync, so chat context follows history changes without extra user action.
     -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
     -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
     -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
     -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, receives up to **2000** available blob paths from the active project, and runs the chat agent loop.
     -   Chat now supports **two modes**: `ask` (read + session inspection tools only) and `agent` (read + session + canvas write/write_batch tools).
     -   Tool calls are streamed as structured NDJSON events (`status`, `text`, `write`, `error`, `done`), and the client renders tool progress inline in the assistant reply.
-    -   `write` tool events mutate the live React Flow canvas client-side without automatically updating the synced AI snapshot.
+    -   `write` tool events mutate the live React Flow canvas client-side and the synced AI snapshot is refreshed automatically shortly after the canvas settles.
     -   Agent-mode **write-intent** turns are transactional: if planner + fallback/repair apply zero successful writes, the turn emits an explicit failure and does not degrade into a normal assistant explanation.
     -   Successful agent-mode mutation turns end with a **deterministic operation summary** generated from applied canvas writes, not a second open-ended LLM completion.
     -   Chat message updates are **session-scoped**: an in-flight streamed reply keeps writing to the originating project/chat session even if the user switches to another chat before the stream finishes.
@@ -83,7 +121,7 @@ This document is designed to help future coding agents understand the architectu
 ### `src/app`
 -   `page.tsx`: Thin orchestration shell. Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`, `useFileExplorer`, `useEditorTabs`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
   -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), Activity Bar panel state, editor tab state, and canvas-specific handlers (node CRUD, search, layout change).
-  -   Tracks `canvasLastModifiedAt` so chat can prefer live canvas context whenever the user or agent has modified the canvas since the last manual sync.
+  -   Tracks `canvasLastModifiedAt` so chat can prefer live canvas context whenever the user or agent has modified the canvas since the last completed auto-sync.
   -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, pane resizing, file explorer, and editor tabs are delegated to hooks.
   -   The top-center floating header (URL input, Visualize button) and repo info badge have been removed. Export/import and repo stats are now in the ActivityBar bottom section.
   -   A **TabBar** is always visible above the main content area. Canvas is the default tab; clicking files in the explorer opens them in new tabs with syntax-highlighted code.
@@ -284,3 +322,13 @@ Ensure these are set in `.env.local` for local development:
 -   `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`.
 -   `OLLAMA_API_KEY`: Required for enabling Ollama through Settings validation.
 -   `GITHUB_TOKEN`: Recommended to avoid rate limits on repo fetching.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

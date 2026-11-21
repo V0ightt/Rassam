@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import type { ToolTranscriptEntry, WorkingCanvasState } from "./chat-canvas";
 import { executeGrepTool, executeReadTool, executeWriteBatch } from "./chat-tools";

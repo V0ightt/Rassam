@@ -1,170 +1,115 @@
 >[!NOTE]
->This project is under active development and has not entered the alpha stage yet. Features and functionality may change rapidly.
-
->[!IMPORTANT]
->Latest Updates:
->Dual project creation flow (GitHub URL or Empty Project) and manual Canvas Sync for AI context snapshots.
+>Rassam is under active development and has not reached 1.0. The blueprint format is versioned (`0.1`) and may gain fields; existing files stay valid within a version.
 
 >[!Tip]
->Why Rassam? Rassam (رسّام) means painter in arabic.
-# Rassam Agent
+>Why Rassam? Rassam (رسّام) means "painter" in Arabic. It used to paint portraits of code. Now it paints the blueprint that code is checked against.
+
+# Rassam
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
 [![Website](https://img.shields.io/badge/Website-rassam.dev-blue?style=for-the-badge&logo=google-chrome&logoColor=white)](https://rassam.dev)
 ![AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=for-the-badge)
 
-
-GitHub repository visualizer using Next.js, React Flow, and DeepSeek AI. Convert any GitHub repository into an interactive, intelligent flowchart. Ask questions about code structure and how to use the repository with an AI chatbot. (Made with Claude Code)
-
-<div align="center">
-  <a href="https://rassam.dev" target="_blank"><img src="./public/logo.png" alt="Rassam Agent Logo" width="220" height="220" /></a>
-</div>
-
----
-
-## Features
-
-### Project Creation Modes
-- **From GitHub URL**: Analyze repository structure and generate nodes/edges automatically
-- **Empty Project**: Start with a blank, editable canvas to design custom architecture
-- **Project Sidebar**: Manage multiple projects and switch between them
-
-### Multiple Node Types
-- **Category-based nodes**: API, Component, Database, Auth, Service, Hook, and more
-- **Visual differentiation**: Each category has unique colors and icons
-- **Compact & Enhanced views**: Different node styles for different use cases
+**The architecture contract for agent-built software.** Rassam keeps a human-owned blueprint of your system in the repository, gives coding agents a way to ask it what they may do before they act, and checks every change against it in CI.
 
 <div align="center">
-  <img src="./public/preview.png" alt="Preview"/>
+  <a href="https://rassam.dev" target="_blank"><img src="./public/logo.png" alt="Rassam logo" width="180" height="180" /></a>
 </div>
 
-### Detailed Node Information
-- **File listing**: Expandable file list inside each node with copy functionality
-- **Complexity indicators**: Low/Medium/High complexity badges
-- **Dependencies tracking**: Shows external package dependencies
-- **Lines of code estimation**: Quick overview of component size
+## Why
 
-### Flowchart Editing
-- **Add nodes**: Create new nodes with custom labels, descriptions, and categories
-- **Edit nodes**: Modify existing node properties inline
-- **Inline editing**: Double-click a node's label or description to edit it directly on the canvas
-- **Delete nodes**: Remove nodes and their connections
-- **Copy & Paste**: Ctrl+C / Ctrl+V to duplicate selected nodes (with their internal edges)
-- **Create connections**: Draw edges between nodes by dragging
-- **Undo / Redo support**: Revert and replay recent changes
+Coding agents now start a large and fast-growing share of pull requests, and the measured bottleneck has moved from writing code to verifying it. Repository-to-diagram tools are free everywhere, so a picture of your code is no longer scarce. What stays scarce as models improve is what a model cannot infer from the code: **what the system is supposed to be, what each part may depend on and reach, and who approved it.**
 
-### AI Context Sync
-- **Manual Sync button**: Capture a canonical snapshot of your current canvas
-- **Snapshot includes**: nodes, edges, node positions, selected node, and layout direction
-- **Chat-aware context**: AI uses the synced snapshot unless the live canvas has changed more recently, preventing stale synced context from overriding newer edits
-- **Future-ready prompting**: Keeps architecture context accurate for richer AI interactions and exports
+Rassam captures exactly that, enforces it mechanically, and spends human attention only on a short, ranked list of exceptions. The evidence behind this direction is in [`reports/Rassam pivot for the AGI era.md`](reports/Rassam%20pivot%20for%20the%20AGI%20era.md).
 
+## What you get
 
+| Piece | What it does |
+| --- | --- |
+| **Blueprint** — `.rassam/blueprint.json` | An open, versioned JSON contract: components and the files they own, intent written by people, declared dependencies, rules (`forbid`, `allow-only`, `layers`, `no-cycles`, `protect`, `secret-access`), invariants, decisions, and human sign-offs. [Spec](docs/blueprint-spec.md) · [JSON Schema](schema/blueprint-0.1.schema.json) |
+| **Gate** — `rassam check` + GitHub Action | Re-derives the import graph from source, judges a change **by the base branch's blueprint** (a PR cannot relax its own rules), fails only on *new* violations, flags contract-weakening edits, tests or CI being weakened, and changes to agent permissions or committed credentials. Output as text, a sticky PR comment, annotations, JSON or SARIF. |
+| **MCP server** — `rassam mcp` | Lets Claude Code, Codex, Cursor, Copilot and others ask before acting: `explain_path`, `check_dependency`, `impact`, `check_changes`, and a sanctioned `report_conflict` instead of quietly weakening a test. Supports MCP 2025-11-25 and the stateless 2026-07-28 protocol. |
+| **Canvas** — the web app | Open a local folder (Chromium) or a public GitHub repo, see declared vs. observed dependencies, write intent, draw a forbidden edge, sign off, and save the blueprint straight back into your repository. |
+| **Reach map** | What agents can touch: MCP servers and the credentials they receive, broad permission grants, secrets committed in agent configs, and which components read which environment variables. |
 
-### Export Options
-- **PNG Export**: High-quality image export
-- **SVG Export**: Scalable vector graphics
-- **JSON Export**: Full flowchart data for backup or import
+## Quickstart
 
-<div align="center">
-  <img src="./public/feature-ai.png" alt="Export as png" />
-</div>
+```bash
+npm install
+npx tsx src/cli/index.ts init          # draft a blueprint from your code (all facts marked "derived")
+# open .rassam/blueprint.json: write intent, add a rule or two
+npx tsx src/cli/index.ts check         # full check of the working tree
+npx tsx src/cli/index.ts check --base main   # judge your branch the way CI will
+```
 
-### AI-Powered Chatbot
-- **Context-aware responses**: Understands the selected node's context
-- **Canvas-aware responses**: Understands graph relationships and architecture flow from synced snapshots
-- **Two chat modes**: `ask` mode can inspect files and session state; `agent` mode can also edit canvas nodes and edges
-- **Transactional agent writes**: explicit draw/edit requests in `agent` mode now fail closed if no canvas mutation succeeds, instead of silently falling back to prose
-- **Deterministic agent summaries**: after successful canvas mutations, the final assistant message is generated from the applied operations instead of another open-ended LLM pass
-- **Grounded file reads**: chat requests send up to 2000 project blob paths so basename and suffix file requests can resolve explicitly instead of guessing
-- **Write fallback in agent mode**: if the planner stalls after reading/searching, Rassam runs a structured backup write-planning + repair pass before failing the turn
-- **Tool-call streaming**: Tool activity is streamed into the chat response with live status updates like read, session, and write actions
-- **Model selector**: Choose between enabled provider/model pairs directly in chat
-- **Markdown support**: Code blocks with syntax highlighting
-- **File path formatting**: Special rendering for file references
-- **Quick actions**: Pre-built prompts for common questions
-- **Chat history**: Persistent conversation within session
-- **Session-safe streaming**: In-flight AI replies stay attached to the chat session where they started, even if you switch chats mid-response
-- **Single-step undo for agent batches**: streamed agent write events are grouped into one history snapshot so a generated flowchart undoes in one step
+The bundled single-file CLI lives at `action/dist/rassam.mjs` (`node action/dist/rassam.mjs check`). See [docs/getting-started.md](docs/getting-started.md) for wiring the GitHub Action and connecting the MCP server to your agents.
 
-### AI Settings
-- **Dedicated settings page**: Open `/settings` to manage AI runtime behavior
-- **Enable/disable models**: Toggle provider models on/off and control which are usable in chat
-- **Live validation**: Providers can be enabled only when their API key is valid and a live validation call succeeds
-- **Generation controls**: Configure max output tokens and temperature
+A minimal blueprint:
 
-### Quality of Life Features
-- **Search nodes**: Filter nodes by name, description, or file paths
-- **Permanent tab bar**: Canvas/file tab bar is always visible for consistent navigation
-- **Chat toggle in top bar**: Open/close chat from the top-right `Chat` button near `Close All`
-- **Clean chat close behavior**: Closing chat fully removes the right panel (no collapsed mini sidebar)
-- **Top chat controls**: Chat header includes icon-only actions for history, new chat, settings, and close
-- **Mode toggle in chat**: Switch between `ask` and `agent` directly from the chat header
-- **Resizable left panel**: Drag to resize the Projects/File Explorer side panel width
-- **Smooth code viewer**: All files keep syntax highlighting with virtualized rendering and stable line numbers for smooth large-file opening and scrolling
-- **Minimap**: Bird's-eye view of the entire flowchart
-- **Keyboard shortcuts**: Common actions accessible via keyboard (Ctrl+C/V, Ctrl+Z, Ctrl+A, Delete, etc.)
-- **Layout options**: Top-to-bottom or Left-to-right layouts
-- **Zoom controls**: Easy navigation of large flowcharts
-- **Loading states**: Clear feedback during API operations
----
-## Getting Started
+```json
+{
+  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
+  "version": "0.1",
+  "system": { "name": "Shop" },
+  "components": [
+    { "id": "ui", "name": "Storefront", "kind": "component", "paths": ["src/ui/**"],
+      "intent": "Renders the shop. Never touches storage directly." },
+    { "id": "db", "name": "Database access", "kind": "database", "paths": ["src/db/**"] },
+    { "id": "payments", "name": "Payments", "kind": "service", "paths": ["src/payments/**"] }
+  ],
+  "rules": [
+    { "id": "ui-no-db", "kind": "forbid", "from": "ui", "to": "db",
+      "reason": "The UI reaches data only through the domain layer." },
+    { "id": "stripe-key", "kind": "secret-access", "secrets": ["STRIPE_*"], "allow": "payments" }
+  ]
+}
+```
 
-1.  **Clone the repo**
-2.  **Install dependencies**:
-    ```bash
-    npm install
-    ```
-3.  **Environment Variables**:
-    Create a `.env.local` file:
-    ```
-    DEEPSEEK_API_KEY=your_key
-  OPENAI_API_KEY=optional
-  ANTHROPIC_API_KEY=optional
-  GOOGLE_API_KEY=optional
-  OLLAMA_API_KEY=optional
-    GITHUB_TOKEN=optional_token_for_rate_limits
-    ```
-4.  **Run Development Server**:
-    ```bash
-    npm run dev
-    ```
-5.  **Open Browser**:
-    Navigate to `http://localhost:3000`
+## How the gate thinks
 
-6.  **Create a Project**:
-  - Open **Projects** from the left sidebar
-  - Click `+` and choose:
-    - **From GitHub URL** to auto-generate architecture
-    - **Empty Project** to start from scratch
+- **Judged by the base contract.** In a pull request, rules come from the merge-base blueprint. Edits to the blueprint itself are diffed semantically; anything that loosens it (a removed rule, a narrowed forbid, a lowered severity, a new ignore glob) is an error until a human applies the approval label (`rassam:approved` by default).
+- **Only new violations fail.** Pre-existing violations are reported, collapsed, so you can adopt Rassam on a legacy codebase without a wall of red.
+- **The checks are protected.** Documented reward hacks by coding agents attack the checks themselves, so changes to tests, CI, lockfiles, agent configuration and the blueprint always surface, and heuristics flag skipped or focused tests, removed or trivialized assertions, forced `exit(0)`, new suppressions, weakened CI steps and lowered coverage thresholds.
+- **A small attention budget.** Findings are scored by severity, novelty, blast radius and kind; the top few go first. Every finding cites `file:line` evidence.
+- **Humans stay authors, not rubber stamps.** Each blueprint fact records whether a person asserted it, it was derived from code, or an agent proposed it; the report shows the human-authored share. Agent proposals land in `.rassam/proposals/` and never edit the contract directly.
 
-7.  **Sync Before Chatting**:
-  - Use the **Sync** button in canvas controls after editing nodes/edges
-  - Then ask Rassam questions so replies reflect your latest flowchart state
----
-## Tech Stack
+## The web app
 
--   **Framework**: Next.js 16 (App Router)
--   **Language**: TypeScript
--   **Styling**: Tailwind CSS v4
--   **Visualization**: React Flow
--   **Layout Engine**: Dagre
--   **AI**: DeepSeek API (via OpenAI SDK)
--   **Icons**: Lucide React
--   **Markdown**: React Markdown + React Syntax Highlighter
--   **Export**: html-to-image
+```bash
+npm install
+npm run dev     # http://localhost:3000
+```
 
----
+Open a local folder from the start screen (Chrome/Edge) to edit `.rassam/blueprint.json` in place, or analyze a public GitHub repository. Optional `.env.local` keys: `GITHUB_TOKEN` (rate limits), and `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OLLAMA_API_KEY` for the Rassam chat assistant and optional AI enrichment. See [docs/deployment.md](docs/deployment.md) for server settings.
 
-## ❤️ Special Thanks
+The original map workspace (evidence-linked architecture map, file explorer, editor tabs, and the ask/agent chat that proposes validated canvas patches) is still available under the **Map** view.
 
--   **GitHub Student Pack**: Thanks to Github for their amazing Student Developer Pack!
--   **Anthropic**: This project was made with the help of **Claude Opus 4.5**.
+## Repository layout
 
-## 📬 Contact
+| Path | Contents |
+| --- | --- |
+| `src/blueprint/` | The isomorphic engine: format, import graph (TS/JS, Python, Go, Java/Kotlin, Rust, C/C++, Ruby), rules, gate, reach, reports |
+| `src/cli/` | `rassam` CLI, git and GitHub Actions integration, MCP server |
+| `src/components/blueprint/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/` | Blueprint canvas, data layer, local-folder access |
+| `src/app/`, `src/components/`, `src/lib/` | The Next.js workbench and its server routes |
+| `action.yml`, `action/dist/` | The GitHub Action and its bundled CLI |
+| `.rassam/blueprint.json` | Rassam's own contract; Rassam is checked against it |
 
--   **Discord**: `v0ight_`
--   **LinkedIn**: [Momen Saeb](https://www.linkedin.com/in/momen-saeb-b88183283/)
--   **Mail**: `contact@rassam.dev`
+## Development
 
+```bash
+npm test              # vitest
+npm run typecheck
+npm run lint
+npm run build         # Next.js production build
+npm run build:cli     # rebuild action/dist/rassam.mjs (CI checks it is fresh)
+npm run rassam -- check --base main
+```
 
+Read [`agents.md`](agents.md) before architectural changes. If you are a coding agent working on this repository, use the `rassam` MCP server configured in `.mcp.json`.
+
+## Thanks and contact
+
+- **GitHub Student Pack** for the Student Developer Pack.
+- **Anthropic**: this project is built with Claude.
+- Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/) · `contact@rassam.dev`

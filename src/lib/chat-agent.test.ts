@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import type { ToolTranscriptEntry, WorkingCanvasState } from "./chat-canvas";
 import type { LLMProvider } from "./llm/types";
@@ -180,7 +180,7 @@ test("streamChatResponse fails explicitly when a write-intent turn produces no c
   assert.equal(stub.chatStreamCalls, 0);
 });
 
-test("streamChatResponse emits deterministic summaries after successful write-intent turns", async () => {
+test("streamChatResponse emits one atomic patch proposal after successful write-intent turns", async () => {
   const stub = createStubProvider([
     JSON.stringify({
       type: "tool",
@@ -234,6 +234,7 @@ test("streamChatResponse emits deterministic summaries after successful write-in
       model: "test-model",
     },
     providerOverride: stub.provider,
+    baseGraphRevision: 12,
     readFile: async (path: string) => ({
       path,
       content: null,
@@ -241,8 +242,8 @@ test("streamChatResponse emits deterministic summaries after successful write-in
     }),
   }));
 
-  const writeEvents = events.filter((event): event is { type: string } => (
-    typeof event === "object" && event !== null && "type" in event && (event as { type: string }).type === "write"
+  const patchEvents = events.filter((event): event is { type: string; patch: { baseGraphRevision: number; resultingRevision: number; operations: unknown[] } } => (
+    typeof event === "object" && event !== null && "type" in event && (event as { type: string }).type === "canvas_patch"
   ));
   const text = events
     .filter((event): event is { type: string; text?: string } => (
@@ -252,11 +253,13 @@ test("streamChatResponse emits deterministic summaries after successful write-in
     .map((event) => event.text || "")
     .join("");
 
-  assert.ok(writeEvents.length >= 3);
-  assert.match(text, /Updated the live canvas:/);
-  assert.match(text, /Nodes: HTML UI, ASCII Renderer/);
-  assert.match(text, /Edges: HTML UI -> ASCII Renderer/);
-  assert.match(text, /Use Sync if you want later chat turns to use this exact canvas snapshot\./);
+  assert.equal(patchEvents.length, 1);
+  assert.equal(patchEvents[0].patch.baseGraphRevision, 12);
+  assert.equal(patchEvents[0].patch.resultingRevision, 13);
+  assert.equal(patchEvents[0].patch.operations.length, 3);
+  assert.equal(events.some((event) => typeof event === "object" && event !== null && "type" in event && (event as { type: string }).type === "write"), false);
+  assert.match(text, /Proposed canvas changes:/);
+  assert.match(text, /Review the patch, then Apply or Discard it\./);
   assert.equal(stub.chatStreamCalls, 0);
 });
 
@@ -303,7 +306,7 @@ test("streamChatResponse can execute grep and keep the final prompt compact", as
   const finalSystem = String(stub.chatStreamInputs[0]?.system || "");
   const toolSummary = finalSystem.split("TOOL ACTIVITY SUMMARY FOR THIS TURN:")[1] || "";
 
-  assert.equal(stub.chatCalls, 2);
+  assert.equal(stub.chatCalls, 1);
   assert.equal(stub.chatStreamCalls, 1);
   assert.match(text, /Searching auth references/);
   assert.match(text, /Found auth references in the repo\./);
@@ -311,4 +314,37 @@ test("streamChatResponse can execute grep and keep the final prompt compact", as
   assert.match(toolSummary, /"pathMatchCount": 1/);
   assert.match(toolSummary, /"contentMatchCount": 1/);
   assert.doesNotMatch(toolSummary, /authHandler = true/);
+});
+
+test("streamChatResponse hard-caps every turn at six model calls", async () => {
+  const sessionDecision = JSON.stringify({
+    type: "tool",
+    tool: "session",
+    status: "Inspecting canvas",
+    input: { action: "get", scope: "summary" },
+  });
+  const stub = createStubProvider([
+    sessionDecision,
+    sessionDecision,
+    sessionDecision,
+    sessionDecision,
+    "invalid fallback",
+    "invalid repair",
+    "this seventh response must never be requested",
+  ]);
+
+  const events = await collectEvents(streamChatResponse({
+    message: "redesign the canvas architecture",
+    mode: "agent",
+    context: null,
+    runtimeSettings: { providerId: "openai", model: "test-model" },
+    providerOverride: stub.provider,
+    readFile: async (path: string) => ({ path, content: null, source: "missing" }),
+  }));
+
+  assert.equal(stub.chatCalls + stub.chatStreamCalls, 6);
+  assert.equal(events.some((event) => (
+    typeof event === "object" && event !== null && "type" in event
+    && (event as { type: string }).type === "canvas_patch"
+  )), false);
 });

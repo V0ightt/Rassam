@@ -1,0 +1,166 @@
+name: Rassam Blueprint Check
+description: >-
+  Checks a pull request against the human-owned architecture contract in
+  .rassam/blueprint.json and reports a short, ranked list of exceptions.
+author: Rassam
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  base:
+    description: >-
+      Base branch to diff against (a branch name such as "main"). Defaults to the
+      pull request's base branch. Outside pull requests it is empty and the whole
+      repository is checked.
+    required: false
+    default: ${{ github.base_ref }}
+  fail-on:
+    description: Lowest severity of a new finding that fails the check (error, warning or never).
+    required: false
+    default: error
+  budget:
+    description: Attention budget - how many new findings are shown in full before the rest are collapsed.
+    required: false
+    default: "5"
+  comment:
+    description: Post or update one sticky pull request comment with the result ("true" or "false").
+    required: false
+    default: "true"
+  approve-label:
+    description: Pull request label a human applies to approve changes that weaken the contract.
+    required: false
+    default: rassam:approved
+  sarif-output:
+    description: Path (relative to working-directory) for a SARIF 2.1.0 report. Empty disables it.
+    required: false
+    default: ""
+  run-invariants:
+    description: Run invariant check commands declared in the base blueprint ("true" or "false").
+    required: false
+    default: "false"
+  working-directory:
+    description: Directory that contains .rassam/blueprint.json.
+    required: false
+    default: .
+  verbose:
+    description: Print diagnostic detail ("true" or "false").
+    required: false
+    default: "false"
+
+outputs:
+  verdict:
+    description: pass, warn or fail.
+    value: ${{ steps.check.outputs.verdict }}
+  report-path:
+    description: Path of the JSON report written by the check.
+    value: ${{ steps.check.outputs.report-path }}
+
+runs:
+  using: composite
+  steps:
+    # Inputs reach the scripts through `env` only. They are never interpolated
+    # into the script text, so an input value cannot inject shell commands.
+    - name: Resolve base ref
+      id: base
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE: ${{ inputs.base }}
+      run: |
+        ref="${BASE#refs/heads/}"
+        ref="${ref#origin/}"
+        if [ -z "$ref" ]; then
+          echo "No base ref given: checking the whole repository."
+          echo "ref=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        case "$ref" in
+          -*) echo "::error title=Rassam::Invalid base ref."; exit 1 ;;
+        esac
+
+        if ! git rev-parse --verify --quiet "origin/$ref^{commit}" > /dev/null; then
+          git fetch --no-tags origin "$ref:refs/remotes/origin/$ref" \
+            || echo "Could not fetch '$ref' from origin."
+        fi
+        if [ "$(git rev-parse --is-shallow-repository 2> /dev/null)" = "true" ]; then
+          git fetch --no-tags --deepen=200 origin \
+            || echo "Could not deepen the shallow clone."
+        fi
+
+        if git rev-parse --verify --quiet "origin/$ref^{commit}" > /dev/null; then
+          resolved="origin/$ref"
+        elif git rev-parse --verify --quiet "$ref^{commit}" > /dev/null; then
+          resolved="$ref"
+        else
+          echo "::error title=Rassam::Base ref '$ref' is not available. Use actions/checkout with fetch-depth: 0."
+          exit 1
+        fi
+        if ! git merge-base "$resolved" HEAD > /dev/null 2>&1; then
+          echo "::warning title=Rassam::No merge base between '$resolved' and HEAD. Use actions/checkout with fetch-depth: 0."
+        fi
+        echo "ref=$resolved" >> "$GITHUB_OUTPUT"
+
+    - name: Check against the blueprint
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        BUDGET: ${{ inputs.budget }}
+        COMMENT: ${{ inputs.comment }}
+        APPROVE_LABEL: ${{ inputs.approve-label }}
+        SARIF_OUTPUT: ${{ inputs.sarif-output }}
+        RUN_INVARIANTS: ${{ inputs.run-invariants }}
+        VERBOSE: ${{ inputs.verbose }}
+      run: |
+        REPORT_PATH="$RUNNER_TEMP/rassam-report.json"
+        export REPORT_PATH
+        rm -f "$REPORT_PATH"
+
+        args=(check --github
+          --fail-on "$FAIL_ON"
+          --budget "$BUDGET"
+          --approve-label "$APPROVE_LABEL"
+          --format json
+          --output "$REPORT_PATH")
+        if [ -n "$BASE_REF" ]; then args+=(--base "$BASE_REF"); fi
+        if [ "$COMMENT" = "true" ]; then args+=(--comment); fi
+        if [ -n "$SARIF_OUTPUT" ]; then args+=(--sarif-output "$SARIF_OUTPUT"); fi
+        if [ "$RUN_INVARIANTS" = "true" ]; then args+=(--run-invariants); fi
+        if [ "$VERBOSE" = "true" ]; then args+=(--verbose); fi
+
+        status=0
+        node "$GITHUB_ACTION_PATH/action/dist/rassam.mjs" "${args[@]}" || status=$?
+        export RASSAM_EXIT="$status"
+
+        # Verdict: "fail" when the gate exited non-zero or a new finding is at or
+        # above fail-on (unless a human approved the change and the gate passed);
+        # "warn" when new warnings or errors remain; otherwise "pass".
+        verdict="$(node -e '
+          const fs = require("node:fs");
+          const rank = { info: 0, warning: 1, error: 2 };
+          const exit = Number(process.env.RASSAM_EXIT || 0);
+          let report = {};
+          try {
+            report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, "utf8")) || {};
+          } catch {}
+          const findings = Array.isArray(report.findings) ? report.findings : [];
+          const fresh = findings.filter((f) => f && f.isNew !== false && f.severity in rank);
+          const threshold = rank[process.env.FAIL_ON];
+          const failing = threshold !== undefined && fresh.some((f) => rank[f.severity] >= threshold);
+          const noisy = fresh.some((f) => rank[f.severity] >= rank.warning);
+          const approved = report.approved === true;
+          process.stdout.write(exit !== 0 || (failing && !approved) ? "fail" : noisy ? "warn" : "pass");
+        ')" || verdict=""
+        if [ -z "$verdict" ]; then
+          if [ "$status" -eq 0 ]; then verdict="pass"; else verdict="fail"; fi
+        fi
+
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "report-path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+        echo "Rassam verdict: $verdict (exit code $status)"
+        exit "$status"

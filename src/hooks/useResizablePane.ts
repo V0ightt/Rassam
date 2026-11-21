@@ -23,19 +23,16 @@ export function useResizablePane(storageKey: string, options: ResizablePaneOptio
         side = 'right',
     } = options;
 
-    const [width, setWidth] = useState(defaultWidth);
+    const [width, setWidth] = useState(() => {
+        if (typeof window === 'undefined') return defaultWidth;
+        const saved = window.localStorage.getItem(storageKey);
+        const parsed = saved ? Number.parseInt(saved, 10) : defaultWidth;
+        return Number.isFinite(parsed) ? Math.max(minWidth, Math.min(maxWidth, parsed)) : defaultWidth;
+    });
     const [isResizing, setIsResizing] = useState(false);
     const resizeRef = useRef<HTMLDivElement>(null);
     const startXRef = useRef(0);
     const startWidthRef = useRef(defaultWidth);
-
-    // Load persisted width on mount
-    useEffect(() => {
-        try {
-            const saved = localStorage.getItem(storageKey);
-            if (saved) setWidth(parseInt(saved));
-        } catch { /* ignore */ }
-    }, [storageKey]);
 
     // Persist width changes
     useEffect(() => {
@@ -48,6 +45,21 @@ export function useResizablePane(storageKey: string, options: ResizablePaneOptio
         startWidthRef.current = width;
         setIsResizing(true);
     }, [width]);
+
+    const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
+        const delta = event.shiftKey ? 40 : 10;
+        const inward = side === 'left' ? 1 : -1;
+        let next = width;
+
+        if (event.key === 'ArrowRight') next += delta * inward;
+        else if (event.key === 'ArrowLeft') next -= delta * inward;
+        else if (event.key === 'Home') next = minWidth;
+        else if (event.key === 'End') next = maxWidth;
+        else return;
+
+        event.preventDefault();
+        setWidth(Math.max(minWidth, Math.min(maxWidth, next)));
+    }, [maxWidth, minWidth, side, width]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -78,5 +90,5 @@ export function useResizablePane(storageKey: string, options: ResizablePaneOptio
         };
     }, [isResizing, minWidth, maxWidth, side]);
 
-    return { width, isResizing, handleMouseDown, resizeRef };
+    return { width, isResizing, handleMouseDown, handleKeyDown, resizeRef };
 }

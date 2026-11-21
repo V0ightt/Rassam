@@ -1,16 +1,18 @@
 'use client';
 
 import { memo, type ReactNode } from 'react';
-import { FolderOpen, Files, Settings, Menu, FileCode, ExternalLink, GitBranch } from 'lucide-react';
+import { FolderOpen, Files, Settings, Menu, FileCode, ExternalLink, GitBranch, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ActivityPanel = 'projects' | 'explorer' | 'settings' | null;
+export type ActivityPanel = 'projects' | 'explorer' | 'blueprint' | 'settings' | null;
 
 interface ActivityBarProps {
   activePanel: ActivityPanel;
   onPanelChange: (panel: ActivityPanel) => void;
   projectCount?: number;
   cachedFileCount?: number;
+  /** Errors and warnings in the open blueprint's check report. */
+  blueprintAttentionCount?: number;
   /** Repo info shown at the bottom of the bar */
   repoDetails?: { owner: string; repo: string; fileCount?: number } | null;
   repoUrl?: string;
@@ -21,19 +23,22 @@ interface ActivityBarProps {
 const items: { id: ActivityPanel; icon: typeof FolderOpen; label: string }[] = [
   { id: 'projects', icon: FolderOpen, label: 'Projects' },
   { id: 'explorer', icon: Files, label: 'Explorer' },
+  { id: 'blueprint', icon: ShieldCheck, label: 'Blueprint' },
   { id: 'settings', icon: Settings, label: 'Settings' },
 ];
 
 function ActivityBar({
-  activePanel, onPanelChange, projectCount, cachedFileCount,
+  activePanel, onPanelChange, projectCount, cachedFileCount, blueprintAttentionCount,
   repoDetails, repoUrl, exportSlot,
 }: ActivityBarProps) {
   return (
-    <div className="w-12 h-full bg-slate-950 border-r border-slate-800 flex flex-col items-center py-2 z-50 shrink-0">
+    <nav aria-label="Workspace navigation" className="w-12 h-full bg-slate-950 border-r border-slate-800 flex flex-col items-center py-2 z-50 shrink-0">
       {/* Burger / Menu toggle */}
       <button
         className="p-2 mb-2 text-slate-500 hover:text-slate-200 rounded-lg transition-colors"
         title="Navigation"
+        aria-label={activePanel ? 'Close navigation panel' : 'Open projects panel'}
+        aria-expanded={Boolean(activePanel)}
         onClick={() => onPanelChange(activePanel ? null : 'projects')}
       >
         <Menu size={20} />
@@ -55,6 +60,8 @@ function ActivityBar({
                 : 'text-slate-500 hover:text-slate-300',
             )}
             title={label}
+            aria-label={label}
+            aria-pressed={isActive}
           >
             {/* Active indicator bar */}
             {isActive && (
@@ -65,6 +72,12 @@ function ActivityBar({
             {id === 'projects' && projectCount != null && projectCount > 0 && (
               <span className="absolute top-1 right-1.5 min-w-[14px] h-[14px] bg-blue-500 text-white text-[8px] rounded-full flex items-center justify-center px-0.5 leading-none">
                 {projectCount}
+              </span>
+            )}
+            {/* Badge for blueprint findings that need a ruling */}
+            {id === 'blueprint' && blueprintAttentionCount != null && blueprintAttentionCount > 0 && (
+              <span className="absolute top-1 right-1.5 min-w-[14px] h-[14px] bg-amber-500 text-slate-950 text-[8px] font-semibold rounded-full flex items-center justify-center px-0.5 leading-none">
+                {blueprintAttentionCount > 99 ? '99+' : blueprintAttentionCount}
               </span>
             )}
             {/* Badge for cached files */}
@@ -120,6 +133,7 @@ function ActivityBar({
                 rel="noopener noreferrer"
                 className="p-2 text-slate-500 hover:text-slate-200 rounded-lg transition-colors"
                 title="Open in GitHub"
+                aria-label={`Open ${repoDetails.owner}/${repoDetails.repo} on GitHub`}
               >
                 <ExternalLink size={16} />
               </a>
@@ -127,7 +141,7 @@ function ActivityBar({
           </>
         )}
       </div>
-    </div>
+    </nav>
   );
 }
 

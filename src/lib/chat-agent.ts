@@ -1,13 +1,15 @@
 import { buildSystemMessage } from '@/lib/ai';
 import type { FileResolutionStrategy } from '@/lib/chat-file-resolution';
 import { getProvider } from '@/lib/llm';
-import type { ChatHistoryMessage, LLMProvider } from '@/lib/llm/types';
+import type { ChatHistoryMessage, LLMProvider, LLMUsageMetadata } from '@/lib/llm/types';
 import type {
   CanvasSyncSnapshot,
   ChatCanvasWriteOperation,
   ChatMode,
   NodeData,
 } from '@/types';
+import { ApiError } from '@/lib/api-error';
+import { createCanvasPatch, type CanvasPatch } from '@/lib/canvas-patch';
 import type { ToolTranscriptEntry, WorkingCanvasState } from '@/lib/chat-canvas';
 import {
   createWorkingCanvasState,
@@ -24,8 +26,6 @@ import {
   executeGrepTool,
   executeReadTool,
   executeSessionTool,
-  executeWriteBatch,
-  executeWriteTool,
 } from '@/lib/chat-tools';
 
 // ── Types ──
@@ -69,6 +69,8 @@ interface StreamChatResponseParams extends ReadToolContext {
   history?: ChatHistoryMessage[];
   cachedFiles?: Record<string, string> | null;
   providerOverride?: LLMProvider;
+  baseGraphRevision?: number;
+  onUsage?: (metadata: LLMUsageMetadata) => void;
   /** AbortSignal to cancel the request when the client disconnects */
   signal?: AbortSignal;
 }
@@ -76,11 +78,24 @@ interface StreamChatResponseParams extends ReadToolContext {
 export type ChatStreamEvent =
   | { type: 'status'; text: string }
   | { type: 'text'; text: string }
-  | { type: 'write'; operation: ChatCanvasWriteOperation; text?: string }
+  | { type: 'canvas_patch'; patch: CanvasPatch; text?: string }
   | { type: 'error'; text: string }
   | { type: 'done' };
 
 type PlannerToolName = Extract<PlannerDecision, { type: 'tool' }>['tool'];
+
+const MAX_MODEL_CALLS_PER_TURN = 6;
+const MAX_TOOL_STEPS_PER_TURN = 4;
+
+interface ModelCallBudget {
+  used: number;
+}
+
+function claimModelCall(budget: ModelCallBudget): boolean {
+  if (budget.used >= MAX_MODEL_CALLS_PER_TURN) return false;
+  budget.used += 1;
+  return true;
+}
 
 // ── Settings helpers ──
 
@@ -109,7 +124,7 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
   ];
 
   const writeTool = [
-    'write: modify the live canvas (one operation). Input shapes by action:',
+    'write: propose one canvas operation for user review. It does not mutate the live canvas. Input shapes by action:',
     '  add_node: { "action": "add_node", "node": { "label": "Auth", "description": "...", "category": "auth", "files": [...], "complexity": "medium" } }',
     '  edit_node: { "action": "edit_node", "target": { "id": "node-1" } OR { "label": "Auth" }, "changes": { "label": "...", "description": "...", "category": "..." } }',
     '  delete_node: { "action": "delete_node", "target": { "id": "node-1" } OR { "label": "Auth" } }',
@@ -119,12 +134,12 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
   ].join('\n');
 
   const writeBatchTool = [
-    'write_batch: add/edit/delete MULTIPLE nodes and edges in ONE step. Use this when creating or rebuilding architecture diagrams.',
+    'write_batch: propose MULTIPLE node/edge operations as one atomic patch for user review. Use this when creating or rebuilding architecture diagrams.',
     '  Input: { "operations": [ ...array of write operations... ] }',
     '  RULES FOR write_batch:',
     '  - Put ALL add_node operations FIRST, then ALL add_edge operations AFTER.',
     '  - Edges reference nodes by sourceLabel/targetLabel (the exact label string you gave the node).',
-    '  - Positions are AUTO-COMPUTED by dagre layout. NEVER specify position.',
+    '  - Existing positions are preserved. New nodes receive local default positions unless an explicit position is supplied.',
     '  - Every node MUST have a label, description, and category.',
     '  - Every edge MUST have sourceLabel, targetLabel, label, and type.',
   ].join('\n');
@@ -139,16 +154,16 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
   const agentRules = [
     'CRITICAL RULES:',
     '1. You output EXACTLY ONE raw JSON object per invocation. NO markdown. NO code fences. NO prose. NO explanation.',
-    '2. You will be called repeatedly (up to 25 steps). Each call = one tool.',
+    '2. You may be called repeatedly (up to 4 planning steps). Each call = one tool.',
     '3. ALWAYS prefer write_batch over individual write calls when creating 2+ nodes.',
-    '4. DO NOT specify position coordinates — dagre auto-layouts all nodes.',
+    '4. Do not request a full layout unless the user explicitly asks for one.',
     '5. Use session/search BEFORE editing/deleting to discover existing node/edge IDs.',
     '5a. Use grep BEFORE read when the user asks to find references, usages, TODOs, imports, exact mentions, or likely files.',
     '6. When the user asks to edit/update/change/modify/restructure/rebuild/create the canvas/flowchart/diagram:',
     '   a) FIRST read any relevant files to understand the architecture',
     '   b) THEN call write_batch with ALL nodes and edges in a single step',
     '   c) Only return {"type":"final"} AFTER write_batch succeeds',
-    '7. NEVER return {"type":"final"} if canvas edits are still needed. The final response is for the text reply AFTER all canvas changes are applied.',
+    '7. NEVER return {"type":"final"} if canvas edits are still needed. A valid write/write_batch becomes a preview that the user must Apply or Discard.',
     '8. NEVER generate code blocks, Python, JavaScript, or any programming language. Output ONLY the raw JSON tool call.',
     '9. If you have already read a file and understand the architecture, proceed IMMEDIATELY to write_batch. Do not re-read or hesitate.',
     '10. After a read tool returns file content, your VERY NEXT step should be write_batch (not another read or session call, unless you truly need more info).',
@@ -167,7 +182,7 @@ function buildPlannerSystemPrompt(mode: ChatMode): string {
   const askRules = [
     'Rules:',
     '- You output EXACTLY ONE raw JSON object per invocation. NO markdown. NO code fences. NO prose.',
-    '- You control one tool per step (up to 25 steps total).',
+    '- You control one tool per step (up to 4 planning steps total).',
     '- Use grep first when you need to locate files or exact snippets; use read only after grep when you need deeper file understanding.',
     '- For questions about exact line numbers or line ranges, use read with line/startLine/endLine.',
     '- Use tools when you need exact file contents, IDs, or current graph state.',
@@ -300,7 +315,7 @@ function buildFinalSystemMessage(
   transcript: ToolTranscriptEntry[],
 ): string {
   const modeInstruction = mode === 'agent'
-    ? 'You may explain the canvas changes you made. If you changed the live canvas, mention that the synced AI snapshot may still need a manual sync.'
+    ? 'You may explain the canvas changes you made. The synced AI snapshot updates automatically after canvas changes.'
     : 'You are in ask mode. You can explain findings, but you must not claim to have modified the canvas.';
 
   return [
@@ -544,7 +559,7 @@ function createPlannerStatus(tool: PlannerToolName, input: Record<string, unknow
 
   if (tool === 'write_batch') {
     const ops = Array.isArray(input?.operations) ? input.operations.length : 0;
-    return `Applying ${ops} canvas operations`;
+    return `Validating ${ops} proposed canvas operations`;
   }
 
   const action = typeof input?.action === 'string' ? input.action : 'get';
@@ -558,16 +573,20 @@ async function planNextStep(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  modelCallBudget: ModelCallBudget,
+  onUsage?: (metadata: LLMUsageMetadata) => void,
   signal?: AbortSignal,
 ): Promise<PlannerDecision> {
   const hasReadInTranscript = transcript.some((e) => e.tool === 'read');
   const hasWriteInTranscript = hasSuccessfulWrite(transcript);
   const needsWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message) && hasReadInTranscript && !hasWriteInTranscript;
 
-  // Try up to 3 attempts — more attempts for write-needed scenarios
-  const maxAttempts = needsWrite ? 3 : 2;
+  // One planner call per step keeps ordinary turns bounded. Invalid proposal
+  // output can still use the dedicated fallback + repair path below.
+  const maxAttempts = 1;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (signal?.aborted) return { type: 'final' };
+    if (!claimModelCall(modelCallBudget)) return { type: 'final' };
     try {
       const raw = await provider.chat({
         system: buildPlannerSystemPrompt(mode),
@@ -578,6 +597,7 @@ async function planNextStep(
         maxTokens: 4096,
         model: runtimeSettings?.model || undefined,
         structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+        onUsage,
         signal,
       });
 
@@ -623,9 +643,12 @@ async function generateFallbackWritePlan(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  modelCallBudget: ModelCallBudget,
+  onUsage?: (metadata: LLMUsageMetadata) => void,
   signal?: AbortSignal,
 ): Promise<WritePlanResult | null> {
   if (signal?.aborted) return null;
+  if (!claimModelCall(modelCallBudget)) return null;
   try {
     const raw = await provider.chat({
       system: buildFallbackWriteSystemPrompt(),
@@ -644,13 +667,24 @@ async function generateFallbackWritePlan(
       maxTokens: 4096,
       model: runtimeSettings?.model || undefined,
       structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+      onUsage,
       signal,
     });
 
     const jsonResult = safeJsonParseWritePlan(raw);
     if (jsonResult) return jsonResult;
 
-    const repaired = await repairFallbackWritePlan(raw, message, state, transcript, provider, runtimeSettings, signal);
+    const repaired = await repairFallbackWritePlan(
+      raw,
+      message,
+      state,
+      transcript,
+      provider,
+      runtimeSettings,
+      modelCallBudget,
+      onUsage,
+      signal,
+    );
     if (repaired) return repaired;
 
     return tryExtractWriteBatchFromCodeOutput(raw);
@@ -666,9 +700,12 @@ async function repairFallbackWritePlan(
   transcript: ToolTranscriptEntry[],
   provider: LLMProvider,
   runtimeSettings: ChatRuntimeSettings | undefined,
+  modelCallBudget: ModelCallBudget,
+  onUsage?: (metadata: LLMUsageMetadata) => void,
   signal?: AbortSignal,
 ): Promise<WritePlanResult | null> {
   if (signal?.aborted) return null;
+  if (!claimModelCall(modelCallBudget)) return null;
   try {
     const repairedRaw = await provider.chat({
       system: buildRepairWriteSystemPrompt(),
@@ -688,6 +725,7 @@ async function repairFallbackWritePlan(
       maxTokens: 4096,
       model: runtimeSettings?.model || undefined,
       structuredOutput: supportsStructuredOutput(provider) ? { type: 'json_object' } : undefined,
+      onUsage,
       signal,
     });
 
@@ -748,6 +786,8 @@ export async function* streamChatResponse(
     readFile,
     providerOverride,
     signal,
+    baseGraphRevision = canvasContext?.graphRevision ?? 0,
+    onUsage,
   } = params;
 
   const provider = providerOverride || getProvider(runtimeSettings?.providerId);
@@ -762,12 +802,14 @@ export async function* streamChatResponse(
   );
   const sanitizedHistory = sanitizeHistory(history);
   const needsTools = messageLikelyNeedsTools(message, mode);
+  const modelCallBudget: ModelCallBudget = { used: 0 };
 
   // ── Fast path: skip the planner for simple questions ──
   // The system message already contains canvas context, selected node,
   // cached files, README, and specific file content.
   if (!needsTools) {
     try {
+      claimModelCall(modelCallBudget);
       for await (const chunk of provider.chatStream({
         system: baseSystemMessage,
         message,
@@ -775,18 +817,18 @@ export async function* streamChatResponse(
         temperature: clampTemperature(runtimeSettings?.temperature),
         maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
         model: runtimeSettings?.model || undefined,
+        onUsage,
         signal,
       })) {
         if (signal?.aborted) break;
         yield { type: 'text', text: chunk };
       }
-    } catch (error) {
+    } catch {
       if (signal?.aborted) {
         yield { type: 'done' };
         return;
       }
-      const messageText = error instanceof Error ? error.message : 'Unable to generate a response.';
-      yield { type: 'error', text: messageText };
+      yield { type: 'error', text: 'The selected model could not complete this request. Please retry.' };
     }
     yield { type: 'done' };
     return;
@@ -796,10 +838,10 @@ export async function* streamChatResponse(
   const workingState = createWorkingCanvasState(canvasContext, repoDetails);
   const transcript: ToolTranscriptEntry[] = [];
   const requiresCanvasWrite = mode === 'agent' && requestLikelyNeedsCanvasWrite(message);
-  const appliedOperations: ChatCanvasWriteOperation[] = [];
   let fallbackFinalContent: string | undefined;
 
-  for (let step = 0; step < 25; step += 1) {
+  const maximumToolSteps = mode === 'ask' ? 1 : MAX_TOOL_STEPS_PER_TURN;
+  for (let step = 0; step < maximumToolSteps; step += 1) {
     if (signal?.aborted) break;
     const decision = await planNextStep(
       message,
@@ -808,6 +850,8 @@ export async function* streamChatResponse(
       transcript,
       provider,
       runtimeSettings,
+      modelCallBudget,
+      onUsage,
       signal,
     );
 
@@ -851,53 +895,44 @@ export async function* streamChatResponse(
       continue;
     }
 
-    // === write_batch: batch operations with auto-layout ===
+    // Canvas changes are proposed as one validated patch. The source working
+    // state is never mutated and no individual write is streamed to the client.
     if (decision.tool === 'write_batch') {
-      const { results, layoutOps } = executeWriteBatch(workingState, input, transcript);
-
-      // Emit each successful write operation to client
-      for (const { result, operation } of results) {
-        if (operation) {
-          appliedOperations.push(operation);
-          yield {
-            type: 'write' as const,
-            operation,
-            text: operation.summary || 'Applied canvas change.',
-          };
-        }
-        // Failed operations are already logged in transcript by executeWriteBatch
-        if (typeof result === 'object' && result && 'ok' in result && !(result as Record<string, unknown>).ok) {
-          const errMsg = (result as Record<string, unknown>).error || 'Write operation failed';
-          yield { type: 'status' as const, text: `⚠ ${errMsg}` };
-        }
+      const rawOperations = Array.isArray(input?.operations) ? input.operations : [];
+      try {
+        const { patch } = createCanvasPatch(workingState, rawOperations, baseGraphRevision, {
+          allowedFiles: repoDetails ? availableFiles : undefined,
+        });
+        transcript.push({
+          tool: 'write_batch',
+          input,
+          result: { ok: true, patchId: patch.patchId, operationCount: patch.operations.length },
+        });
+        yield { type: 'canvas_patch', patch, text: `Prepared ${patch.operations.length} canvas changes for review.` };
+        yield* streamTextContent(`Proposed canvas changes: ${patch.summary}. Review the patch, then Apply or Discard it.`);
+        yield { type: 'done' };
+        return;
+      } catch (error) {
+        const messageText = error instanceof ApiError ? error.message : 'Canvas patch validation failed.';
+        transcript.push({ tool: 'write_batch', input, result: { ok: false, error: messageText } });
+        yield { type: 'status', text: `Patch rejected: ${messageText}` };
       }
-
-      // Emit layout repositioning operations
-      if (layoutOps.length > 0) {
-        yield { type: 'status' as const, text: `Auto-laying out ${workingState.nodes.length} nodes` };
-        for (const layoutOp of layoutOps) {
-          appliedOperations.push(layoutOp);
-          yield {
-            type: 'write' as const,
-            operation: layoutOp,
-            text: layoutOp.summary || 'Repositioned node.',
-          };
-        }
-      }
-
       continue;
     }
 
-    // === Single write operation ===
-    const { result, operation } = executeWriteTool(workingState, input, transcript);
-    transcript.push({ tool: 'write', input, result });
-    if (operation) {
-      appliedOperations.push(operation);
-      yield {
-        type: 'write',
-        operation,
-        text: operation.summary || 'Applied canvas change.',
-      };
+    try {
+      const { patch } = createCanvasPatch(workingState, [input], baseGraphRevision, {
+        allowedFiles: repoDetails ? availableFiles : undefined,
+      });
+      transcript.push({ tool: 'write', input, result: { ok: true, patchId: patch.patchId, operationCount: 1 } });
+      yield { type: 'canvas_patch', patch, text: 'Prepared a canvas change for review.' };
+      yield* streamTextContent(`Proposed canvas changes: ${patch.summary}. Review the patch, then Apply or Discard it.`);
+      yield { type: 'done' };
+      return;
+    } catch (error) {
+      const messageText = error instanceof ApiError ? error.message : 'Canvas patch validation failed.';
+      transcript.push({ tool: 'write', input, result: { ok: false, error: messageText } });
+      yield { type: 'status', text: `Patch rejected: ${messageText}` };
     }
   }
 
@@ -917,6 +952,8 @@ export async function* streamChatResponse(
       transcript,
       provider,
       runtimeSettings,
+      modelCallBudget,
+      onUsage,
       signal,
     );
 
@@ -925,38 +962,28 @@ export async function* streamChatResponse(
     }
 
     if (fallbackPlan?.operations?.length) {
-      const { results, layoutOps } = executeWriteBatch(
-        workingState,
-        { operations: fallbackPlan.operations },
-        transcript,
-      );
-
-      for (const { result, operation } of results) {
-        if (operation) {
-          appliedOperations.push(operation);
-          yield {
-            type: 'write',
-            operation,
-            text: operation.summary || 'Applied canvas change.',
-          };
-        }
-
-        if (isRecord(result) && result.ok === false) {
-          const errMsg = typeof result.error === 'string' ? result.error : 'Write operation failed';
-          yield { type: 'status', text: `⚠ ${errMsg}` };
-        }
-      }
-
-      if (layoutOps.length > 0) {
-        yield { type: 'status', text: `Auto-laying out ${workingState.nodes.length} nodes` };
-        for (const layoutOp of layoutOps) {
-          appliedOperations.push(layoutOp);
-          yield {
-            type: 'write',
-            operation: layoutOp,
-            text: layoutOp.summary || 'Repositioned node.',
-          };
-        }
+      try {
+        const { patch } = createCanvasPatch(workingState, fallbackPlan.operations, baseGraphRevision, {
+          allowedFiles: repoDetails ? availableFiles : undefined,
+          summary: fallbackPlan.summary,
+        });
+        transcript.push({
+          tool: 'write_batch',
+          input: { operations: fallbackPlan.operations },
+          result: { ok: true, patchId: patch.patchId, operationCount: patch.operations.length },
+        });
+        yield { type: 'canvas_patch', patch, text: `Prepared ${patch.operations.length} canvas changes for review.` };
+        yield* streamTextContent(`Proposed canvas changes: ${patch.summary}. Review the patch, then Apply or Discard it.`);
+        yield { type: 'done' };
+        return;
+      } catch (error) {
+        const messageText = error instanceof ApiError ? error.message : 'Canvas patch validation failed.';
+        transcript.push({
+          tool: 'write_batch',
+          input: { operations: fallbackPlan.operations },
+          result: { ok: false, error: messageText },
+        });
+        yield { type: 'status', text: `Patch rejected: ${messageText}` };
       }
     }
   }
@@ -968,8 +995,7 @@ export async function* streamChatResponse(
       return;
     }
 
-    const summaryText = buildTransactionalWriteSuccessSummary(appliedOperations, workingState);
-    yield* streamTextContent(summaryText);
+    yield { type: 'error', text: 'A canvas patch was planned but could not be validated atomically.' };
     yield { type: 'done' };
     return;
   }
@@ -983,6 +1009,12 @@ export async function* streamChatResponse(
     const finalSystemMessage = buildFinalSystemMessage(baseSystemMessage, mode, workingState, transcript);
     let emittedText = false;
 
+    if (!claimModelCall(modelCallBudget)) {
+      yield { type: 'error', text: 'This turn reached its model-call limit before a final answer was available.' };
+      yield { type: 'done' };
+      return;
+    }
+
     for await (const chunk of provider.chatStream({
       system: finalSystemMessage,
       message,
@@ -990,6 +1022,7 @@ export async function* streamChatResponse(
       temperature: clampTemperature(runtimeSettings?.temperature),
       maxTokens: clampMaxTokens(runtimeSettings?.maxTokens),
       model: runtimeSettings?.model || undefined,
+      onUsage,
       signal,
     })) {
       if (signal?.aborted) break;
@@ -1000,7 +1033,7 @@ export async function* streamChatResponse(
     if (!emittedText && fallbackFinalContent) {
       yield* streamTextContent(fallbackFinalContent);
     }
-  } catch (error) {
+  } catch {
     if (signal?.aborted) {
       yield { type: 'done' };
       return;
@@ -1008,8 +1041,7 @@ export async function* streamChatResponse(
     if (fallbackFinalContent) {
       yield* streamTextContent(fallbackFinalContent);
     } else {
-      const messageText = error instanceof Error ? error.message : 'Unable to generate a response.';
-      yield { type: 'error', text: messageText };
+      yield { type: 'error', text: 'The selected model could not complete this request. Please retry.' };
     }
   }
 

@@ -29,14 +29,68 @@
 }
 
 :root {
-  --background: #020617;
-  --foreground: #f1f5f9;
+  color-scheme: dark;
+  --surface-canvas: #070b12;
+  --surface-base: #0b111b;
+  --surface-raised: #111a27;
+  --surface-overlay: #162131;
+  --border-subtle: #263347;
+  --border-strong: #3a4a62;
+  --text-primary: #eef4fb;
+  --text-secondary: #b4c0cf;
+  --text-muted: #7f8da1;
+  --accent: #22b8cf;
+  --accent-strong: #0f93ad;
+  --danger: #f87171;
+  --warning: #fbbf24;
+  --focus: #67d8e8;
+  --radius-control: 0.5rem;
+  --radius-panel: 0.75rem;
+  --layer-toolbar: 20;
+  --layer-panel: 30;
+  --layer-dialog: 60;
 }
 
+html,
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  background-color: var(--surface-canvas);
+  color: var(--text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+.icon-button {
+  display: inline-grid;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  place-items: center;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.icon-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* Custom scrollbar */
@@ -77,28 +131,20 @@ body {
 
 /* Remove React Flow default selection outline - we handle this in our node components */
 .react-flow__node {
-  /* GPU-accelerated transforms for smooth dragging */
-  will-change: transform;
   contain: layout style paint;
 }
 
 .react-flow__node.selected {
-  /* Remove default box-shadow - handled by node component */
   box-shadow: none !important;
-  outline: none !important;
 }
 
-.react-flow__node:focus {
-  outline: none !important;
+.react-flow__node:focus-visible {
+  outline: 2px solid var(--focus) !important;
+  outline-offset: 3px;
 }
 
 .react-flow__node.selected > div {
   /* Single border is handled by the node component itself */
-}
-
-.react-flow__edge-textBg,
-.react-flow__edgelabel-renderer {
-  will-change: transform;
 }
 
 .react-flow__minimap {
@@ -131,19 +177,10 @@ pre code.hljs {
   padding: 0;
 }
 
-/* Gradient text */
-.gradient-text {
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* Glass effect */
 .glass {
-  background: rgba(8, 10, 17, 0.8);
+  background: rgb(11 17 27 / 0.94);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(42, 54, 71, 0.5);
+  border: 1px solid var(--border-subtle);
 }
 
 /* Focus ring */
@@ -152,26 +189,13 @@ pre code.hljs {
 }
 
 .focus-ring:focus-visible {
-  box-shadow: 0 0 0 2px #020617, 0 0 0 4px #3b82f6;
+  box-shadow: 0 0 0 2px var(--surface-canvas), 0 0 0 4px var(--focus);
 }
 
 /* Resize handle styling */
 .resize-handle {
   touch-action: none;
   user-select: none;
-}
-
-/* React Flow performance optimizations */
-.react-flow__renderer {
-  will-change: transform;
-}
-
-.react-flow__node {
-  /* Use GPU acceleration for dragging */
-  will-change: transform;
-  contain: layout style paint;
-  backface-visibility: hidden;
-  transform: translateZ(0);
 }
 
 .react-flow__edge {
@@ -197,4 +221,50 @@ pre code.hljs {
 .no-select {
   user-select: none;
   -webkit-user-select: none;
+}
+
+.workspace-shell {
+  min-height: 100dvh;
+  height: 100dvh;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 1023px) {
+  .workspace-side-panel {
+    position: absolute;
+    inset-block: 0;
+    z-index: var(--layer-panel);
+    box-shadow: 16px 0 40px rgb(0 0 0 / 0.35);
+  }
+
+  .workspace-chat-panel {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    z-index: var(--layer-panel);
+    width: min(92vw, 420px) !important;
+    box-shadow: -16px 0 40px rgb(0 0 0 / 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
