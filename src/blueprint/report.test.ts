@@ -337,7 +337,7 @@ describe("renderMarkdown", () => {
   it("renders contract changes with weakening first and an approval line", () => {
     const md = renderMarkdown(diffReport());
     expect(md).toContain("### Contract changes");
-    expect(md).toContain("| ⚠ | rule-removed | `no-ui-to-db` | Rule removed \\| was severity error |");
+    expect(md).toContain("| ⚠ | rule-removed | no-ui-to-db | Rule removed \\| was severity error |");
     expect(md.indexOf("rule-removed")).toBeLessThan(md.indexOf("component-added"));
     expect(md).toContain("**Not approved:** 1 change weakens the contract. Weakening changes require a human-approved label.");
     expect(renderMarkdown({ ...diffReport(), approved: true })).toContain("✅ **Approved:** 1 weakening change");
@@ -588,5 +588,17 @@ describe("graph exports", () => {
   it("handles an empty view", () => {
     expect(renderMermaid({ components: [], edges: [] })).toBe("flowchart LR\n");
     expect(renderDot({ components: [], edges: [] })).toContain("digraph blueprint {");
+  });
+});
+
+describe("markdown table escaping", () => {
+  it("escapes backslashes before pipes in contract change cells", () => {
+    const md = renderMarkdown(report([], {
+      mode: "diff",
+      contractChanges: [{ kind: "component-changed", target: String.raw`a\|b`, summary: String.raw`path C:\x | y`, weakens: false }],
+    }));
+    const row = md.split("\n").find((line) => line.includes("component-changed")) ?? "";
+    expect(row).toContain(String.raw`| a\\\|b |`);
+    expect(row).toContain(String.raw`path C:\\x \| y`);
   });
 });

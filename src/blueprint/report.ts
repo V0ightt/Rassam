@@ -385,13 +385,13 @@ function escapeMd(text: string): string {
     .replace(/@(?=[A-Za-z0-9])/g, "@&#8203;");
 }
 
-function codeSpan(text: string, inTable = false): string {
+function codeSpan(text: string): string {
   const clean = oneLine(text) || " ";
   const longestRun = Math.max(0, ...(clean.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(longestRun + 1);
   const pad = clean.startsWith("`") || clean.endsWith("`") ? " " : "";
   const span = `${fence}${pad}${clean}${pad}${fence}`;
-  return inTable ? span.replace(/\|/g, "\\|") : span;
+  return span;
 }
 
 function encodePath(path: string): string {
@@ -470,7 +470,7 @@ function mdContractChanges(report: CheckReport): string[] {
   const lines = ["### Contract changes", "", "| | Change | Target | Summary |", "|---|---|---|---|"];
   const { shown, hidden } = capContractChanges(changes);
   for (const change of shown) {
-    lines.push(`| ${change.weakens ? "⚠" : ""} | ${change.kind} | ${codeSpan(change.target, true)} | ${escapeMd(clip(oneLine(change.summary), 300))} |`);
+    lines.push(`| ${change.weakens ? "⚠" : ""} | ${change.kind} | ${escapeMd(change.target)} | ${escapeMd(clip(oneLine(change.summary), 300))} |`);
   }
   if (hidden.length) lines.push(`| | … | | ${escapeMd(`and ${hidden.length} more: ${kindCounts(hidden)}`)} |`);
   lines.push("");

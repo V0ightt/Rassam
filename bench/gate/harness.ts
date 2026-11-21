@@ -365,7 +365,7 @@ function table(headers: string[], rows: string[][]): string {
 }
 
 function markdownTable(headers: string[], rows: string[][]): string {
-  const escape = (cell: string): string => cell.replace(/\|/g, "\\|");
+  const escape = (cell: string): string => cell.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
   return [
     `| ${headers.join(" | ")} |`,
     `| ${headers.map(() => "---").join(" | ")} |`,
