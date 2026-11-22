@@ -141,7 +141,6 @@ export default function Studio() {
     canSave: session.canSaveToDisk,
     theme,
     openSettings: () => router.push('/settings'),
-    openClassicMap: () => router.push('/map'),
     toggleWatch: () => session.setWatching(!live.watching),
     fitView: () => canvasApi?.fit(),
     undo: () => session.undo(),

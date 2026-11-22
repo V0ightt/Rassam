@@ -4,7 +4,7 @@
    Rassam design tokens.
    Dark is the default; `data-theme="light"` on <html> (or any subtree)
    switches. Tokens are declared on every theme-bearing element so a
-   subtree can pin a theme (the classic map pins dark).
+   subtree can pin a theme.
    ────────────────────────────────────────────────────────────── */
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
@@ -158,19 +158,6 @@
   --layer-toolbar: 20;
   --layer-panel: 30;
   --layer-dialog: 60;
-
-  /* Names the pre-token workbench still reads */
-  --surface-canvas: var(--bg-canvas);
-  --surface-base: var(--bg-base);
-  --surface-raised: var(--bg-raised);
-  --surface-overlay: var(--bg-overlay);
-  --text-muted: var(--text-tertiary);
-  --accent-strong: var(--iris-600);
-  --danger: var(--status-bad);
-  --warning: var(--status-warn);
-  --focus: var(--accent);
-  --radius-control: 8px;
-  --radius-panel: 12px;
 
   /* Tailwind palette names resolve to the token ladders, so components written
      against slate/cyan/amber/red/emerald follow the theme and the iris accent. */
@@ -411,70 +398,22 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .icon-button {
-    display: inline-grid;
-    min-width: 2.5rem;
-    min-height: 2.5rem;
-    place-items: center;
-    border-radius: var(--radius-control);
-    color: var(--text-tertiary);
-    transition: color var(--dur-1) ease, background-color var(--dur-1) ease;
-  }
-  .icon-button:hover {
-    color: var(--text-primary);
-    background: var(--bg-overlay);
-  }
-
-  .custom-scrollbar::-webkit-scrollbar,
   .studio ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
-  .custom-scrollbar::-webkit-scrollbar-track,
   .studio ::-webkit-scrollbar-track {
     background: transparent;
   }
-  .custom-scrollbar::-webkit-scrollbar-thumb,
   .studio ::-webkit-scrollbar-thumb {
     background: var(--border-default);
     border: 2px solid transparent;
     background-clip: content-box;
     border-radius: 9999px;
   }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover,
   .studio ::-webkit-scrollbar-thumb:hover {
     background: var(--border-strong);
     background-clip: content-box;
-  }
-
-  .resize-handle {
-    touch-action: none;
-    user-select: none;
-  }
-  .transition-smooth {
-    transition: all 0.15s ease-out;
-  }
-  .no-select {
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  .workspace-shell {
-    min-height: 100dvh;
-    height: 100dvh;
-  }
-
-  /* Syntax highlighter and markdown */
-  pre code.hljs {
-    padding: 0 !important;
-  }
-  .prose pre {
-    margin: 0;
-    padding: 0;
-    background: transparent;
-  }
-  .prose code {
-    background: transparent;
-    padding: 0;
   }
 
   /* ── React Flow ─────────────────────────────────────────── */
@@ -505,13 +444,6 @@
   .react-flow__pane.dragging {
     cursor: grabbing;
   }
-  .react-flow__minimap {
-    border-radius: 12px !important;
-    overflow: hidden;
-  }
-  .react-flow__controls {
-    box-shadow: var(--elev-1);
-  }
   .react-flow__attribution {
     display: none;
   }
@@ -538,23 +470,6 @@
   .studio-canvas[data-zoom="far"] .studio-node-secondary,
   .studio-canvas[data-zoom="far"] .studio-edge-label[data-quiet="true"] {
     display: none;
-  }
-
-  @media (max-width: 1023px) {
-    .workspace-side-panel {
-      position: absolute;
-      inset-block: 0;
-      z-index: var(--layer-panel);
-      box-shadow: 16px 0 40px rgb(0 0 0 / 0.35);
-    }
-    .workspace-chat-panel {
-      position: absolute;
-      inset-block: 0;
-      inset-inline-end: 0;
-      z-index: var(--layer-panel);
-      width: min(92vw, 420px) !important;
-      box-shadow: -16px 0 40px rgb(0 0 0 / 0.35);
-    }
   }
 }
 

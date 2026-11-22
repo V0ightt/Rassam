@@ -19,13 +19,9 @@ const countSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
 export const telemetryRouteSchema = z.enum([
   "/api/blueprint",
-  "/api/chat",
-  "/api/files",
   "/api/health",
   "/api/readiness",
-  "/api/repo",
   "/api/settings/models",
-  "/api/source-grant",
 ]);
 
 const outcomeSchema = z.enum([
@@ -85,34 +81,6 @@ const upstreamCompletedSchema = z.object({
   finishReason: finishReasonSchema.optional(),
   eventCount: countSchema.optional(),
   outputCharacters: countSchema.optional(),
-}).strict();
-
-const analysisStageSchema = z.object({
-  event: z.literal("analysis.stage"),
-  requestId: requestIdSchema,
-  route: z.literal("/api/repo"),
-  stage: z.enum(["validate", "resolve-revision", "fetch-tree", "determine-scope", "analyze", "enrich", "layout", "save"]),
-  outcome: outcomeSchema,
-  durationMs: durationSchema,
-  discoveredCount: countSchema.optional(),
-  analyzedCount: countSchema.optional(),
-  excludedCount: countSchema.optional(),
-  failedCount: countSchema.optional(),
-  errorCode: identifierSchema.optional(),
-}).strict();
-
-const analysisCoverageSchema = z.object({
-  event: z.literal("analysis.coverage"),
-  requestId: requestIdSchema,
-  route: z.literal("/api/repo"),
-  treeComplete: z.boolean(),
-  discoveredCount: countSchema,
-  analyzedCount: countSchema,
-  ignoredCount: countSchema,
-  unsupportedCount: countSchema,
-  oversizedCount: countSchema,
-  failedCount: countSchema,
-  unclassifiedCount: countSchema,
 }).strict();
 
 const quotaOutcomeSchema = z.object({
@@ -175,8 +143,6 @@ const clientSessionSchema = z.object({
 export const operationalEventInputSchema = z.discriminatedUnion("event", [
   requestCompletedSchema,
   upstreamCompletedSchema,
-  analysisStageSchema,
-  analysisCoverageSchema,
   quotaOutcomeSchema,
   migrationOutcomeSchema,
   storageOutcomeSchema,

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   ArrowLeft,
@@ -13,7 +12,6 @@ import {
   TestTube2,
 } from 'lucide-react';
 
-import ActivityBar, { type ActivityPanel } from '@/components/navigation/ActivityBar';
 import {
   getDefaultModelSettings,
   loadModelSettings,
@@ -43,7 +41,6 @@ function validationDescription(status: ModelValidationStatus): string {
 }
 
 export default function SettingsPage() {
-  const router = useRouter();
   const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(getDefaultModelSettings());
   const [validationStatus, setValidationStatus] = useState<ModelValidationStatus | null>(null);
@@ -181,16 +178,10 @@ export default function SettingsPage() {
     }
   }, [settings.selectedModel, settings.selectedProvider]);
 
-  const handlePanelChange = useCallback((panel: ActivityPanel) => {
-    if (panel !== 'settings') router.push('/');
-  }, [router]);
-
   const canTestModel = Boolean(selectedProvider?.available && settings.selectedProvider && settings.selectedModel);
 
   return (
     <div className="flex min-h-[100dvh] w-full bg-slate-950 text-slate-100 overflow-hidden">
-      <ActivityBar activePanel="settings" onPanelChange={handlePanelChange} />
-
       <main className="min-w-0 flex-1 overflow-y-auto" aria-busy={loading}>
         <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
           <header className="flex flex-col gap-4 border-b border-slate-800 pb-5 sm:flex-row sm:items-start sm:justify-between">
@@ -218,7 +209,7 @@ export default function SettingsPage() {
                 className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 px-3 text-xs text-slate-200 transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
               >
                 <ArrowLeft size={14} aria-hidden="true" />
-                Back to workspace
+                Back to Rassam
               </Link>
             </div>
           </header>
@@ -389,7 +380,7 @@ export default function SettingsPage() {
                             !provider.available && 'cursor-not-allowed opacity-50',
                           )}
                         >
-                          {isEnabled ? 'Shown in chat' : 'Add to chat selector'}
+                          {isEnabled ? 'Enabled' : 'Enable provider'}
                         </button>
                       </div>
 

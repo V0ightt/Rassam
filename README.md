@@ -55,30 +55,26 @@ This picture is not a screenshot. A GitHub Action redraws it every time someone 
   <img alt="Blueprint check" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-blueprint.svg">
   <img alt="System status" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-system.svg">
 </p>
-<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of 2026-11-22 22:08 UTC</sub></p>
+<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of 2026-11-22 22:58 UTC</sub></p>
 
 <details>
-<summary>Components (24)</summary>
+<summary>Components (20)</summary>
 
 | Component | Kind | Status | Intent |
 | --- | --- | --- | --- |
-| Web shell | route | — | Next.js pages that mount the workbench and settings. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tes… |
+| Web shell | route | — | Next.js pages that mount the Studio and the settings page. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can… |
 | API routes | api | — | Server route handlers. Every request body is untrusted and validated with zod; every route goes through request-security (rate limits, origin checks). Credenti… |
-| Workbench shell | component | — | Composes the workbench: wires the Map and Blueprint features, panels and hooks together. Thin wiring only; feature logic lives in feature components and hooks.… |
-| Workbench UI | component | — | The VS Code-style workbench: map canvas, explorer, editor tabs, evidence inspector and the Rassam chat panel. Renders state owned by hooks; AI output reaches t… |
 | UI primitives | component | — | The design system: tokens-driven buttons, sheets, popovers, pills and status glyphs. Status is never shown by colour alone; everything is keyboard reachable. D… |
 | Studio | component | — | The first screen and the main product: is the project on track? Five persistent elements only (source pill, health pill, canvas, intent bar, zoom cluster). Peo… |
 | Blueprint UI | component | — | Where humans author the contract and rule on exceptions: the blueprint canvas, the ranked attention list, rule and intent editors, and the reach view. It must… |
-| State hooks | hook | — | Client state and lifecycles (projects, history, clipboard, editor tabs, blueprint sessions). Hooks own state; components render it. |
+| State hooks | hook | — | Client state and lifecycles for blueprint sessions: loading a source, drafts, proposals, history and live status. Hooks own state; components render it. |
 | Blueprint client | service | — | Browser-side host for the engine: loads a blueprint for a GitHub project through the API, or reads and writes a local folder through the File System Access API… |
-| Local store | storage | — | Local-first persistence of projects, graphs, chats and cached source in IndexedDB and localStorage, plus import and export. Exports never contain credentials. |
-| Chat agent | service | — | Server-side ask/agent orchestration over the selected model: plans tool calls, reads cited source, and validates canvas changes as complete, revisioned patches… |
+| Settings store | storage | — | Browser-side persistence of the chosen provider, model and generation settings in localStorage. It stores choices and cached availability, never credentials. |
 | Blueprint intent | service | — | Server-side helpers for &quot;tell Rassam what to change&quot;: builds the model prompt (edit operation catalogue, selector grammar, a compact blueprint digest inside da… |
-| Repository analysis | core | — | Deterministic map building from source evidence (static analysis is the only source of edges), with optional AI enrichment of names and descriptions for verifi… |
-| GitHub gateway | gateway | — | The only code that talks to GitHub and holds GITHUB\_TOKEN. Binds repository identity and commit with signed source grants so clients cannot request content the… |
+| GitHub gateway | gateway | — | The only code that talks to GitHub and holds GITHUB\_TOKEN. Resolves public repositories to a pinned commit and binds repository identity and commit with signed… |
 | Server platform | middleware | — | Cross-cutting server concerns: rate limiting, origin and deployment checks, request parsing, the error envelope and privacy-preserving telemetry. |
-| LLM providers | service | — | Adapters over model providers behind one interface. The only code that reads provider API keys. |
-| Shared library | utility | — | Runtime-neutral code shared by browser and server: zod contracts, types, canvas normalization, source-sensitivity policy, patch application, search and small u… |
+| LLM providers | service | — | Adapters over model providers behind one interface, and the resolver that turns a requested provider and model into exactly that configured runtime, with no si… |
+| Shared library | utility | — | Runtime-neutral code shared by browser and server: zod request contracts and limits, version constants and small utilities. Nothing here may need Node or serve… |
 | Blueprint engine | core | — | The isomorphic heart of Rassam: blueprint format, import graph, rules, gate, reach analysis and reports. It runs unchanged in the CLI, the MCP server, CI and t… |
 | CLI and MCP server | client | — | The Node host: \`rassam\` commands, git and GitHub Actions integration, and the dual-era MCP server agents call before acting. Agent proposals and escalations ar… |
 | Build tooling | config | — | Build, lint, test and bundling configuration, including the CLI bundle consumed by the GitHub Action. |
@@ -252,13 +248,13 @@ A scheduled workflow pings it and updates the picture. Honest fine print: a READ
 | `.rassam/blueprint.json` | Rassam's own blueprint. Yes, it checks itself on every PR |
 
 ```bash
-npm test             # 1,500+ tests
+npm test             # 1,300+ tests
 npm run typecheck && npm run lint
 npm run build
 npm run rassam -- check --base main
 ```
 
-Why we built it this way, with sources: [the research report](reports/Rassam%20pivot%20for%20the%20AGI%20era.md). What we still need to prove: [the evaluation plan](docs/evaluation-plan.md). The older map-and-chat workspace is still there at `/map`.
+Why we built it this way, with sources: [the research report](reports/Rassam%20pivot%20for%20the%20AGI%20era.md). What we still need to prove: [the evaluation plan](docs/evaluation-plan.md).
 
 ## Say hi
 

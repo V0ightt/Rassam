@@ -2,16 +2,14 @@
 
 ## Browser data
 
-Rassam stores project graphs, chat sessions, editor state, and cached public source in IndexedDB. Small preferences and the active project identifier may use localStorage. Clearing site data removes this local information.
+The Studio keeps unsaved blueprint drafts, canvas layout and the handle of the last opened local folder in IndexedDB (`rassam-blueprints`). Small preferences (theme, the last opened source, the chosen provider and model) use localStorage. Clearing site data removes this local information.
+
+A local folder is read in the browser through the File System Access API. Its files never leave the machine; the blueprint is written back into the folder only when you save.
 
 ## Server processing
 
-The server processes requests transiently. It does not persist project graphs, chats, or cached source. Public repository paths and selected source excerpts are sent to GitHub or the explicitly selected AI provider only when needed for the requested action.
-
-## Exports
-
-Graph exports exclude chat and cached source. A project backup can include chat only after explicit selection. Provider credentials are never exported. Cached source requires a separate opt-in and warning.
+The server processes requests transiently and persists nothing. For a public GitHub repository it downloads the pinned commit, builds the import graph and returns the snapshot to the browser. When you ask for a change in words and the built-in parser does not understand it, the instruction and a compact digest of the blueprint (component names, paths, rules) are sent to the provider and model you explicitly selected. Source code is not sent to a model.
 
 ## Logging
 
-Logs and metrics must not contain chat text, source content, repository URLs, filenames, credentials, or exported project data. Operational telemetry is limited to request IDs, timings, counts, outcome codes, provider/model identifiers, and aggregate coverage.
+Logs and metrics must not contain instructions, source content, repository URLs, filenames or credentials. Operational telemetry is limited to request IDs, timings, counts, outcome codes and provider/model identifiers.

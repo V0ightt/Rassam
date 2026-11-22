@@ -2,7 +2,7 @@
 
 import { useId, useState } from 'react';
 import Link from 'next/link';
-import { ClipboardCopy, Download, FolderOpen, Github, Map as MapIcon, Moon, RefreshCw, Save, Settings, SunMedium } from 'lucide-react';
+import { ClipboardCopy, Download, FolderOpen, Github, Moon, RefreshCw, Save, Settings, SunMedium } from 'lucide-react';
 
 import type { BlueprintSession } from '@/components/blueprint/session';
 import { Button, buttonClass } from '@/components/ui/Button';
@@ -234,9 +234,6 @@ export default function SourceSheet({
       </SheetSection>
 
       <nav aria-label="More" className="flex flex-wrap gap-2 border-t border-line-subtle px-4 py-4">
-        <Link href="/map" className={buttonClass('ghost', 'md')}>
-          <MapIcon size={14} strokeWidth={1.5} aria-hidden="true" /> Classic map
-        </Link>
         <Link href="/settings" className={buttonClass('ghost', 'md')}>
           <Settings size={14} strokeWidth={1.5} aria-hidden="true" /> Settings
         </Link>

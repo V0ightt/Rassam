@@ -17,7 +17,6 @@ export interface CommandContext {
   canSave: boolean;
   theme: 'dark' | 'light';
   openSettings(): void;
-  openClassicMap(): void;
   toggleWatch(): void;
   fitView(): void;
   undo(): void;
@@ -42,7 +41,6 @@ export function buildCommands(context: CommandContext): StudioCommand[] {
     { id: 'watch', label: context.watching ? 'Stop watching for new commits' : 'Watch for new commits', keywords: 'toggle watch live', run: context.toggleWatch },
     { id: 'manual', label: 'Edit blueprint manually', keywords: 'forms components rules invariants decisions', run: context.openManual },
     { id: 'theme', label: context.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', keywords: 'switch theme appearance', run: context.switchTheme },
-    { id: 'map', label: 'Open classic map', keywords: 'legacy workbench', run: context.openClassicMap },
     { id: 'settings', label: 'Open settings', keywords: 'model provider', run: context.openSettings },
   ];
 }

@@ -36,7 +36,7 @@ export interface BlueprintGithubProject {
 export interface BlueprintPanelProps {
   session: BlueprintSession;
   ui: BlueprintUi;
-  /** The GitHub project open in the workbench, if any. */
+  /** The GitHub project open in the Studio, if any. */
   githubProject?: BlueprintGithubProject | null;
   onNavigateToSource?: NavigateToSource;
   onShowOnCanvas?: (componentIds: string[]) => void;

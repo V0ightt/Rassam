@@ -3,25 +3,12 @@ import { afterEach, test, vi } from "vitest";
 
 import { ApiError } from "./api-error";
 import {
-  getPinnedFile,
   getPublicRepository,
-  normalizeRepositoryPath,
   octokit,
   parseGitHubRepositoryUrl,
 } from "./github";
-import type { SourceGrantPayload } from "./contracts";
 
 afterEach(() => vi.restoreAllMocks());
-
-const grant: SourceGrantPayload = {
-  version: 1,
-  owner: "openai",
-  repo: "fixture",
-  commitSha: "a".repeat(40),
-  treeSha: "b".repeat(40),
-  issuedAt: 1,
-  expiresAt: Number.MAX_SAFE_INTEGER,
-};
 
 test("GitHub URL parsing accepts only exact public github.com repository URLs", () => {
   assert.deepEqual(parseGitHubRepositoryUrl("https://github.com/openai/example.git/"), {
@@ -42,13 +29,6 @@ test("GitHub URL parsing accepts only exact public github.com repository URLs", 
       (error: unknown) => error instanceof ApiError && error.code === "INVALID_GITHUB_URL",
       invalid,
     );
-  }
-});
-
-test("repository paths reject traversal, absolute, empty-segment, and backslash forms", () => {
-  assert.equal(normalizeRepositoryPath("src/app/page.tsx"), "src/app/page.tsx");
-  for (const invalid of ["../secret", "/etc/passwd", "src//file.ts", "src\\file.ts", "./README.md"]) {
-    assert.throws(() => normalizeRepositoryPath(invalid));
   }
 });
 
@@ -161,30 +141,4 @@ test("an individually truncated subtree fails instead of returning partial cover
     getPublicRepository("openai", "fixture"),
     (error: unknown) => error instanceof ApiError && error.code === "TREE_INCOMPLETE",
   );
-});
-
-test("pinned file reads recheck public visibility and use the granted commit", async () => {
-  vi.spyOn(octokit.rest.repos, "get").mockResolvedValue({ data: { private: false, visibility: "public" } } as never);
-  const contentSpy = vi.spyOn(octokit.rest.repos, "getContent").mockResolvedValue({
-    data: { type: "file", sha: "c".repeat(40) },
-  } as never);
-  vi.spyOn(octokit.rest.git, "getBlob").mockResolvedValue({
-    data: { size: 5, encoding: "base64", content: Buffer.from("hello").toString("base64") },
-  } as never);
-
-  const result = await getPinnedFile(grant, "src/index.ts", { expectedBlobSha: "c".repeat(40) });
-  assert.equal(result.content, "hello");
-  assert.equal(result.commitSha, grant.commitSha);
-  assert.equal(contentSpy.mock.calls[0]?.[0]?.ref, grant.commitSha);
-});
-
-test("a repository made private after grant issuance cannot be read", async () => {
-  vi.spyOn(octokit.rest.repos, "get").mockResolvedValue({ data: { private: true, visibility: "private" } } as never);
-  const contentSpy = vi.spyOn(octokit.rest.repos, "getContent");
-
-  await assert.rejects(
-    getPinnedFile(grant, "src/index.ts"),
-    (error: unknown) => error instanceof ApiError && error.code === "REPOSITORY_PRIVATE",
-  );
-  assert.equal(contentSpy.mock.calls.length, 0);
 });

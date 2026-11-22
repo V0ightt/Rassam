@@ -34,15 +34,16 @@ Tests use **vitest** (`import { describe, it, expect } from "vitest"`); componen
 
 - `src/blueprint/` — the isomorphic engine (format, import graph, rules, gate, reach, reports). No `node:` imports, no DOM, no React/Next, no imports from the rest of the app; only `zod`. Use relative imports inside it.
 - `src/cli/` — Node host: `rassam` CLI, git and GitHub Actions integration, the dual-era MCP server. May depend only on the engine, Node built-ins and zod.
-- `src/components/blueprint/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `src/app/api/blueprint/` — the Blueprint view and its data layer (GitHub projects and local folders via the File System Access API).
-- `src/app/`, `src/components/`, `src/hooks/`, `src/lib/` — the Next.js workbench (Map view, evidence inspector, chat). Browser code must not import server modules that read credentials (`src/lib/github.ts`, `src/lib/llm/**`, chat agent, request security); type-only imports are fine.
+- `src/components/studio/`, `src/components/blueprint/`, `src/components/ui/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `src/lib/blueprint-intent/`, `src/app/api/blueprint/`, `src/app/api/live/` — the Studio at `/` and its data layer (GitHub projects and local folders via the File System Access API).
+- `src/app/settings/`, `src/app/api/settings/models/`, `src/lib/llm/`, `src/lib/chat-runtime.ts`, `src/lib/model-settings.ts` — provider and model configuration for the intent bar's optional model path.
+- Browser code must not import server modules that read credentials (`src/lib/github.ts`, `src/lib/llm/**`, request security); type-only imports are fine.
 
 Read `agents.md` before substantial architecture changes, and update `agents.md`, `README.md` and the blueprint when architecture or documented behavior changes.
 
 ## Conventions
 
 - Path alias `@/*` → `./src/*` in app code; relative imports inside `src/blueprint` and `src/cli` (they are bundled for the CLI).
-- Streaming chat API returns NDJSON; pre-stream errors return the JSON error envelope.
-- Requests, repository content and AI output are untrusted. Credentials stay server-side and are never exported or printed; reports show redacted previews only.
-- `page.tsx` and `Workbench.tsx` stay thin wiring layers: put logic in hooks and libraries.
+- API routes return the JSON error envelope from `src/lib/api-error.ts`.
+- Requests, repository content and AI output are untrusted. Credentials stay server-side and are never printed; reports show redacted previews only.
+- `page.tsx` and `Studio.tsx` stay thin wiring layers: put logic in hooks and libraries.
 - This Next.js version has breaking changes; check `node_modules/next/dist/docs/` before using Next-specific APIs.
