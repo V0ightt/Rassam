@@ -9,7 +9,7 @@ import type { BlueprintEditInput } from '@/blueprint';
 import type { CanvasApi, CanvasChanges } from '@/components/blueprint/BlueprintCanvas';
 import BlueprintInspector from '@/components/blueprint/BlueprintInspector';
 import BlueprintPanel from '@/components/blueprint/BlueprintPanel';
-import type { CanvasQuestion } from '@/components/blueprint/useBlueprintCanvas';
+import type { CanvasDetail, CanvasQuestion } from '@/components/blueprint/useBlueprintCanvas';
 import { useBlueprintUi } from '@/components/blueprint/useBlueprintUi';
 import { Button } from '@/components/ui/Button';
 import { Sheet } from '@/components/ui/Sheet';
@@ -64,6 +64,8 @@ export default function Studio() {
   const { theme, toggleTheme } = useAppearance();
   const [selection, setSelection] = useState<string[]>([]);
   const [question, setQuestion] = useState<CanvasQuestion>('dependencies');
+  const [detail, setDetail] = useState<CanvasDetail>('calm');
+  const [hiddenNote, setHiddenNote] = useState('');
   const [sheet, setSheet] = useState<null | 'source' | 'attention' | 'manual'>(null);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [canvasApi, setCanvasApi] = useState<CanvasApi | null>(null);
@@ -212,6 +214,8 @@ export default function Studio() {
         session={session}
         ui={ui}
         question={question}
+        detail={detail}
+        onHiddenNote={setHiddenNote}
         selectedIds={liveSelection}
         onSelect={select}
         changes={changes}
@@ -314,6 +318,9 @@ export default function Studio() {
         onQuestionChange={setQuestion}
         outlineOpen={outlineOpen}
         onToggleOutline={() => setOutlineOpen((open) => !open)}
+        detail={detail}
+        onDetailChange={setDetail}
+        hiddenNote={hiddenNote}
         className="absolute bottom-24 right-4 z-10 lg:bottom-4"
       />
 

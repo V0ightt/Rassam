@@ -32,7 +32,7 @@ import BlueprintEdge, { EDGE_STATUS_STYLE, EdgeActivateContext, type BlueprintEd
 import BlueprintNode, { type BlueprintNodeData, type NodeDiff } from './BlueprintNode';
 import EdgePrompt, { type EdgePromptTarget } from './EdgePrompt';
 import type { BlueprintSession } from './session';
-import { QUESTIONS, edgeId, useBlueprintCanvas, type CanvasQuestion } from './useBlueprintCanvas';
+import { QUESTIONS, edgeId, useBlueprintCanvas, type CanvasDetail, type CanvasQuestion } from './useBlueprintCanvas';
 import type { BlueprintUi } from './useBlueprintUi';
 import type { NavigateToSource } from './ui';
 
@@ -73,6 +73,10 @@ export interface BlueprintCanvasProps {
   session: BlueprintSession;
   ui: BlueprintUi;
   question?: CanvasQuestion;
+  /** "calm" (default) hides tests, edges into shared components and implied dependencies. */
+  detail?: CanvasDetail;
+  /** Reports what calm mode is hiding, as one sentence (empty when nothing). */
+  onHiddenNote?: (note: string) => void;
   /** Selected component ids; the last one is the primary selection. */
   selectedIds?: string[];
   onSelect?: (id: string | null, options?: { additive?: boolean }) => void;
@@ -124,6 +128,8 @@ function CanvasInner({
   session,
   ui,
   question = 'dependencies',
+  detail = 'calm',
+  onHiddenNote,
   selectedIds,
   onSelect,
   changes = null,
@@ -182,7 +188,9 @@ function CanvasInner({
   }, [drawn.blueprint, selectedIds, ui.selectedComponentId]);
   const selectedId = selection.at(-1) ?? null;
   const spotlightIds = useMemo(() => ui.focus?.ids ?? [], [ui.focus]);
-  const model = useBlueprintCanvas({ session: drawn, question, selectedId, spotlightIds, dragPositions });
+  const model = useBlueprintCanvas({ session: drawn, question, selectedId, spotlightIds, dragPositions, detail });
+  const hiddenNote = model.hiddenNote;
+  useEffect(() => { onHiddenNote?.(hiddenNote); }, [hiddenNote, onHiddenNote]);
 
   const select = useCallback((id: string | null, options?: { additive?: boolean }) => {
     if (onSelect) onSelect(id, options);

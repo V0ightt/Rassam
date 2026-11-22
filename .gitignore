@@ -46,3 +46,6 @@ next-env.d.ts
 # playwright output
 /test-results/
 /playwright-report/
+
+# demo video project (source, renders, caches); deliverables live in docs/media
+/video/

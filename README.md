@@ -10,7 +10,11 @@
 </div>
 
 <p align="center">
-  <img src="./docs/images/studio-canvas.png" alt="The Rassam Studio: your system design on a canvas, with a health pill and a bar to tell it what to change" width="900" />
+  <a href="./docs/media/rassam-demo.mp4">
+    <img src="./docs/media/rassam-demo.gif" alt="Demo: 'forbid web from importing storage' is typed into the Rassam Studio. The rule is previewed on the canvas, applied with Enter, and Rassam points at the one import that already breaks it." width="900" />
+  </a>
+  <br/>
+  <sub><a href="./docs/media/rassam-demo.mp4">Watch the full demo</a> · under a minute · no sound needed</sub>
 </p>
 
 > Rassam (رسّام) means "painter" in Arabic. It used to paint pictures of your code. Now it paints the blueprint your code gets checked against.
@@ -115,6 +119,10 @@ rassam do "forbid web from importing storage" --write
 ```
 
 ## What it looks like
+
+<p align="center">
+  <img src="./docs/images/studio-canvas.png" alt="The Rassam Studio: your system design on a canvas, with a health pill and a bar to tell it what to change" width="900" />
+</p>
 
 | | |
 | --- | --- |
