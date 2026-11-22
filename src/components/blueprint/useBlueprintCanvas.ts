@@ -5,6 +5,7 @@ import dagre from 'dagre';
 import { MarkerType, type Edge, type Node } from 'reactflow';
 
 import type { Workspace, WorkspaceGraphView } from '@/blueprint';
+import { calmEdgeKey, calmGraphView } from '@/blueprint/calm';
 import { EDGE_STATUS_STYLE, type BlueprintEdgeData } from './BlueprintEdge';
 import { BLUEPRINT_NODE_HEIGHT, BLUEPRINT_NODE_WIDTH, type BlueprintNodeData, type NodeEmphasis } from './BlueprintNode';
 import type { BlueprintSession } from './session';
@@ -94,8 +95,13 @@ export function secretReads(workspace: Workspace): Map<string, string[]> {
   return secrets;
 }
 
+export type CanvasDetail = 'calm' | 'full';
+
 export interface BlueprintCanvasModel {
+  /** The graph as drawn (simplified in calm mode). */
   view: WorkspaceGraphView;
+  /** What calm mode left out, as one sentence; empty when nothing is hidden. */
+  hiddenNote: string;
   nodes: Node<BlueprintNodeData>[];
   edges: Edge<BlueprintEdgeData>[];
   /** Short sentence describing what the active question currently shows. */
@@ -108,16 +114,33 @@ export function useBlueprintCanvas({
   selectedId,
   spotlightIds,
   dragPositions,
+  detail = 'calm',
 }: {
   session: Pick<BlueprintSession, 'blueprint' | 'workspace' | 'layout'>;
   question: CanvasQuestion;
   selectedId: string | null;
   spotlightIds: readonly string[];
   dragPositions: Record<string, Position>;
+  detail?: CanvasDetail;
 }): BlueprintCanvasModel {
   const { blueprint, workspace, layout } = session;
 
-  const view = useMemo<WorkspaceGraphView>(() => workspace?.graphView() ?? { components: [], edges: [] }, [workspace]);
+  const fullView = useMemo<WorkspaceGraphView>(() => workspace?.graphView() ?? { components: [], edges: [] }, [workspace]);
+  // Calm mode hides what a reader can take for granted (tests, edges into
+  // shared components, implied dependencies). Whatever is selected or part of
+  // a previewed change always stays visible.
+  const spotlightKey = spotlightIds.join('|');
+  const calm = useMemo(() => {
+    if (detail === 'full') return null;
+    const pinned = new Set<string>(spotlightKey ? spotlightKey.split('|') : []);
+    if (selectedId) pinned.add(selectedId);
+    const keepEdges = new Set(
+      fullView.edges.filter((edge) => pinned.has(edge.from) && pinned.has(edge.to)).map((edge) => calmEdgeKey(edge)),
+    );
+    return calmGraphView(fullView, blueprint, { keepComponents: pinned, keepEdges });
+  }, [blueprint, detail, fullView, selectedId, spotlightKey]);
+  const view = calm?.view ?? fullView;
+  const hiddenIds = calm?.hiddenComponents;
   const fileCounts = useMemo(
     () => new Map((workspace?.overview().components ?? []).map((component) => [component.id, component.fileCount])),
     [workspace],
@@ -131,14 +154,14 @@ export function useBlueprintCanvas({
   const { positions: auto, routes } = useMemo(() => layoutWithRoutes(view), [shapeKey]);
 
   const impact = useMemo(
-    () => (question === 'impact' && selectedId && workspace ? impactDepths(workspace, view, selectedId) : null),
-    [question, selectedId, view, workspace],
+    () => (question === 'impact' && selectedId && workspace ? impactDepths(workspace, fullView, selectedId) : null),
+    [fullView, question, selectedId, workspace],
   );
   const secrets = useMemo(() => (question === 'reach' && workspace ? secretReads(workspace) : null), [question, workspace]);
 
   const nodes = useMemo<Node<BlueprintNodeData>[]>(() => {
     const findings = new Map(view.components.map((component) => [component.id, component.findings ?? 0]));
-    return (blueprint?.components ?? []).map((component) => {
+    return (blueprint?.components ?? []).filter((component) => !hiddenIds?.has(component.id)).map((component) => {
       let emphasis: NodeEmphasis = 'normal';
       let note: string | undefined;
       if (impact) {
@@ -165,12 +188,12 @@ export function useBlueprintCanvas({
         },
       };
     });
-  }, [auto, blueprint, dragPositions, fileCounts, impact, layout, secrets, selectedId, spotlightIds, view]);
+  }, [auto, blueprint, dragPositions, fileCounts, hiddenIds, impact, layout, secrets, selectedId, spotlightIds, view]);
 
   const edges = useMemo<Edge<BlueprintEdgeData>[]>(() => {
     const names = new Map((blueprint?.components ?? []).map((component) => [component.id, component.name]));
     return view.edges
-      .filter((edge) => names.has(edge.from) && names.has(edge.to))
+      .filter((edge) => names.has(edge.from) && names.has(edge.to) && !hiddenIds?.has(edge.from) && !hiddenIds?.has(edge.to))
       .map((edge) => {
         const inImpact = impact
           ? (edge.to === selectedId || impact.has(edge.to)) && (edge.from === selectedId || impact.has(edge.from))
@@ -199,7 +222,7 @@ export function useBlueprintCanvas({
           },
         };
       });
-  }, [blueprint, dragPositions, impact, layout, routes, secrets, selectedId, view]);
+  }, [blueprint, dragPositions, hiddenIds, impact, layout, routes, secrets, selectedId, view]);
 
   const caption = useMemo(() => {
     if (question === 'impact') {
@@ -211,10 +234,10 @@ export function useBlueprintCanvas({
       const count = secrets?.size ?? 0;
       return count === 0 ? 'No component reads a secret-like environment variable.' : `${count} ${count === 1 ? 'component reads' : 'components read'} secret-like environment variables.`;
     }
-    const undeclared = view.edges.filter((edge) => edge.status === 'undeclared').length;
-    const forbidden = view.edges.filter((edge) => edge.status === 'forbidden').length;
-    return `${view.edges.length} dependencies · ${undeclared} undeclared · ${forbidden} forbidden. Draw an edge to declare or forbid one.`;
-  }, [impact, question, secrets, selectedId, view]);
+    const undeclared = fullView.edges.filter((edge) => edge.status === 'undeclared').length;
+    const forbidden = fullView.edges.filter((edge) => edge.status === 'forbidden').length;
+    return `${fullView.edges.length} dependencies · ${undeclared} undeclared · ${forbidden} forbidden. Draw an edge to declare or forbid one.`;
+  }, [fullView, impact, question, secrets, selectedId]);
 
-  return { view, nodes, edges, caption };
+  return { view, hiddenNote: calm?.note ?? '', nodes, edges, caption };
 }

@@ -1,9 +1,9 @@
 'use client';
 
-import { CircleHelp, ListTree, Maximize, Minus, Plus } from 'lucide-react';
+import { CircleHelp, Layers, ListTree, Maximize, Minus, Plus } from 'lucide-react';
 
 import { CanvasLegend, type CanvasApi } from '@/components/blueprint/BlueprintCanvas';
-import { QUESTIONS, type CanvasQuestion } from '@/components/blueprint/useBlueprintCanvas';
+import { QUESTIONS, type CanvasDetail, type CanvasQuestion } from '@/components/blueprint/useBlueprintCanvas';
 import { IconButton } from '@/components/ui/Button';
 import { cx } from '@/components/ui/cx';
 import { Popover } from '@/components/ui/Popover';
@@ -16,6 +16,9 @@ export default function ZoomCluster({
   onQuestionChange,
   outlineOpen,
   onToggleOutline,
+  detail = 'calm',
+  onDetailChange,
+  hiddenNote = '',
   className,
 }: {
   api: CanvasApi | null;
@@ -23,6 +26,10 @@ export default function ZoomCluster({
   onQuestionChange: (question: CanvasQuestion) => void;
   outlineOpen: boolean;
   onToggleOutline: () => void;
+  detail?: CanvasDetail;
+  onDetailChange?: (detail: CanvasDetail) => void;
+  /** What the calm view currently leaves out. */
+  hiddenNote?: string;
   className?: string;
 }) {
   return (
@@ -45,6 +52,17 @@ export default function ZoomCluster({
           <Maximize size={14} strokeWidth={1.5} aria-hidden="true" />
         </IconButton>
         <span className="mx-0.5 h-4 w-px bg-line" aria-hidden="true" />
+        {onDetailChange && (
+          <IconButton
+            label={detail === 'calm' ? (hiddenNote ? `Show everything. ${hiddenNote}` : 'Show everything') : 'Simplify: hide tests, shared and implied edges'}
+            size="sm"
+            active={detail === 'full'}
+            aria-pressed={detail === 'full'}
+            onClick={() => onDetailChange(detail === 'calm' ? 'full' : 'calm')}
+          >
+            <Layers size={15} strokeWidth={1.5} aria-hidden="true" />
+          </IconButton>
+        )}
         <IconButton label="Outline" shortcut="Ctrl+\" size="sm" active={outlineOpen} aria-pressed={outlineOpen} onClick={onToggleOutline}>
           <ListTree size={15} strokeWidth={1.5} aria-hidden="true" />
         </IconButton>
