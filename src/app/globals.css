@@ -1,270 +1,582 @@
 @import "tailwindcss";
 
-@theme {
-  --color-slate-950: #020617;
-  --color-slate-900: #0f172a;
-  --color-slate-800: #1e293b;
-  --color-slate-700: #334155;
-  --color-slate-600: #475569;
-  --color-slate-500: #64748b;
-  --color-slate-400: #94a3b8;
-  --color-slate-300: #cbd5e1;
-  --color-slate-200: #e2e8f0;
-  --color-slate-100: #f1f5f9;
-  --color-blue-500: #3b82f6;
-  --color-blue-600: #2563eb;
-  --color-blue-700: #1d4ed8;
-  --color-blue-900: #1e3a8a;
-  --color-green-400: #4ade80;
-  --color-green-500: #22c55e;
-  --color-red-400: #f87171;
-  --color-red-500: #ef4444;
-  --color-amber-400: #fbbf24;
-  --color-amber-500: #f59e0b;
-  --color-purple-400: #c084fc;
-  --color-purple-500: #a855f7;
-  --animate-spin: spin 1s linear infinite;
-  --animate-bounce: bounce 1s infinite;
-  --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+/* ──────────────────────────────────────────────────────────────
+   Rassam design tokens.
+   Dark is the default; `data-theme="light"` on <html> (or any subtree)
+   switches. Tokens are declared on every theme-bearing element so a
+   subtree can pin a theme (the classic map pins dark).
+   ────────────────────────────────────────────────────────────── */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@custom-variant transparency-reduce (@media (prefers-reduced-transparency: reduce));
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces (neutral hue 260) */
+  --bg-canvas: oklch(0.145 0.004 260);
+  --bg-base: oklch(0.178 0.005 260);
+  --bg-raised: oklch(0.215 0.006 260);
+  --bg-overlay: oklch(0.25 0.007 260);
+  --bg-hover: oklch(0.285 0.008 260);
+  --bg-active: oklch(0.32 0.009 260);
+  --border-subtle: oklch(0.27 0.007 260);
+  --border-default: oklch(0.33 0.008 260);
+  --border-strong: oklch(0.56 0.01 260);
+
+  /* Text */
+  --text-primary: oklch(0.96 0.003 260);
+  --text-secondary: oklch(0.8 0.006 260);
+  --text-tertiary: oklch(0.68 0.008 260);
+  --text-disabled: oklch(0.5 0.008 260);
+
+  /* Accent: iris. Interactive, selected, proposed, agent. Never "healthy". */
+  --accent: oklch(0.72 0.15 285);
+  --accent-hover: oklch(0.77 0.13 285);
+  --accent-text: oklch(0.82 0.1 285);
+  --accent-muted: oklch(0.32 0.07 285);
+  --on-accent: oklch(0.16 0.02 285);
+
+  /* Status: always paired with a glyph and a label */
+  --status-ok: oklch(0.8 0.16 150);
+  --status-ok-bg: oklch(0.27 0.05 150);
+  --status-warn: oklch(0.83 0.15 80);
+  --status-warn-bg: oklch(0.28 0.05 80);
+  --status-bad: oklch(0.72 0.18 25);
+  --status-bad-bg: oklch(0.27 0.06 25);
+  --status-unknown: oklch(0.68 0.008 260);
+
+  --canvas-dot: oklch(0.3 0.008 260);
+  --scrim: oklch(0 0 0 / 0.5);
+
+  /* Elevation: surface ladder first, then a 1px edge, then a soft neutral shadow */
+  --elev-1: 0 0 0 1px var(--border-default), 0 1px 2px oklch(0 0 0 / 0.4);
+  --elev-2: 0 0 0 1px oklch(1 0 0 / 0.08), inset 0 1px 0 oklch(1 0 0 / 0.06), 0 8px 24px -6px oklch(0 0 0 / 0.55);
+  --elev-3: 0 0 0 1px oklch(1 0 0 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.08), 0 24px 64px -12px oklch(0 0 0 / 0.7);
+
+  /* Neutral and hue ramps that the Tailwind palette names resolve to (see below) */
+  --n-50: oklch(0.985 0.002 260);
+  --n-100: var(--text-primary);
+  --n-200: oklch(0.9 0.005 260);
+  --n-300: var(--text-secondary);
+  --n-400: var(--text-tertiary);
+  --n-500: oklch(0.64 0.008 260);
+  --n-600: oklch(0.45 0.009 260);
+  --n-700: var(--border-default);
+  --n-800: var(--bg-hover);
+  --n-900: var(--bg-raised);
+  --n-950: var(--bg-canvas);
+
+  --iris-50: oklch(0.97 0.02 285);
+  --iris-100: oklch(0.93 0.04 285);
+  --iris-200: oklch(0.88 0.07 285);
+  --iris-300: var(--accent-text);
+  --iris-400: var(--accent);
+  --iris-500: oklch(0.66 0.17 285);
+  --iris-600: oklch(0.58 0.19 285);
+  --iris-700: oklch(0.5 0.18 285);
+  --iris-800: oklch(0.4 0.14 285);
+  --iris-900: var(--accent-muted);
+  --iris-950: oklch(0.24 0.05 285);
+
+  --ok-soft: oklch(0.9 0.09 150);
+  --warn-soft: oklch(0.92 0.08 80);
+  --bad-soft: oklch(0.88 0.07 25);
 }
 
-:root {
-  color-scheme: dark;
-  --surface-canvas: #070b12;
-  --surface-base: #0b111b;
-  --surface-raised: #111a27;
-  --surface-overlay: #162131;
-  --border-subtle: #263347;
-  --border-strong: #3a4a62;
-  --text-primary: #eef4fb;
-  --text-secondary: #b4c0cf;
-  --text-muted: #7f8da1;
-  --accent: #22b8cf;
-  --accent-strong: #0f93ad;
-  --danger: #f87171;
-  --warning: #fbbf24;
-  --focus: #67d8e8;
-  --radius-control: 0.5rem;
-  --radius-panel: 0.75rem;
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-canvas: #f5f7f9;
+  --bg-base: #fbfcfd;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-hover: #eceef1;
+  --bg-active: #e2e5e9;
+  --border-subtle: #e6e8eb;
+  --border-default: #dcdee1;
+  --border-strong: #7d8086;
+
+  --text-primary: #16181c;
+  --text-secondary: #4a4d53;
+  --text-tertiary: #656970;
+  --text-disabled: #a3a6ac;
+
+  --accent: oklch(0.52 0.19 285);
+  --accent-hover: oklch(0.47 0.19 285);
+  --accent-text: oklch(0.47 0.19 285);
+  --accent-muted: oklch(0.94 0.035 285);
+  --on-accent: #ffffff;
+
+  --status-ok: #007834;
+  --status-ok-bg: #e2f4e7;
+  --status-warn: #945a00;
+  --status-warn-bg: #fbefd5;
+  --status-bad: #c51d28;
+  --status-bad-bg: #fde8e6;
+  --status-unknown: #656970;
+
+  --canvas-dot: #d3d6da;
+  --scrim: oklch(0.2 0.01 260 / 0.28);
+
+  --elev-1: 0 0 0 1px var(--border-default), 0 1px 2px oklch(0.2 0.01 260 / 0.06);
+  --elev-2: 0 0 0 1px oklch(0.2 0.01 260 / 0.1), 0 8px 24px -6px oklch(0.2 0.01 260 / 0.16);
+  --elev-3: 0 0 0 1px oklch(0.2 0.01 260 / 0.1), 0 24px 64px -12px oklch(0.2 0.01 260 / 0.24);
+
+  --n-50: #0c0d10;
+  --n-200: #2c2f34;
+  --n-500: #656970;
+  --n-600: #b9bcc2;
+
+  --iris-50: oklch(0.3 0.12 285);
+  --iris-100: oklch(0.38 0.16 285);
+  --iris-200: oklch(0.43 0.18 285);
+  --iris-500: oklch(0.52 0.19 285);
+  --iris-600: oklch(0.47 0.19 285);
+  --iris-700: oklch(0.42 0.18 285);
+  --iris-800: oklch(0.88 0.06 285);
+  --iris-950: oklch(0.97 0.02 285);
+
+  --ok-soft: var(--status-ok);
+  --warn-soft: var(--status-warn);
+  --bad-soft: var(--status-bad);
+}
+
+/* Shared, theme-independent tokens and the palette remap. Declared on every
+   theme-bearing element so `var()` re-resolves against that element's theme. */
+:root,
+[data-theme] {
+  --ring-focus: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--accent);
+  --ring-selected: 0 0 0 1.5px var(--accent);
+
+  --dur-1: 100ms;
+  --dur-2: 160ms;
+  --dur-3: 220ms;
+  --dur-4: 320ms;
+
   --layer-toolbar: 20;
   --layer-panel: 30;
   --layer-dialog: 60;
+
+  /* Names the pre-token workbench still reads */
+  --surface-canvas: var(--bg-canvas);
+  --surface-base: var(--bg-base);
+  --surface-raised: var(--bg-raised);
+  --surface-overlay: var(--bg-overlay);
+  --text-muted: var(--text-tertiary);
+  --accent-strong: var(--iris-600);
+  --danger: var(--status-bad);
+  --warning: var(--status-warn);
+  --focus: var(--accent);
+  --radius-control: 8px;
+  --radius-panel: 12px;
+
+  /* Tailwind palette names resolve to the token ladders, so components written
+     against slate/cyan/amber/red/emerald follow the theme and the iris accent. */
+  --color-slate-50: var(--n-50);
+  --color-slate-100: var(--n-100);
+  --color-slate-200: var(--n-200);
+  --color-slate-300: var(--n-300);
+  --color-slate-400: var(--n-400);
+  --color-slate-500: var(--n-500);
+  --color-slate-600: var(--n-600);
+  --color-slate-700: var(--n-700);
+  --color-slate-800: var(--n-800);
+  --color-slate-900: var(--n-900);
+  --color-slate-950: var(--n-950);
+
+  --color-cyan-50: var(--iris-50);
+  --color-cyan-100: var(--iris-100);
+  --color-cyan-200: var(--iris-200);
+  --color-cyan-300: var(--iris-300);
+  --color-cyan-400: var(--iris-400);
+  --color-cyan-500: var(--iris-500);
+  --color-cyan-600: var(--iris-600);
+  --color-cyan-700: var(--iris-700);
+  --color-cyan-800: var(--iris-800);
+  --color-cyan-900: var(--iris-900);
+  --color-cyan-950: var(--iris-950);
+
+  --color-emerald-50: var(--ok-soft);
+  --color-emerald-100: var(--ok-soft);
+  --color-emerald-200: var(--ok-soft);
+  --color-emerald-300: var(--status-ok);
+  --color-emerald-400: var(--status-ok);
+  --color-emerald-500: var(--status-ok);
+  --color-emerald-950: var(--status-ok-bg);
+
+  --color-amber-50: var(--warn-soft);
+  --color-amber-100: var(--warn-soft);
+  --color-amber-200: var(--warn-soft);
+  --color-amber-300: var(--status-warn);
+  --color-amber-400: var(--status-warn);
+  --color-amber-500: var(--status-warn);
+  --color-amber-950: var(--status-warn-bg);
+
+  --color-red-50: var(--bad-soft);
+  --color-red-100: var(--bad-soft);
+  --color-red-200: var(--bad-soft);
+  --color-red-300: var(--status-bad);
+  --color-red-400: var(--status-bad);
+  --color-red-500: var(--status-bad);
+  --color-red-950: var(--status-bad-bg);
 }
 
-html,
-body {
-  min-width: 320px;
-  min-height: 100%;
-  margin: 0;
-  background-color: var(--surface-canvas);
-  color: var(--text-primary);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  text-rendering: optimizeLegibility;
-}
-
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-
-button:not(:disabled) {
-  cursor: pointer;
-}
-
-.icon-button {
-  display: inline-grid;
-  min-width: 2.5rem;
-  min-height: 2.5rem;
-  place-items: center;
-  border-radius: var(--radius-control);
-  color: var(--text-muted);
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.icon-button:hover {
-  color: var(--text-primary);
-  background: var(--surface-overlay);
-}
-
-:where(a, button, input, textarea, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-/* Custom scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #1b222d;
-  border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-
-/* React Flow customizations */
-.react-flow__handle {
-  transition: transform 0.15s ease;
-}
-
-.react-flow__handle:hover {
-  transform: scale(1.3);
-}
-
-.react-flow__edge-path {
-  stroke-linecap: round;
-}
-
-.react-flow__edge.selected .react-flow__edge-path {
-  stroke-width: 3;
-}
-
-/* Remove React Flow default selection outline - we handle this in our node components */
-.react-flow__node {
-  contain: layout style paint;
-}
-
-.react-flow__node.selected {
-  box-shadow: none !important;
-}
-
-.react-flow__node:focus-visible {
-  outline: 2px solid var(--focus) !important;
-  outline-offset: 3px;
-}
-
-.react-flow__node.selected > div {
-  /* Single border is handled by the node component itself */
-}
-
-.react-flow__minimap {
-  border-radius: 12px !important;
-  overflow: hidden;
-}
-
-.react-flow__controls {
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.3);
-}
-
-.react-flow__controls-button {
-  transition: all 0.15s ease;
-}
-
-/* Syntax highlighter overrides */
-pre code.hljs {
-  padding: 0 !important;
-}
-
-/* Prose styling for markdown */
-.prose pre {
-  margin: 0;
-  padding: 0;
-  background: transparent;
-}
-
-.prose code {
-  background: transparent;
-  padding: 0;
-}
-
-.glass {
-  background: rgb(11 17 27 / 0.94);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border-subtle);
-}
-
-/* Focus ring */
-.focus-ring {
-  outline: none;
-}
-
-.focus-ring:focus-visible {
-  box-shadow: 0 0 0 2px var(--surface-canvas), 0 0 0 4px var(--focus);
-}
-
-/* Resize handle styling */
-.resize-handle {
-  touch-action: none;
-  user-select: none;
-}
-
-.react-flow__edge {
-  contain: layout style;
-}
-
-/* Disable pointer events on pane during drag for performance */
-.react-flow__pane.dragging {
-  cursor: grabbing;
-}
-
-/* Optimize edge rendering */
-.react-flow__edges {
-  contain: layout style;
-}
-
-/* Smooth transitions */
-.transition-smooth {
-  transition: all 0.15s ease-out;
-}
-
-/* No select during resize */
-.no-select {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.workspace-shell {
-  min-height: 100dvh;
-  height: 100dvh;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@media (max-width: 1023px) {
-  .workspace-side-panel {
-    position: absolute;
-    inset-block: 0;
-    z-index: var(--layer-panel);
-    box-shadow: 16px 0 40px rgb(0 0 0 / 0.35);
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme] {
+    --text-tertiary: var(--text-secondary);
+    --border-default: var(--border-strong);
+    --ring-focus: 0 0 0 2px var(--bg-canvas), 0 0 0 5px var(--accent);
   }
-
-  .workspace-chat-panel {
-    position: absolute;
-    inset-block: 0;
-    inset-inline-end: 0;
-    z-index: var(--layer-panel);
-    width: min(92vw, 420px) !important;
-    box-shadow: -16px 0 40px rgb(0 0 0 / 0.35);
+  :root,
+  [data-theme="dark"] {
+    --border-strong: oklch(0.75 0.01 260);
+  }
+  [data-theme="light"] {
+    --border-strong: #4a4d53;
   }
 }
 
+@theme inline {
+  --color-canvas: var(--bg-canvas);
+  --color-base: var(--bg-base);
+  --color-raised: var(--bg-raised);
+  --color-overlay: var(--bg-overlay);
+  --color-hover: var(--bg-hover);
+  --color-active: var(--bg-active);
+  --color-fg: var(--text-primary);
+  --color-fg-2: var(--text-secondary);
+  --color-fg-3: var(--text-tertiary);
+  --color-fg-disabled: var(--text-disabled);
+  --color-line: var(--border-default);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-text: var(--accent-text);
+  --color-accent-muted: var(--accent-muted);
+  --color-on-accent: var(--on-accent);
+  --color-ok: var(--status-ok);
+  --color-ok-bg: var(--status-ok-bg);
+  --color-warn: var(--status-warn);
+  --color-warn-bg: var(--status-warn-bg);
+  --color-bad: var(--status-bad);
+  --color-bad-bg: var(--status-bad-bg);
+  --color-unknown: var(--status-unknown);
+  --color-scrim: var(--scrim);
+
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --shadow-focus: var(--ring-focus);
+  --shadow-selected: var(--ring-selected);
+
+  --font-sans: var(--font-inter), "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-geist-mono), "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+@theme {
+  /* Type scale (12px is the minimum anywhere) */
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1rem;
+  --text-meta--letter-spacing: 0.01em;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.125rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-body--letter-spacing: -0.006em;
+  --text-input: 1rem;
+  --text-input--line-height: 1.5rem;
+  --text-input--letter-spacing: -0.011em;
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.75rem;
+  --text-title--letter-spacing: -0.017em;
+  --text-headline: 1.75rem;
+  --text-headline--line-height: 2.125rem;
+  --text-headline--letter-spacing: -0.021em;
+  --text-display: 2.5rem;
+  --text-display--line-height: 2.75rem;
+  --text-display--letter-spacing: -0.024em;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --animate-rise: rise var(--dur-3) var(--ease-out) both;
+  --animate-pop: pop var(--dur-2) var(--ease-out) both;
+  --animate-fade: fade var(--dur-2) var(--ease-out) both;
+  --animate-sheet: sheet-in var(--dur-3) var(--ease-out) both;
+  --animate-breathe: breathe 1.2s ease-in-out infinite;
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes sheet-in {
+    from { opacity: 0; transform: translateX(12px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+}
+
+@layer base {
+  html,
+  body {
+    min-width: 320px;
+    min-height: 100%;
+    margin: 0;
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary {
+    cursor: pointer;
+  }
+
+  :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--accent) 35%, transparent);
+  }
+}
+
+@layer components {
+  /* Two-tone focus ring for controls that carry no shadow of their own */
+  .focus-ring:focus-visible {
+    outline: none;
+    box-shadow: var(--ring-focus);
+  }
+
+  /* Glass: functional floating layer only (intent bar, floating pills). Opaque by default. */
+  .glass {
+    background: var(--bg-overlay);
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .glass {
+      background: color-mix(in oklch, var(--bg-overlay) 78%, transparent);
+      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      backdrop-filter: blur(20px) saturate(1.4);
+    }
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .glass {
+      background: var(--bg-overlay);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+  :root[data-solid="true"] .glass {
+    background: var(--bg-overlay);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .icon-button {
+    display: inline-grid;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    place-items: center;
+    border-radius: var(--radius-control);
+    color: var(--text-tertiary);
+    transition: color var(--dur-1) ease, background-color var(--dur-1) ease;
+  }
+  .icon-button:hover {
+    color: var(--text-primary);
+    background: var(--bg-overlay);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar,
+  .studio ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track,
+  .studio ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb,
+  .studio ::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+  .studio ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+    background-clip: content-box;
+  }
+
+  .resize-handle {
+    touch-action: none;
+    user-select: none;
+  }
+  .transition-smooth {
+    transition: all 0.15s ease-out;
+  }
+  .no-select {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .workspace-shell {
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+
+  /* Syntax highlighter and markdown */
+  pre code.hljs {
+    padding: 0 !important;
+  }
+  .prose pre {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+  }
+  .prose code {
+    background: transparent;
+    padding: 0;
+  }
+
+  /* ── React Flow ─────────────────────────────────────────── */
+  .react-flow__handle {
+    transition: transform var(--dur-1) ease, opacity var(--dur-1) ease;
+  }
+  .react-flow__handle:hover {
+    transform: scale(1.3);
+  }
+  .react-flow__edge-path {
+    stroke-linecap: round;
+  }
+  .react-flow__node {
+    contain: layout style;
+  }
+  .react-flow__node.selected {
+    box-shadow: none !important;
+  }
+  .react-flow__node:focus-visible {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: 4px;
+    border-radius: 14px;
+  }
+  .react-flow__edge,
+  .react-flow__edges {
+    contain: layout style;
+  }
+  .react-flow__pane.dragging {
+    cursor: grabbing;
+  }
+  .react-flow__minimap {
+    border-radius: 12px !important;
+    overflow: hidden;
+  }
+  .react-flow__controls {
+    box-shadow: var(--elev-1);
+  }
+  .react-flow__attribution {
+    display: none;
+  }
+
+  /* Studio canvas: connection handles stay quiet until the card is hovered or focused */
+  .studio-node .react-flow__handle {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--bg-raised);
+    background: var(--border-strong);
+    opacity: 0;
+  }
+  .studio-node:hover .react-flow__handle,
+  .react-flow__node:focus-visible .studio-node .react-flow__handle,
+  .react-flow__node.selected .studio-node .react-flow__handle,
+  .studio-canvas[data-connecting="true"] .react-flow__handle {
+    opacity: 1;
+  }
+  .studio-node .react-flow__handle.source {
+    background: var(--accent);
+  }
+
+  /* Semantic zoom: far away, a card is its name and its status only */
+  .studio-canvas[data-zoom="far"] .studio-node-secondary,
+  .studio-canvas[data-zoom="far"] .studio-edge-label[data-quiet="true"] {
+    display: none;
+  }
+
+  @media (max-width: 1023px) {
+    .workspace-side-panel {
+      position: absolute;
+      inset-block: 0;
+      z-index: var(--layer-panel);
+      box-shadow: 16px 0 40px rgb(0 0 0 / 0.35);
+    }
+    .workspace-chat-panel {
+      position: absolute;
+      inset-block: 0;
+      inset-inline-end: 0;
+      z-index: var(--layer-panel);
+      width: min(92vw, 420px) !important;
+      box-shadow: -16px 0 40px rgb(0 0 0 / 0.35);
+    }
+  }
+}
+
+/* Reduced motion: no transforms, short opacity fades, the working indicator stands still. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
+    animation-name: fade !important;
+    animation-duration: 120ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-property: opacity, color, background-color, border-color !important;
+    transition-duration: 120ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .glass {
+    background: Canvas;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border: 1px solid CanvasText;
   }
 }

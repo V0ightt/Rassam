@@ -18,6 +18,8 @@ All paths are relative to the repository root.
 | `.rassam/layout.json` | Canvas positions for the visual editor. Kept out of the contract so that moving a box never appears in a contract diff. Its format is implementation-defined in 0.1 and it has no effect on checks. | The canvas |
 | `.rassam/proposals/` | Blueprint changes suggested by agents through the `propose_change` MCP tool. Proposals are never applied automatically. File format is implementation-defined. | Agents |
 | `.rassam/escalations/` | Conflicts reported by agents through `report_conflict`: cases where the task cannot be done without breaking the contract. File format is implementation-defined. | Agents |
+| `.rassam/status.json` | Runtime status of the components that declare `runtime`: what the last probe run found. Not part of the contract and never judged by the gate. Format in [`rassam status`](#rassam-status). | `rassam status --write`, usually in CI |
+| `.rassam/live/` | Default output directory of [`rassam render`](#rassam-render): the system design as SVG, two badges and `system.json`. Generated; safe to delete. | `rassam render` |
 
 `blueprint.json` is UTF-8 JSON (a leading byte-order mark is tolerated). Tools write it with two-space indentation, a trailing newline and the top-level keys in the order `$schema`, `version`, `system`, `policy`, `components`, `dependencies`, `rules`, `invariants`, `decisions`, so that diffs stay small.
 
@@ -240,8 +242,35 @@ At most 500 components.
 | `tags` | no | ≤ 50 strings of 1–80 chars | Labels for `tag:` selectors. Tags may contain `:`. |
 | `owners` | no | ≤ 50 strings of 1–120 chars | People or teams, free-form |
 | `assurance` | no | `unknown`, `untested`, `tested`, `property-tested`, `formally-verified` | Declared level of verification. The gate may report `assurance-drift` when the repository no longer supports the claim; the evidence used is implementation-defined. |
+| `runtime` | no | object, see below | Where the component runs, so `rassam status` can probe it. Has no effect on checks. |
 | `provenance` | no | [Provenance](#7-provenance-and-verification) | Who asserted this component |
 | `verified` | no | [Verification](#7-provenance-and-verification) | Human sign-off |
+
+#### `runtime`: where a component runs
+
+Optional. Each of the three signals is optional; a component may declare several, and the worst one decides its state. A component without `runtime` is "not monitored": it is never shown as down.
+
+| Field | Constraint | Meaning |
+| --- | --- | --- |
+| `health.url` | `http://` or `https://` URL, ≤ 500 chars | Fetched by `rassam status`. Must be reachable from wherever the command runs and must not contain credentials or secrets: the blueprint is a committed file. |
+| `health.method` | `GET` (default) or `HEAD` | Request method |
+| `health.expectStatus` | integer 100–599 | The exact status that means healthy. Without it any 2xx is healthy. |
+| `health.timeoutMs` | integer 100–30,000 | Timeout for this URL; overrides `rassam status --timeout` |
+| `deployment.environment` | 1–100 chars | Name of a GitHub deployment environment. The state is the latest deployment status of that environment. |
+| `workflow.file` | 1–200 chars | A workflow file such as `deploy.yml`. The state is the conclusion of its latest run on the default branch. |
+
+```json
+{
+  "id": "api",
+  "name": "API",
+  "paths": ["src/api/**"],
+  "runtime": {
+    "health": { "url": "https://api.example.com/healthz", "expectStatus": 200 },
+    "deployment": { "environment": "production" },
+    "workflow": { "file": "deploy.yml" }
+  }
+}
+```
 
 ### 4.4 `dependencies[]`
 
@@ -740,6 +769,8 @@ Each finding holds: `id` (the stable fingerprint), `kind`, `severity`, `ruleId`,
 | `impact` | For a set of paths: the components touched and the components that depend on them, nearest first | Before a change that crosses files, to size the blast radius |
 | `check_changes` | Runs the gate on the current working tree and returns the findings | Before committing or opening a pull request |
 | `list_decisions` | Architecture decisions, optionally filtered | When a constraint looks arbitrary and the reason matters |
+| `architecture_diff` | What the working tree changed in the system design compared with a base: components and dependencies added or removed, dependencies whose status changed (declared, undeclared, forbidden, no longer observed), and one sentence summarizing it | Before reporting to the user what a change did to the architecture. It reports structure; `check_changes` reports violations. |
+| `system_status` | The runtime status recorded in `.rassam/status.json`: overall summary, the state of every component that declares `runtime`, how old the data is and whether it is stale | When the task depends on what is running. It never probes anything itself, and stale data must be treated as unknown. |
 | `propose_change` | Records a suggested blueprint change in `.rassam/proposals/` for a human to review | When the contract is wrong or out of date. Never by editing `blueprint.json` directly. |
 | `report_conflict` | Records in `.rassam/escalations/` that the task cannot be completed without breaking the contract, and why | When the only ways forward are to violate a rule, weaken a check, or stop. The correct choice is to stop and report. |
 
@@ -754,6 +785,8 @@ Arguments in this version (the authoritative schemas are the ones the server pub
 | `impact` | `paths` (1–500) |
 | `check_changes` | `base` (optional; default: the repository's default branch). Includes uncommitted and untracked files. |
 | `list_decisions` | `component` (optional) |
+| `architecture_diff` | `base` (optional; default: the repository's default branch). Includes uncommitted and untracked files. |
+| `system_status` | none |
 | `propose_change` | `title`, `rationale`, `changes` (a precise description or a JSON patch), `agent` (optional) |
 | `report_conflict` | `summary`, `details`, `rule_id`, `paths`, `agent` (see `tools/list` for which are required) |
 
@@ -850,6 +883,104 @@ Keeps the blueprint in step with the code. Proposes a component for each cluster
 | `--no-components` | Do not propose components |
 | `--no-dependencies` | Do not declare dependencies |
 | `--format text\|json` | Output format |
+
+### `rassam render`
+
+Draws the system design as files a README can show. The output is a function of the blueprint, the code and the status file; no model is involved. A file whose content did not change is not rewritten, and the time is drawn into the pictures only with `--stamp`, so the same commit always gives the same pictures. How to publish them on every push is described in [live-system-design.md](live-system-design.md).
+
+Written to `--out`:
+
+| File | Content |
+| --- | --- |
+| `system-light.svg`, `system-dark.svg` | The diagram: components as cards, dependencies as arrows (declared, undeclared, forbidden, declared but not observed), violation counts, runtime status, and with `--base` what the change added or removed. Self-contained: no scripts, no external resources. |
+| `badge-blueprint.svg` | `blueprint: passing`, `N warnings` or `failing` |
+| `badge-system.svg` | `system: operational`, `degraded`, `outage`, `no data` or `not monitored` |
+| `system.json` | The same information for programs: `schemaVersion`, `system`, `commit`, `generatedAt`, `verdict`, `summary`, `graph` (the component graph), `status` (or `null`), `base` and `diff` (or `null`). Only `generatedAt` differs between two runs on the same input, and that alone does not cause a rewrite. |
+
+| Flag | Meaning |
+| --- | --- |
+| `--out <dir>` | Output directory. Default `.rassam/live`. |
+| `--theme light\|dark\|both` | Which diagrams to write. Default `both`. |
+| `--detail calm\|full` | `calm` (default) leaves out test components, edges into `public` components and declared dependencies already implied by a longer declared path, and says so in a footnote. Undeclared, forbidden and unobserved dependencies and everything the change touched are always drawn. `full` draws everything. |
+| `--base <ref>` | Highlight what changed in the architecture since the merge-base with `<ref>` (working tree included) |
+| `--status <file>` | Runtime status to overlay. Default: `.rassam/status.json` when it exists. |
+| `--status-max-age <minutes>` | Status older than this is drawn as "No data". Default 60. |
+| `--stamp` | Draw the time (of the status, else of the run) into the diagrams |
+| `--readme [file]` | Update the block between `<!-- rassam:system:start -->` and `<!-- rassam:system:end -->` in `README.md` (or `<file>`). Without the markers the command prints them and changes nothing. A block that differs only in its time is left alone. |
+| `--image-base <url\|path>` | Where the README loads the images from. Default: the `rassam-live` branch on `raw.githubusercontent.com` when the origin is on github.com, else the path from the README to `--out`. |
+| `--link <url>` | Where the README picture links to. Default: the repository URL. |
+| `--format svg\|mermaid\|json` | `svg` (default) writes the files. `mermaid` prints the graph as Mermaid and `json` prints `system.json`; both write no files. |
+
+Violations are shown in the picture and do not fail the command. Exit codes: `0` rendered, `2` usage or configuration error.
+
+### `rassam status`
+
+Probes the `runtime` each component declares (see [4.3](#runtime-where-a-component-runs)) and reports what is running.
+
+| Signal | How it is read | up | degraded | down | unknown |
+| --- | --- | --- | --- | --- | --- |
+| `health` | One `GET` or `HEAD` request from the machine running the command | 2xx, or exactly `expectStatus` | any other status below 500 | 5xx, timeout, network error | URL refused (not http(s), or contains credentials) |
+| `deployment` | Latest deployment of the environment and its latest status, from the GitHub API | `success` | `in_progress`, `queued`, `pending`, `waiting` | `failure`, `error` | no deployment, `inactive`, API not reachable |
+| `workflow` | Latest run of the workflow file on the default branch, from the GitHub API | `success` | run not finished | `failure`, `timed_out`, `startup_failure` | no run, cancelled or skipped, API not reachable |
+
+The worst signal decides the component's state; a signal without data never hides one that has it. GitHub is asked only with `--github` or when `GITHUB_TOKEN` is set, for the repository named by `GITHUB_REPOSITORY` or the `origin` remote. Response bodies of health checks are never read or printed, and the recorded URL drops the query string.
+
+| Flag | Meaning |
+| --- | --- |
+| `--write` | Save the result to `.rassam/status.json`. Nothing is written when no component declares `runtime`. |
+| `--format text\|json` | A table and an overall line, or the status file's JSON |
+| `--timeout <ms>` | Timeout of each request, 100–60,000. Default 5,000. |
+| `--github` | Read deployments and workflow runs from the GitHub API |
+| `--fail-on-down` | Exit 1 when a component is down |
+
+Exit codes: `0` always, unless `--fail-on-down` and a component is down (`1`); `2` usage or configuration error. In GitHub Actions the command also sets the step outputs `monitored` (number of components with `runtime`) and `overall`.
+
+`.rassam/status.json`:
+
+```json
+{
+  "version": 1,
+  "checkedAt": "2026-05-01T14:05:09Z",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "components": {
+    "api": {
+      "state": "up",
+      "source": "health-check",
+      "detail": "HTTP 200 in 84 ms; production: success at 0123456",
+      "latencyMs": 84,
+      "url": "https://api.example.com/healthz",
+      "checkedAt": "2026-05-01T14:05:09Z"
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `1` |
+| `checkedAt` | ISO-8601 time of the probe run. Readers treat a status older than their threshold (30 minutes in the MCP server, 60 in `rassam render`) as unknown. |
+| `commit` | Optional. The commit that was checked out when the probe ran. |
+| `components.<id>.state` | `up`, `degraded`, `down` or `unknown` |
+| `components.<id>.source` | The signal that decided the state: `health-check`, `deployment`, `workflow` or `manual` |
+| `components.<id>.detail`, `latencyMs`, `url`, `checkedAt` | Optional. A short description of every signal, the latency of the health check, its URL without the query string, and the time of this component's probe. |
+
+The file is strict: unknown keys are rejected. It is written with components sorted by id and a fixed key order.
+
+### `rassam do "<instruction>"`
+
+Changes the blueprint from a plain-language instruction, for example `rassam do "forbid ui from importing db because pages go through the API"`. The instruction is parsed by fixed rules, not by a model: the same words always give the same typed edits. Several instructions can be joined with `;`. Quote the instruction so the shell passes it as one argument.
+
+The command prints how it understood the instruction and one line per edit. It is a dry run unless `--write` is given. New facts are recorded with `provenance.source: "human"`, `by` set to `--by` or `git config user.name`, and the current time.
+
+| Flag | Meaning |
+| --- | --- |
+| `--write` | Save the change to `.rassam/blueprint.json` |
+| `--allow-weakening` | Allow an instruction that loosens the contract (removing a rule, lowering a severity, and so on). Without it such an instruction is refused. The flag only lets the edit into the file: in a pull request the gate still reports `contract-weakened` until a human approves it ([8.3](#83-contract-changes)). |
+| `--choose <n>` | Pick option `<n>` when the instruction is ambiguous |
+| `--by <name>` | Who is making the change |
+| `--format text\|json` | Output format |
+
+Exit codes: `0` understood (and saved with `--write`); `2` when the instruction is ambiguous (the options are listed), not understood (examples are listed), refused as weakening, or cannot be applied.
 
 ### `rassam reach`
 

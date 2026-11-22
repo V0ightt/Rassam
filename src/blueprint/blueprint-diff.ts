@@ -322,6 +322,7 @@ function diffComponent(base: BlueprintComponent, head: BlueprintComponent, refs:
   if (Boolean(base.external) !== Boolean(head.external)) {
     parts.push(head.external ? "now marked external" : "no longer marked external");
   }
+  if (stable(base.runtime ?? null) !== stable(head.runtime ?? null)) parts.push("runtime");
 
   if (parts.length === 0) return null;
   return {

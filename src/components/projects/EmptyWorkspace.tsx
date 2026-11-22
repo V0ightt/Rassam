@@ -1,28 +1,21 @@
 'use client';
 
-import { useSyncExternalStore } from 'react';
-import { FileJson, FolderOpen, Github, Network, Plus } from 'lucide-react';
+import Link from 'next/link';
+import { FileJson, Github, Network, Plus, ShieldCheck } from 'lucide-react';
 
 interface EmptyWorkspaceProps {
   onAnalyzeRepository: () => void;
   onImportProject: () => void;
   onCreateBlank: () => void;
   onExploreSample: () => void;
-  /** Open a folder on this machine as a Rassam Blueprint (File System Access API, Chromium only). */
-  onOpenLocalFolder?: () => void;
 }
-
-const subscribeNever = () => () => undefined;
-const canPickDirectory = () => typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
 export default function EmptyWorkspace({
   onAnalyzeRepository,
   onImportProject,
   onCreateBlank,
   onExploreSample,
-  onOpenLocalFolder,
 }: EmptyWorkspaceProps) {
-  const folderPickerSupported = useSyncExternalStore(subscribeNever, canPickDirectory, () => false);
   return (
     <section
       aria-labelledby="empty-workspace-title"
@@ -37,29 +30,23 @@ export default function EmptyWorkspace({
             The architecture contract your coding agents must obey
           </h1>
           <p className="mt-3 max-w-[62ch] text-sm leading-6 text-slate-300">
-            Write down what your system is supposed to be, let agents check it before they act, and see every change judged against it. Open a local folder to edit the blueprint in your repository, or start from a public GitHub repository.
+            Write down what your system is supposed to be, let agents check it before they act, and see every change judged against it. This is the classic evidence-linked map. The blueprint itself lives in the Studio.
           </p>
         </div>
 
         <div className="mt-8 grid gap-3 sm:grid-cols-2">
-          {onOpenLocalFolder && (
-            <button
-              type="button"
-              onClick={onOpenLocalFolder}
-              disabled={!folderPickerSupported}
-              className="group flex min-h-24 items-start gap-4 rounded-xl border border-cyan-300/60 bg-cyan-400/15 p-4 text-left transition-colors hover:border-cyan-200 hover:bg-cyan-400/20 active:translate-y-px disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900/60 disabled:opacity-70 sm:col-span-2"
-            >
-              <FolderOpen className="mt-0.5 shrink-0 text-cyan-200" size={20} aria-hidden="true" />
-              <span>
-                <span className="block text-sm font-semibold text-slate-50">Open local folder</span>
-                <span className="mt-1 block text-xs leading-5 text-slate-300">
-                  {folderPickerSupported
-                    ? 'Author the blueprint your coding agents must obey. Files stay on this machine. Chromium browsers only.'
-                    : 'Needs Chrome, Edge or another Chromium browser.'}
-                </span>
+          <Link
+            href="/"
+            className="group flex min-h-24 items-start gap-4 rounded-xl border border-cyan-300/60 bg-cyan-400/15 p-4 text-left transition-colors hover:border-cyan-200 hover:bg-cyan-400/20 active:translate-y-px sm:col-span-2"
+          >
+            <ShieldCheck className="mt-0.5 shrink-0 text-cyan-200" size={20} aria-hidden="true" />
+            <span>
+              <span className="block text-sm font-semibold text-slate-50">Open the Studio</span>
+              <span className="mt-1 block text-xs leading-5 text-slate-300">
+                The blueprint and live system design: open a local folder or a repository and see whether it is on track.
               </span>
-            </button>
-          )}
+            </span>
+          </Link>
           <button
             type="button"
             onClick={onAnalyzeRepository}

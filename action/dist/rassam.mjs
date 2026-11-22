@@ -18,8 +18,8 @@ var __export = (target, all) => {
 // src/cli/io.ts
 function processIo() {
   return {
-    stdout: (text3) => void process.stdout.write(text3),
-    stderr: (text3) => void process.stderr.write(text3),
+    stdout: (text4) => void process.stdout.write(text4),
+    stderr: (text4) => void process.stderr.write(text4),
     env: process.env,
     cwd: process.cwd(),
     isTTY: Boolean(process.stdout.isTTY),
@@ -28,15 +28,16 @@ function processIo() {
     fetch: typeof fetch === "function" ? fetch : void 0
   };
 }
-function ensureTrailingNewline(text3) {
-  return text3.endsWith("\n") ? text3 : `${text3}
+function ensureTrailingNewline(text4) {
+  return text4.endsWith("\n") ? text4 : `${text4}
 `;
 }
-var EXIT_OK, EXIT_USAGE, CliError, UsageError;
+var EXIT_OK, EXIT_FAILED, EXIT_USAGE, CliError, UsageError;
 var init_io = __esm({
   "src/cli/io.ts"() {
     "use strict";
     EXIT_OK = 0;
+    EXIT_FAILED = 1;
     EXIT_USAGE = 2;
     CliError = class extends Error {
       constructor(message, options = {}) {
@@ -246,6 +247,10 @@ function parseArgs(argv, commands = COMMANDS) {
       continue;
     }
     let raw = inline;
+    if (raw === void 0 && flag.optionalValue && (argv[index + 1] === void 0 || argv[index + 1].startsWith("-"))) {
+      parsed.flags[camelCase(flag.name)] = true;
+      continue;
+    }
     if (raw === void 0) {
       raw = argv[index + 1];
       if (raw === void 0 || raw === "--") throw new UsageError(`Option --${flag.name} needs a value (${flag.valueName ?? "value"})`, spec.name);
@@ -275,11 +280,11 @@ function booleanFlag(args, key) {
 }
 function flagLabel(flag) {
   if (flag.type === "boolean") return flag.default === true ? `--no-${flag.name}` : `--${flag.name}`;
-  return `--${flag.name} <${flag.valueName ?? "value"}>`;
+  return flag.optionalValue ? `--${flag.name} [${flag.valueName ?? "value"}]` : `--${flag.name} <${flag.valueName ?? "value"}>`;
 }
 function flagHelp(flag) {
-  const suffix = flag.type !== "boolean" && flag.default !== void 0 ? ` (default: ${flag.default})` : "";
-  return `${flag.description}${suffix}`;
+  const suffix2 = flag.type !== "boolean" && flag.default !== void 0 ? ` (default: ${flag.default})` : "";
+  return `${flag.description}${suffix2}`;
 }
 function table(rows) {
   const width = Math.max(...rows.map(([left]) => left.length));
@@ -437,6 +442,82 @@ var init_args = __esm({
         examples: ["rassam sync", "rassam sync --write --no-dependencies"]
       },
       {
+        name: "render",
+        summary: "Draw the system design (SVG, badges, system.json) and keep the README block current",
+        flags: [
+          { name: "out", type: "string", valueName: "dir", default: ".rassam/live", description: "Directory for system-light.svg, system-dark.svg, the badges and system.json" },
+          { name: "theme", type: "string", valueName: "theme", choices: ["light", "dark", "both"], default: "both", description: "Which diagrams to write: light, dark or both" },
+          { name: "detail", type: "string", valueName: "level", choices: ["calm", "full"], default: "calm", description: "calm hides tests, edges into shared components and implied dependencies; full draws everything" },
+          { name: "base", type: "string", valueName: "ref", description: "Highlight what changed in the architecture since the merge-base with <ref>" },
+          { name: "status", type: "string", valueName: "file", description: "Runtime status to overlay (default: .rassam/status.json when it exists)" },
+          { name: "status-max-age", type: "number", valueName: "minutes", default: 60, description: 'Older status is drawn as "No data" instead of a stale state' },
+          { name: "readme", type: "string", valueName: "file", optionalValue: true, description: "Update the block between the rassam:system markers in README.md (or <file>)" },
+          { name: "format", type: "string", valueName: "fmt", choices: ["svg", "mermaid", "json"], default: "svg", description: "svg writes the files; mermaid and json print to stdout and write nothing" },
+          { name: "link", type: "string", valueName: "url", description: "Where the README diagram links to (default: the repository URL)" },
+          { name: "image-base", type: "string", valueName: "url|path", description: "URL or relative path the README loads the images from (default: the rassam-live branch on raw.githubusercontent.com)" },
+          { name: "stamp", type: "boolean", description: "Draw the time into the diagrams (otherwise identical commits give identical files)" },
+          ROOT_FLAG
+        ],
+        details: [
+          "Writes system-light.svg, system-dark.svg, badge-blueprint.svg, badge-system.svg",
+          "and system.json. The drawing is a pure function of the blueprint, the code and",
+          "the status file: no model is involved, and nothing is rewritten when nothing changed.",
+          "",
+          "A README can only show a static image. Put these two lines where it should appear,",
+          "then run rassam render --readme:",
+          "  <!-- rassam:system:start -->",
+          "  <!-- rassam:system:end -->",
+          "",
+          "Exit codes: 0 rendered (violations are shown in the picture, they do not fail it), 2 usage or configuration error."
+        ],
+        examples: ["rassam render", "rassam render --base HEAD~1 --out out/live", "rassam render --readme --image-base .rassam/live"]
+      },
+      {
+        name: "status",
+        summary: "Probe what is running: health URLs, deployments and workflows declared as runtime",
+        flags: [
+          { name: "write", type: "boolean", description: "Save the result to .rassam/status.json" },
+          FORMAT_TEXT_JSON,
+          { name: "timeout", type: "number", valueName: "ms", default: 5e3, description: "Timeout of each request (a component's health.timeoutMs wins)" },
+          { name: "github", type: "boolean", description: "Read deployments and workflow runs from the GitHub API (also on when GITHUB_TOKEN is set)" },
+          { name: "fail-on-down", type: "boolean", description: "Exit 1 when a component is down" },
+          ROOT_FLAG
+        ],
+        details: [
+          "For every component that declares runtime in the blueprint:",
+          "  health      GET or HEAD the URL: 2xx (or expectStatus) is up, 5xx, a timeout or a network error is down, anything else is degraded",
+          "  deployment  the latest GitHub deployment of that environment",
+          "  workflow    the latest run of that workflow file on the default branch",
+          "The worst signal wins. Requests are made from this machine; only http(s) URLs",
+          "without credentials are fetched, and response bodies are never read or printed.",
+          "",
+          "Exit codes: 0 always, unless --fail-on-down and a component is down (1); 2 usage or configuration error."
+        ],
+        examples: ["rassam status", "rassam status --write --github"]
+      },
+      {
+        name: "do",
+        summary: "Change the blueprint with a plain-language instruction (a dry run by default)",
+        positionals: "<instruction...>",
+        minPositionals: 1,
+        flags: [
+          { name: "write", type: "boolean", description: "Save the change to .rassam/blueprint.json (default: show what would change)" },
+          { name: "allow-weakening", type: "boolean", description: "Allow an instruction that loosens the contract" },
+          { name: "choose", type: "number", valueName: "n", description: "Pick option <n> when the instruction is ambiguous" },
+          { name: "by", type: "string", valueName: "name", description: "Who is making the change (default: git config user.name)" },
+          FORMAT_TEXT_JSON,
+          ROOT_FLAG
+        ],
+        details: [
+          "The instruction is parsed by fixed rules, not by a model, so the same words",
+          "always give the same edits. Quote it so the shell passes it as one argument.",
+          'New facts are recorded as written by a person (provenance "human").',
+          "",
+          "Exit codes: 0 understood (and saved with --write), 2 ambiguous, not understood, or refused."
+        ],
+        examples: ['rassam do "forbid ui from importing db because pages go through the API"', 'rassam do "add a component Payments for src/payments/**" --write']
+      },
+      {
         name: "reach",
         summary: "Summarize what coding agents can reach (MCP servers, permissions, secrets)",
         flags: [FORMAT_TEXT_JSON, ROOT_FLAG]
@@ -490,8 +571,8 @@ function isEnvFile(path) {
 }
 function decodeText(buffer) {
   if (buffer.length > MAX_ANALYZED_FILE_BYTES || looksBinary(buffer)) return null;
-  const text3 = buffer.toString("utf8");
-  return text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
+  const text4 = buffer.toString("utf8");
+  return text4.charCodeAt(0) === 65279 ? text4.slice(1) : text4;
 }
 async function readTextFile(absolutePath, wantContent) {
   let size;
@@ -515,9 +596,9 @@ async function readTextFile(absolutePath, wantContent) {
     return { size, content: null, missing: false };
   }
 }
-function tailBytes(text3, maxBytes) {
-  const buffer = Buffer.from(text3, "utf8");
-  if (buffer.length <= maxBytes) return text3;
+function tailBytes(text4, maxBytes) {
+  const buffer = Buffer.from(text4, "utf8");
+  if (buffer.length <= maxBytes) return text4;
   return `…${buffer.subarray(buffer.length - maxBytes).toString("utf8").replace(/^�+/, "")}`;
 }
 function slugify(value, fallback, maxLength = 48) {
@@ -2778,10 +2859,10 @@ function capSize(inst, size) {
   const cap = Math.min(...caps.map((c) => c[0]));
   const parse3 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
-    const n = size(payload.value);
-    if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
+    const n2 = size(payload.value);
+    if (n2 > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
       for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
-        if (n > max && ch._zod.def.when(payload)) {
+        if (n2 > max && ch._zod.def.when(payload)) {
           const start = payload.issues.length;
           ch._zod.check(payload);
           payload.issues[start].continue = false;
@@ -5076,7 +5157,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve6) {
+function isRecursive(inst, stack, resolve7) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -5086,7 +5167,7 @@ function isRecursive(inst, stack, resolve6) {
   let result = NONE;
   const check2 = (child2) => {
     if (result !== PROVEN && child2?._zod) {
-      const answer = isRecursive(child2, stack, resolve6);
+      const answer = isRecursive(child2, stack, resolve7);
       if (answer > result)
         result = answer;
     }
@@ -5097,7 +5178,7 @@ function isRecursive(inst, stack, resolve6) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child2 = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
+      const child2 = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve7) : NONE;
       if (child2 > answer)
         answer = child2;
     }
@@ -5161,7 +5242,7 @@ function isRecursive(inst, stack, resolve6) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve7 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -9456,22 +9537,22 @@ var init_ko = __esm({
             return `잘못된 옵션: ${joinValues(issue2.values, "또는 ")} 중 하나여야 합니다`;
           case "too_big": {
             const adj = issue2.inclusive ? "이하" : "미만";
-            const suffix = adj === "미만" ? "이어야 합니다" : "여야 합니다";
+            const suffix2 = adj === "미만" ? "이어야 합니다" : "여야 합니다";
             const sizing = getSizing(issue2.origin);
             const unit = sizing?.unit ?? "요소";
             if (sizing)
-              return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()}${unit} ${adj}${suffix}`;
-            return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()} ${adj}${suffix}`;
+              return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()}${unit} ${adj}${suffix2}`;
+            return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()} ${adj}${suffix2}`;
           }
           case "too_small": {
             const adj = issue2.inclusive ? "이상" : "초과";
-            const suffix = adj === "이상" ? "이어야 합니다" : "여야 합니다";
+            const suffix2 = adj === "이상" ? "이어야 합니다" : "여야 합니다";
             const sizing = getSizing(issue2.origin);
             const unit = sizing?.unit ?? "요소";
             if (sizing) {
-              return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()}${unit} ${adj}${suffix}`;
+              return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()}${unit} ${adj}${suffix2}`;
             }
-            return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()} ${adj}${suffix}`;
+            return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()} ${adj}${suffix2}`;
           }
           case "invalid_format": {
             const _issue = issue2;
@@ -9524,8 +9605,8 @@ var capitalizeFirstCharacter, error33;
 var init_lt = __esm({
   "node_modules/zod/v4/locales/lt.js"() {
     init_util2();
-    capitalizeFirstCharacter = (text3) => {
-      return text3.charAt(0).toUpperCase() + text3.slice(1);
+    capitalizeFirstCharacter = (text4) => {
+      return text4.charAt(0).toUpperCase() + text4.slice(1);
     };
     error33 = () => {
       const Sizable = {
@@ -13426,9 +13507,9 @@ function compileValidator(schema, parser) {
 function compile(schema, options) {
   try {
     const parser = compileFn(schema);
-    const clone2 = withParser(schema, parser);
-    clone2._zod.bag.validator = compileValidator(schema, parser);
-    return clone2;
+    const clone3 = withParser(schema, parser);
+    clone3._zod.bag.validator = compileValidator(schema, parser);
+    return clone3;
   } catch (err) {
     if (options?.strict)
       throw err;
@@ -13439,7 +13520,7 @@ function withParser(schema, parser) {
   if (isRecursiveSchema(schema)) {
     throw new ZodCompileUnsupportedError("a schema whose subtree contains a reference cycle");
   }
-  const clone2 = clone(schema);
+  const clone3 = clone(schema);
   const liveRun = schema._zod.run;
   const originalRun = liveRun.__originalRun ?? liveRun;
   const wrapped = (payload, ctx) => {
@@ -13459,12 +13540,12 @@ function withParser(schema, parser) {
     return originalRun(payload, ctx);
   };
   wrapped.__originalRun = originalRun;
-  clone2._zod.bag.fallbackRun = originalRun;
-  clone2._zod.bag.validator = parser;
-  clone2._zod.run = wrapped;
+  clone3._zod.bag.fallbackRun = originalRun;
+  clone3._zod.bag.validator = parser;
+  clone3._zod.run = wrapped;
   if (!liveRun.__originalRun)
-    installCompiledUserMethods(clone2, schema, parser);
-  return clone2;
+    installCompiledUserMethods(clone3, schema, parser);
+  return clone3;
 }
 function installCompiledUserMethods(target, source, parser) {
   const targetAny = target;
@@ -13922,8 +14003,8 @@ function generateStringFormatCheck(doc, ctx, def, accessor, needsValue = true) {
       break;
     }
     case "ends_with": {
-      const suffix = def.suffix;
-      doc.write(`if (${accessor}.slice(-${suffix.length}) !== ${esc(suffix)}) return INVALID;`);
+      const suffix2 = def.suffix;
+      doc.write(`if (${accessor}.slice(-${suffix2.length}) !== ${esc(suffix2)}) return INVALID;`);
       break;
     }
     default: {
@@ -15673,12 +15754,12 @@ function _startsWith(prefix, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _endsWith(suffix, params) {
+function _endsWith(suffix2, params) {
   return new $ZodCheckEndsWith({
     check: "string_format",
     format: "ends_with",
     ...normalizeParams(params),
-    suffix
+    suffix: suffix2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -16645,8 +16726,8 @@ var init_to_json_schema = __esm({
 function aggregateChecks(schema) {
   const agg = {};
   const def = schema._zod.def;
-  const list = schema._zod.traits.has("$ZodCheck") ? [schema, ...def.checks ?? []] : def.checks ?? [];
-  for (const ch of list)
+  const list2 = schema._zod.traits.has("$ZodCheck") ? [schema, ...def.checks ?? []] : def.checks ?? [];
+  for (const ch of list2)
     contributors[ch._zod.def.check]?.(agg, ch._zod.def);
   const bag = schema._zod.bag;
   if (bag.minimum !== void 0)
@@ -19250,17 +19331,17 @@ var init_schemas2 = __esm({
       inst._zod.processJSONSchema = (ctx, json2, params) => arrayProcessor(inst, ctx, json2, params);
       inst.element = def.element;
     }, {
-      min(n, params) {
-        return this.check(_minLength(n, params));
+      min(n2, params) {
+        return this.check(_minLength(n2, params));
       },
       nonempty(params) {
         return this.check(_minLength(1, params));
       },
-      max(n, params) {
-        return this.check(_maxLength(n, params));
+      max(n2, params) {
+        return this.check(_maxLength(n2, params));
       },
-      length(n, params) {
-        return this.check(_length(n, params));
+      length(n2, params) {
+        return this.check(_length(n2, params));
       },
       unwrap() {
         return this.element;
@@ -19804,8 +19885,8 @@ function containsRef(value) {
     return Object.values(sub).some(containsRef);
   });
 }
-function plural(n) {
-  return n === 1 ? "element" : "elements";
+function plural(n2) {
+  return n2 === 1 ? "element" : "elements";
 }
 function checkArrayGuards(arraySchema, guards) {
   const guard = z.transform((value) => value).check((payload) => {
@@ -20951,9 +21032,9 @@ var init_zod = __esm({
 function issuePath(path) {
   return path.map((segment) => typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`).join("").replace(/^\./, "") || "(root)";
 }
-function selectorComponentRefs(selector) {
-  if (selector === void 0) return [];
-  const entries2 = Array.isArray(selector) ? selector : [selector];
+function selectorComponentRefs(selector2) {
+  if (selector2 === void 0) return [];
+  const entries2 = Array.isArray(selector2) ? selector2 : [selector2];
   const refs = [];
   for (const raw of entries2) {
     const entry = raw.startsWith("!") ? raw.slice(1) : raw;
@@ -20981,16 +21062,16 @@ function ruleSelectors(rule) {
 function semanticIssues(blueprint) {
   const issues = [];
   const componentIds = /* @__PURE__ */ new Set();
-  blueprint.components.forEach((component, index) => {
-    if (componentIds.has(component.id)) {
-      issues.push({ path: `components[${index}].id`, message: `Duplicate component id "${component.id}"` });
+  blueprint.components.forEach((component2, index) => {
+    if (componentIds.has(component2.id)) {
+      issues.push({ path: `components[${index}].id`, message: `Duplicate component id "${component2.id}"` });
     }
-    componentIds.add(component.id);
-    if (RESERVED_SELECTOR_PREFIXES.some((prefix) => component.id.startsWith(prefix)) || component.id === "*") {
-      issues.push({ path: `components[${index}].id`, message: `Component id "${component.id}" collides with selector syntax (component:, tag:, path:, package:)` });
+    componentIds.add(component2.id);
+    if (RESERVED_SELECTOR_PREFIXES.some((prefix) => component2.id.startsWith(prefix)) || component2.id === "*") {
+      issues.push({ path: `components[${index}].id`, message: `Component id "${component2.id}" collides with selector syntax (component:, tag:, path:, package:)` });
     }
-    if (!component.external && component.paths.length === 0) {
-      issues.push({ path: `components[${index}].paths`, message: `Component "${component.id}" owns no paths; mark it external or add globs` });
+    if (!component2.external && component2.paths.length === 0) {
+      issues.push({ path: `components[${index}].paths`, message: `Component "${component2.id}" owns no paths; mark it external or add globs` });
     }
   });
   blueprint.dependencies.forEach((dependency, index) => {
@@ -21004,8 +21085,8 @@ function semanticIssues(blueprint) {
   blueprint.rules.forEach((rule, index) => {
     if (ruleIds.has(rule.id)) issues.push({ path: `rules[${index}].id`, message: `Duplicate rule id "${rule.id}"` });
     ruleIds.add(rule.id);
-    for (const selector of ruleSelectors(rule)) {
-      for (const ref of selectorComponentRefs(selector)) {
+    for (const selector2 of ruleSelectors(rule)) {
+      for (const ref of selectorComponentRefs(selector2)) {
         if (!componentIds.has(ref)) {
           issues.push({ path: `rules[${index}]`, message: `Rule "${rule.id}" references unknown component "${ref}"` });
         }
@@ -21046,10 +21127,10 @@ function parseBlueprint(value) {
   const issues = semanticIssues(result.data);
   return issues.length ? { ok: false, issues } : { ok: true, blueprint: result.data, issues: [] };
 }
-function parseBlueprintText(text3) {
+function parseBlueprintText(text4) {
   let value;
   try {
-    value = JSON.parse(text3.replace(/^﻿/, ""));
+    value = JSON.parse(text4.replace(/^﻿/, ""));
   } catch (error62) {
     return {
       ok: false,
@@ -21075,7 +21156,7 @@ function blueprintJsonSchema() {
     ...schema
   };
 }
-var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
+var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentRuntimeSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
 var init_schema = __esm({
   "src/blueprint/schema.ts"() {
     "use strict";
@@ -21113,6 +21194,17 @@ var init_schema = __esm({
       "formally-verified"
     ]);
     componentKindSchema = external_exports.string().trim().regex(/^[a-z][a-z0-9-]{0,39}$/, "kind is a lowercase slug such as api, service, database or external-api");
+    componentRuntimeSchema = external_exports.object({
+      health: external_exports.object({
+        url: external_exports.string().trim().max(500).regex(/^https?:\/\/\S+$/i, "health.url is an http(s) URL"),
+        method: external_exports.enum(["GET", "HEAD"]).optional(),
+        /** Exact status to expect; any 2xx counts as healthy when omitted. */
+        expectStatus: external_exports.number().int().min(100).max(599).optional(),
+        timeoutMs: external_exports.number().int().min(100).max(3e4).optional()
+      }).strict().optional(),
+      deployment: external_exports.object({ environment: external_exports.string().trim().min(1).max(100) }).strict().optional(),
+      workflow: external_exports.object({ file: external_exports.string().trim().min(1).max(200) }).strict().optional()
+    }).strict();
     componentSchema = external_exports.object({
       id: blueprintIdSchema,
       name: shortText,
@@ -21132,6 +21224,8 @@ var init_schema = __esm({
       tags: external_exports.array(external_exports.string().trim().min(1).max(80)).max(50).optional(),
       owners: external_exports.array(external_exports.string().trim().min(1).max(120)).max(50).optional(),
       assurance: assuranceSchema.optional(),
+      /** Where this component runs (health check, deployment, workflow) for live status. */
+      runtime: componentRuntimeSchema.optional(),
       provenance: provenanceSchema.optional(),
       verified: verificationSchema.optional()
     }).strict();
@@ -21388,11 +21482,11 @@ var init_glob = __esm({
 // src/blueprint/graph.ts
 function compileComponents(blueprint) {
   if (!blueprint) return [];
-  return blueprint.components.map((component, index) => ({
-    component,
+  return blueprint.components.map((component2, index) => ({
+    component: component2,
     index,
-    include: component.external ? [] : component.paths.map((pattern2) => compileGlob(pattern2)),
-    exclude: (component.exclude ?? []).map((pattern2) => compileGlob(pattern2))
+    include: component2.external ? [] : component2.paths.map((pattern2) => compileGlob(pattern2)),
+    exclude: (component2.exclude ?? []).map((pattern2) => compileGlob(pattern2))
   })).filter((entry) => entry.include.length > 0);
 }
 function ownerOf(path, compiled) {
@@ -21416,7 +21510,7 @@ function assignComponents(files, blueprint) {
   const fileToComponent = /* @__PURE__ */ new Map();
   const componentFiles = /* @__PURE__ */ new Map();
   const unmapped = [];
-  for (const component of blueprint?.components ?? []) componentFiles.set(component.id, []);
+  for (const component2 of blueprint?.components ?? []) componentFiles.set(component2.id, []);
   for (const path of files) {
     const owner = ownerOf(path, compiled);
     if (owner === null) {
@@ -21426,7 +21520,7 @@ function assignComponents(files, blueprint) {
     fileToComponent.set(path, owner);
     componentFiles.get(owner)?.push(path);
   }
-  for (const list of componentFiles.values()) list.sort();
+  for (const list2 of componentFiles.values()) list2.sort();
   unmapped.sort();
   return { fileToComponent, componentFiles, unmapped };
 }
@@ -21539,14 +21633,14 @@ function findCycles(nodes, edges) {
         continue;
       }
       if (lowlink.get(frame.node) === indices.get(frame.node)) {
-        const component = [];
+        const component2 = [];
         let member;
         do {
           member = stack.pop();
           onStack.delete(member);
-          component.push(member);
+          component2.push(member);
         } while (member !== frame.node);
-        if (component.length > 1) result.push(component.sort());
+        if (component2.length > 1) result.push(component2.sort());
       }
       work.pop();
       if (work.length) {
@@ -21667,15 +21761,15 @@ function blankComments(content, style) {
   parts.push(content.slice(copied));
   return parts.join("");
 }
-function collectPattern(text3, entry, hits) {
+function collectPattern(text4, entry, hits) {
   entry.regex.lastIndex = 0;
   let match;
-  while ((match = entry.regex.exec(text3)) !== null) {
+  while ((match = entry.regex.exec(text4)) !== null) {
     const name = match[entry.group];
     if (!name) continue;
     if (entry.accept && !entry.accept(name)) continue;
     const end = match.index + match[0].length;
-    if (entry.skipAssignment && ASSIGNMENT.test(text3.slice(end, end + 16))) continue;
+    if (entry.skipAssignment && ASSIGNMENT.test(text4.slice(end, end + 16))) continue;
     hits.push({ name, offset: match.index + match[0].lastIndexOf(name) });
   }
 }
@@ -21701,10 +21795,10 @@ function splitTopLevel(body) {
   pieces.push({ text: body.slice(start), start });
   return pieces;
 }
-function collectDestructuring(text3, hits) {
+function collectDestructuring(text4, hits) {
   JS_DESTRUCTURING.lastIndex = 0;
   let match;
-  while ((match = JS_DESTRUCTURING.exec(text3)) !== null) {
+  while ((match = JS_DESTRUCTURING.exec(text4)) !== null) {
     const body = match[1];
     const bodyStart = match.index + match[0].indexOf("{") + 1;
     for (const piece of splitTopLevel(body)) {
@@ -21735,10 +21829,10 @@ function lineOf(starts, offset) {
 function extractEnvRefs(path, content, language) {
   if (!content) return [];
   const isJs = language === null || language === "typescript" || language === "javascript";
-  const text3 = blankComments(content, language ? COMMENT_STYLES[language] : JS_STYLE);
+  const text4 = blankComments(content, language ? COMMENT_STYLES[language] : JS_STYLE);
   const hits = [];
-  for (const entry of language ? PATTERNS[language] : JS_PATTERNS) collectPattern(text3, entry, hits);
-  if (isJs) collectDestructuring(text3, hits);
+  for (const entry of language ? PATTERNS[language] : JS_PATTERNS) collectPattern(text4, entry, hits);
+  if (isJs) collectDestructuring(text4, hits);
   const starts = lineStarts(content);
   const seen = /* @__PURE__ */ new Set();
   const refs = [];
@@ -21943,7 +22037,7 @@ function isWordChar(char) {
   return char !== void 0 && /[\w$]/.test(char);
 }
 function maskSource(src, flavor) {
-  const n = src.length;
+  const n2 = src.length;
   let out = "";
   let copied = 0;
   let i = 0;
@@ -21962,7 +22056,7 @@ function maskSource(src, flavor) {
   };
   const scanQuoted = (start, quote2) => {
     let j = start + 1;
-    while (j < n) {
+    while (j < n2) {
       const c = src[j];
       if (c === "\\") {
         j += 2;
@@ -21971,18 +22065,18 @@ function maskSource(src, flavor) {
       if (c === quote2 || c === "\n") break;
       j += 1;
     }
-    j = Math.min(j, n);
+    j = Math.min(j, n2);
     blank(start + 1, j, FILL);
     return endLiteral(src[j] === quote2 ? j + 1 : j);
   };
   const scanDelimited = (bodyStart, close) => {
     const found = src.indexOf(close, bodyStart);
-    blank(bodyStart, found < 0 ? n : found, FILL);
-    return endLiteral(found < 0 ? n : found + close.length);
+    blank(bodyStart, found < 0 ? n2 : found, FILL);
+    return endLiteral(found < 0 ? n2 : found + close.length);
   };
   const scanTemplate = (bodyStart) => {
     let j = bodyStart;
-    while (j < n) {
+    while (j < n2) {
       const c = src[j];
       if (c === "\\") {
         j += 2;
@@ -22001,8 +22095,8 @@ function maskSource(src, flavor) {
       }
       j += 1;
     }
-    blank(bodyStart, n, FILL);
-    return n;
+    blank(bodyStart, n2, FILL);
+    return n2;
   };
   const regexAllowed = () => {
     if (lastSig < 0) return true;
@@ -22018,7 +22112,7 @@ function maskSource(src, flavor) {
   const scanRegex = (start) => {
     let j = start + 1;
     let inClass = false;
-    while (j < n) {
+    while (j < n2) {
       const c = src[j];
       if (c === "\n") return -1;
       if (c === "\\") {
@@ -22038,16 +22132,16 @@ function maskSource(src, flavor) {
   };
   if (src.startsWith("#!")) {
     const end = src.indexOf("\n");
-    i = end < 0 ? n : end;
+    i = end < 0 ? n2 : end;
     blank(0, i, " ");
   }
-  while (i < n) {
+  while (i < n2) {
     const c = src[i];
     if (c === "/" && flavor.slashComments) {
       const next = src[i + 1];
       if (next === "/") {
         const nl = src.indexOf("\n", i);
-        const end = nl < 0 ? n : nl;
+        const end = nl < 0 ? n2 : nl;
         blank(i, end, " ");
         i = end;
         continue;
@@ -22057,7 +22151,7 @@ function maskSource(src, flavor) {
         if (flavor.nestedBlocks) {
           let depth = 1;
           let j = i + 2;
-          while (j < n && depth > 0) {
+          while (j < n2 && depth > 0) {
             if (src[j] === "/" && src[j + 1] === "*") {
               depth += 1;
               j += 2;
@@ -22068,10 +22162,10 @@ function maskSource(src, flavor) {
               j += 1;
             }
           }
-          end = Math.min(j, n);
+          end = Math.min(j, n2);
         } else {
           const close = src.indexOf("*/", i + 2);
-          end = close < 0 ? n : close + 2;
+          end = close < 0 ? n2 : close + 2;
         }
         blank(i, end, " ");
         i = end;
@@ -22088,7 +22182,7 @@ function maskSource(src, flavor) {
     }
     if (c === "#" && flavor.hashComments) {
       const nl = src.indexOf("\n", i);
-      const end = nl < 0 ? n : nl;
+      const end = nl < 0 ? n2 : nl;
       blank(i, end, " ");
       i = end;
       continue;
@@ -22169,9 +22263,9 @@ function readString(masked, src, quoteIndex) {
   if (masked[j] !== quote2 || j === quoteIndex + 1) return null;
   return { value: src.slice(quoteIndex + 1, j), end: j + 1 };
 }
-function createLineLocator(text3) {
+function createLineLocator(text4) {
   const starts = [0];
-  for (let i = text3.indexOf("\n"); i >= 0; i = text3.indexOf("\n", i + 1)) starts.push(i + 1);
+  for (let i = text4.indexOf("\n"); i >= 0; i = text4.indexOf("\n", i + 1)) starts.push(i + 1);
   return (offset) => {
     let low = 0;
     let high = starts.length - 1;
@@ -22186,9 +22280,9 @@ function createLineLocator(text3) {
 function makeImport(specifier, line, kind, typeOnly = false) {
   return { specifier, line, kind, typeOnly };
 }
-function stickyMatch(pattern2, text3, at) {
+function stickyMatch(pattern2, text4, at) {
   pattern2.lastIndex = at;
-  return pattern2.exec(text3);
+  return pattern2.exec(text4);
 }
 function atStatementStart(masked, at) {
   let j = at - 1;
@@ -22325,20 +22419,20 @@ function extractJvm(content, flavor) {
   }
   return imports;
 }
-function splitTopLevel2(text3) {
+function splitTopLevel2(text4) {
   const parts = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < text3.length; i += 1) {
-    const c = text3[i];
+  for (let i = 0; i < text4.length; i += 1) {
+    const c = text4[i];
     if (c === "{") depth += 1;
     else if (c === "}") depth -= 1;
     else if (c === "," && depth === 0) {
-      parts.push(text3.slice(start, i));
+      parts.push(text4.slice(start, i));
       start = i + 1;
     }
   }
-  parts.push(text3.slice(start));
+  parts.push(text4.slice(start));
   return parts;
 }
 function joinRustPath(prefix, rest) {
@@ -22346,10 +22440,10 @@ function joinRustPath(prefix, rest) {
   return rest ? `${prefix}::${rest}` : prefix;
 }
 function expandUseTree(tree, prefix, out) {
-  const text3 = tree.trim().replace(/^::/, "");
-  const open3 = text3.indexOf("{");
+  const text4 = tree.trim().replace(/^::/, "");
+  const open3 = text4.indexOf("{");
   if (open3 < 0) {
-    let path = text3.replace(/\s+as\s+\w+$/, "").replace(/\s+/g, "");
+    let path = text4.replace(/\s+as\s+\w+$/, "").replace(/\s+/g, "");
     if (path === "self" && prefix) path = "";
     else if (path === "*") path = "";
     else path = path.replace(/::\*$/, "");
@@ -22357,9 +22451,9 @@ function expandUseTree(tree, prefix, out) {
     if (/^\w+(?:::\w+)*$/.test(full)) out.push(full);
     return;
   }
-  const head = text3.slice(0, open3).replace(/\s+/g, "").replace(/::$/, "");
-  const close = text3.lastIndexOf("}");
-  const inner = text3.slice(open3 + 1, close < 0 ? void 0 : close);
+  const head = text4.slice(0, open3).replace(/\s+/g, "").replace(/::$/, "");
+  const close = text4.lastIndexOf("}");
+  const inner = text4.slice(open3 + 1, close < 0 ? void 0 : close);
   for (const part of splitTopLevel2(inner)) {
     if (part.trim()) expandUseTree(part, joinRustPath(prefix, head), out);
   }
@@ -22411,16 +22505,16 @@ function extractC(content) {
 function extractRuby(content) {
   const imports = [];
   let inBlockComment = false;
-  content.split("\n").forEach((text3, index) => {
+  content.split("\n").forEach((text4, index) => {
     if (inBlockComment) {
-      if (/^=end\b/.test(text3)) inBlockComment = false;
+      if (/^=end\b/.test(text4)) inBlockComment = false;
       return;
     }
-    if (/^=begin\b/.test(text3)) {
+    if (/^=begin\b/.test(text4)) {
       inBlockComment = true;
       return;
     }
-    const match = RUBY_REQUIRE.exec(text3);
+    const match = RUBY_REQUIRE.exec(text4);
     if (!match) return;
     if (match[1] === "require_relative") {
       const target = match[3].startsWith(".") ? match[3] : `./${match[3]}`;
@@ -22564,25 +22658,25 @@ function resolveJsFile(ctx, base) {
   return null;
 }
 function parseJsonc(input2) {
-  const text3 = input2.charCodeAt(0) === 65279 ? input2.slice(1) : input2;
-  const n = text3.length;
+  const text4 = input2.charCodeAt(0) === 65279 ? input2.slice(1) : input2;
+  const n2 = text4.length;
   let out = "";
   let commaAt = -1;
   let i = 0;
-  while (i < n) {
-    const c = text3[i];
+  while (i < n2) {
+    const c = text4[i];
     if (c === '"') {
       let j = i + 1;
-      while (j < n && text3[j] !== '"') j += text3[j] === "\\" ? 2 : 1;
-      out += text3.slice(i, j + 1);
+      while (j < n2 && text4[j] !== '"') j += text4[j] === "\\" ? 2 : 1;
+      out += text4.slice(i, j + 1);
       commaAt = -1;
       i = j + 1;
-    } else if (c === "/" && text3[i + 1] === "/") {
-      const nl = text3.indexOf("\n", i);
-      i = nl < 0 ? n : nl;
-    } else if (c === "/" && text3[i + 1] === "*") {
-      const close = text3.indexOf("*/", i + 2);
-      i = close < 0 ? n : close + 2;
+    } else if (c === "/" && text4[i + 1] === "/") {
+      const nl = text4.indexOf("\n", i);
+      i = nl < 0 ? n2 : nl;
+    } else if (c === "/" && text4[i + 1] === "*") {
+      const close = text4.indexOf("*/", i + 2);
+      i = close < 0 ? n2 : close + 2;
     } else {
       if ((c === "}" || c === "]") && commaAt >= 0) out = out.slice(0, commaAt) + out.slice(commaAt + 1);
       if (c === ",") commaAt = out.length;
@@ -22604,9 +22698,9 @@ function findConfigFile(ctx, reference) {
   return null;
 }
 function loadConfigJson(ctx, configPath) {
-  const text3 = ctx.contents.get(configPath);
-  if (text3 === void 0) return null;
-  const json2 = parseJsonc(text3);
+  const text4 = ctx.contents.get(configPath);
+  if (text4 === void 0) return null;
+  const json2 = parseJsonc(text4);
   return isRecord(json2) ? json2 : null;
 }
 function loadConfigLayer(ctx, configPath, depth) {
@@ -22696,13 +22790,13 @@ function workspacePackages(ctx) {
   const packages = /* @__PURE__ */ new Map();
   for (const path of ctx.sorted) {
     if (!path.endsWith("package.json") || basename(path) !== "package.json") continue;
-    const text3 = ctx.contents.get(path);
-    if (text3 === void 0) continue;
+    const text4 = ctx.contents.get(path);
+    if (text4 === void 0) continue;
     let manifest;
     try {
-      manifest = JSON.parse(text3);
+      manifest = JSON.parse(text4);
     } catch {
-      manifest = parseJsonc(text3);
+      manifest = parseJsonc(text4);
     }
     if (isRecord(manifest) && typeof manifest.name === "string" && manifest.name && !packages.has(manifest.name)) {
       packages.set(manifest.name, { dir: parentDir(path), manifest });
@@ -22744,9 +22838,9 @@ function exportTargets(manifest, subpath) {
     const star = key.indexOf("*");
     if (star < 0) continue;
     const prefix = key.slice(0, star);
-    const suffix = key.slice(star + 1);
-    if (wanted.length < prefix.length + suffix.length || !wanted.startsWith(prefix) || !wanted.endsWith(suffix)) continue;
-    const captured = wanted.slice(prefix.length, wanted.length - suffix.length);
+    const suffix2 = key.slice(star + 1);
+    if (wanted.length < prefix.length + suffix2.length || !wanted.startsWith(prefix) || !wanted.endsWith(suffix2)) continue;
+    const captured = wanted.slice(prefix.length, wanted.length - suffix2.length);
     const targets = [];
     collectExportTargets(exportsField[key], targets);
     out.push(...targets.map((target) => target.split("*").join(captured)));
@@ -22910,8 +23004,8 @@ function goIndex(ctx) {
       if (match) modules.push({ path: match[1], dir: parentDir(path) });
     } else if (path.endsWith(".go")) {
       const dir = parentDir(path);
-      const list = filesByDir.get(dir);
-      if (list) list.push(path);
+      const list2 = filesByDir.get(dir);
+      if (list2) list2.push(path);
       else filesByDir.set(dir, [path]);
     }
   }
@@ -23066,10 +23160,10 @@ function cSuffixIndex(ctx) {
     const language = languageOf(path);
     if (language !== "c" && language !== "cpp" && !C_FAMILY_EXTRA.test(path)) continue;
     for (let at = 0; at >= 0; at = path.indexOf("/", at) + 1 || -1) {
-      const suffix = path.slice(at);
-      const list = suffixes.get(suffix);
-      if (list) list.push(path);
-      else suffixes.set(suffix, [path]);
+      const suffix2 = path.slice(at);
+      const list2 = suffixes.get(suffix2);
+      if (list2) list2.push(path);
+      else suffixes.set(suffix2, [path]);
     }
   }
   ctx.cSuffixes = suffixes;
@@ -23082,8 +23176,8 @@ function resolveC(fromPath, specifier, ctx) {
     const sibling = rel(parentDir(fromPath), header);
     if (!sibling.startsWith("..") && ctx.files.has(sibling)) return internal(sibling);
   }
-  const suffix = header.split("/").filter((segment) => segment && segment !== "." && segment !== "..").join("/");
-  const matches = suffix ? cSuffixIndex(ctx).get(suffix) ?? [] : [];
+  const suffix2 = header.split("/").filter((segment) => segment && segment !== "." && segment !== "..").join("/");
+  const matches = suffix2 ? cSuffixIndex(ctx).get(suffix2) ?? [] : [];
   if (matches.length === 1) return internal(matches[0]);
   if (matches.length > 1 && !angle) return UNRESOLVED;
   return { kind: "external", pkg: `c:${header}` };
@@ -23516,12 +23610,12 @@ function readJson(files, path) {
 function detectSystemName(files) {
   const pkg = readJson(files, "package.json");
   if (typeof pkg?.name === "string" && pkg.name.trim()) return pkg.name.trim();
-  const text3 = (path) => files.find((file2) => file2.path === path)?.content ?? null;
-  const goModule = text3("go.mod")?.match(/^module\s+(\S+)/m)?.[1];
+  const text4 = (path) => files.find((file2) => file2.path === path)?.content ?? null;
+  const goModule = text4("go.mod")?.match(/^module\s+(\S+)/m)?.[1];
   if (goModule) return goModule.split("/").pop() ?? goModule;
-  const cargo = text3("Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  const cargo = text4("Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
   if (cargo) return cargo;
-  const pyproject = text3("pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  const pyproject = text4("pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
   if (pyproject) return pyproject;
   return null;
 }
@@ -23601,7 +23695,7 @@ function deriveBlueprint(files, options = {}) {
   });
   const membership = assignComponents(graph.files, draft);
   const componentGraph = buildComponentGraph(graph, membership);
-  const testsId = components.find((component) => component.kind === "test")?.id;
+  const testsId = components.find((component2) => component2.kind === "test")?.id;
   draft.dependencies = componentGraph.edges.filter((edge) => edge.from !== testsId).map((edge) => ({ from: edge.from, to: edge.to, kind: "imports", provenance }));
   const rules = [
     {
@@ -23756,38 +23850,38 @@ function isYaml(path) {
   return /\.ya?ml$/i.test(path);
 }
 function skipJsonTrivia(cursor) {
-  const { text: text3 } = cursor;
-  while (cursor.pos < text3.length) {
-    const char = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  while (cursor.pos < text4.length) {
+    const char = text4[cursor.pos];
     if (char === " " || char === "	" || char === "\n" || char === "\r" || char === "\uFEFF") {
       cursor.pos += 1;
-    } else if (char === "/" && text3[cursor.pos + 1] === "/") {
-      const newline = text3.indexOf("\n", cursor.pos);
-      cursor.pos = newline < 0 ? text3.length : newline;
-    } else if (char === "/" && text3[cursor.pos + 1] === "*") {
-      const close = text3.indexOf("*/", cursor.pos + 2);
-      cursor.pos = close < 0 ? text3.length : close + 2;
+    } else if (char === "/" && text4[cursor.pos + 1] === "/") {
+      const newline = text4.indexOf("\n", cursor.pos);
+      cursor.pos = newline < 0 ? text4.length : newline;
+    } else if (char === "/" && text4[cursor.pos + 1] === "*") {
+      const close = text4.indexOf("*/", cursor.pos + 2);
+      cursor.pos = close < 0 ? text4.length : close + 2;
     } else {
       return;
     }
   }
 }
 function readQuoted(cursor) {
-  const { text: text3 } = cursor;
-  const quote2 = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  const quote2 = text4[cursor.pos];
   let result = "";
   cursor.pos += 1;
-  while (cursor.pos < text3.length) {
-    const char = text3[cursor.pos];
+  while (cursor.pos < text4.length) {
+    const char = text4[cursor.pos];
     if (char === quote2) {
       cursor.pos += 1;
       return result;
     }
     if (char === "\n") break;
     if (char === "\\") {
-      const next = text3[cursor.pos + 1];
-      if (next === "u" && /^[0-9a-fA-F]{4}$/.test(text3.slice(cursor.pos + 2, cursor.pos + 6))) {
-        result += String.fromCharCode(parseInt(text3.slice(cursor.pos + 2, cursor.pos + 6), 16));
+      const next = text4[cursor.pos + 1];
+      if (next === "u" && /^[0-9a-fA-F]{4}$/.test(text4.slice(cursor.pos + 2, cursor.pos + 6))) {
+        result += String.fromCharCode(parseInt(text4.slice(cursor.pos + 2, cursor.pos + 6), 16));
         cursor.pos += 6;
       } else {
         result += JSON_ESCAPES[next] ?? next ?? "";
@@ -23803,27 +23897,27 @@ function readQuoted(cursor) {
 function readJsonValue(cursor, path, depth) {
   if (depth > MAX_DEPTH) throw new ParseError("too deep");
   skipJsonTrivia(cursor);
-  const { text: text3 } = cursor;
-  const char = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  const char = text4[cursor.pos];
   if (char === void 0) throw new ParseError("unexpected end");
   if (char === "{") {
     cursor.pos += 1;
     const result = newDict();
     for (; ; ) {
       skipJsonTrivia(cursor);
-      if (text3[cursor.pos] === "}") {
+      if (text4[cursor.pos] === "}") {
         cursor.pos += 1;
         return result;
       }
-      if (text3[cursor.pos] !== '"' && text3[cursor.pos] !== "'") throw new ParseError("expected key");
+      if (text4[cursor.pos] !== '"' && text4[cursor.pos] !== "'") throw new ParseError("expected key");
       const key = readQuoted(cursor);
       skipJsonTrivia(cursor);
-      if (text3[cursor.pos] !== ":") throw new ParseError("expected ':'");
+      if (text4[cursor.pos] !== ":") throw new ParseError("expected ':'");
       cursor.pos += 1;
       result[key] = readJsonValue(cursor, [...path, key], depth + 1);
       skipJsonTrivia(cursor);
-      if (text3[cursor.pos] === ",") cursor.pos += 1;
-      else if (text3[cursor.pos] !== "}") throw new ParseError("expected ',' or '}'");
+      if (text4[cursor.pos] === ",") cursor.pos += 1;
+      else if (text4[cursor.pos] !== "}") throw new ParseError("expected ',' or '}'");
     }
   }
   if (char === "[") {
@@ -23831,14 +23925,14 @@ function readJsonValue(cursor, path, depth) {
     const result = [];
     for (; ; ) {
       skipJsonTrivia(cursor);
-      if (text3[cursor.pos] === "]") {
+      if (text4[cursor.pos] === "]") {
         cursor.pos += 1;
         return result;
       }
       result.push(readJsonValue(cursor, [...path, String(result.length)], depth + 1));
       skipJsonTrivia(cursor);
-      if (text3[cursor.pos] === ",") cursor.pos += 1;
-      else if (text3[cursor.pos] !== "]") throw new ParseError("expected ',' or ']'");
+      if (text4[cursor.pos] === ",") cursor.pos += 1;
+      else if (text4[cursor.pos] !== "]") throw new ParseError("expected ',' or ']'");
     }
   }
   if (char === '"' || char === "'") {
@@ -23847,7 +23941,7 @@ function readJsonValue(cursor, path, depth) {
     cursor.leaves.push({ path, value, start, end: cursor.pos });
     return value;
   }
-  const bare = /^[-+.\w]+/.exec(text3.slice(cursor.pos, cursor.pos + 64));
+  const bare = /^[-+.\w]+/.exec(text4.slice(cursor.pos, cursor.pos + 64));
   if (!bare) throw new ParseError("unexpected character");
   cursor.pos += bare[0].length;
   if (bare[0] === "true") return true;
@@ -23869,14 +23963,14 @@ function parseJsonc2(content) {
   }
 }
 function skipTomlSpace(cursor, newlines) {
-  const { text: text3 } = cursor;
-  while (cursor.pos < text3.length) {
-    const char = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  while (cursor.pos < text4.length) {
+    const char = text4[cursor.pos];
     if (char === " " || char === "	" || char === "\r" || char === "\uFEFF" || newlines && char === "\n") {
       cursor.pos += 1;
     } else if (char === "#") {
-      const newline = text3.indexOf("\n", cursor.pos);
-      cursor.pos = newline < 0 ? text3.length : newline;
+      const newline = text4.indexOf("\n", cursor.pos);
+      cursor.pos = newline < 0 ? text4.length : newline;
     } else {
       return;
     }
@@ -23891,34 +23985,34 @@ function readTomlLiteral(cursor) {
   return value;
 }
 function readTomlString(cursor) {
-  const { text: text3 } = cursor;
-  const quote2 = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  const quote2 = text4[cursor.pos];
   const triple = quote2.repeat(3);
-  if (text3.startsWith(triple, cursor.pos)) {
-    const close = text3.indexOf(triple, cursor.pos + 3);
+  if (text4.startsWith(triple, cursor.pos)) {
+    const close = text4.indexOf(triple, cursor.pos + 3);
     if (close < 0) throw new ParseError("unterminated string");
-    const value = text3.slice(cursor.pos + 3, close).replace(/^\r?\n/, "");
+    const value = text4.slice(cursor.pos + 3, close).replace(/^\r?\n/, "");
     cursor.pos = close + 3;
     return value;
   }
   return quote2 === "'" ? readTomlLiteral(cursor) : readQuoted(cursor);
 }
 function readTomlKey(cursor) {
-  const { text: text3 } = cursor;
+  const { text: text4 } = cursor;
   const keys = [];
   for (; ; ) {
     skipTomlSpace(cursor, false);
-    const char = text3[cursor.pos];
+    const char = text4[cursor.pos];
     if (char === '"' || char === "'") {
       keys.push(char === "'" ? readTomlLiteral(cursor) : readQuoted(cursor));
     } else {
-      const bare = /^[A-Za-z0-9_-]+/.exec(text3.slice(cursor.pos, cursor.pos + 200));
+      const bare = /^[A-Za-z0-9_-]+/.exec(text4.slice(cursor.pos, cursor.pos + 200));
       if (!bare) throw new ParseError("expected key");
       keys.push(bare[0]);
       cursor.pos += bare[0].length;
     }
     skipTomlSpace(cursor, false);
-    if (text3[cursor.pos] !== ".") return keys;
+    if (text4[cursor.pos] !== ".") return keys;
     cursor.pos += 1;
   }
 }
@@ -23938,8 +24032,8 @@ function tomlDescend(root, keys) {
 }
 function readTomlValue(cursor, path, depth) {
   if (depth > MAX_DEPTH) throw new ParseError("too deep");
-  const { text: text3 } = cursor;
-  const char = text3[cursor.pos];
+  const { text: text4 } = cursor;
+  const char = text4[cursor.pos];
   if (char === '"' || char === "'") {
     const start = cursor.pos;
     const value = readTomlString(cursor);
@@ -23951,15 +24045,15 @@ function readTomlValue(cursor, path, depth) {
     const result = [];
     for (; ; ) {
       skipTomlSpace(cursor, true);
-      if (text3[cursor.pos] === "]") {
+      if (text4[cursor.pos] === "]") {
         cursor.pos += 1;
         return result;
       }
-      if (cursor.pos >= text3.length) throw new ParseError("unterminated array");
+      if (cursor.pos >= text4.length) throw new ParseError("unterminated array");
       result.push(readTomlValue(cursor, [...path, String(result.length)], depth + 1));
       skipTomlSpace(cursor, true);
-      if (text3[cursor.pos] === ",") cursor.pos += 1;
-      else if (text3[cursor.pos] !== "]") throw new ParseError("expected ',' or ']'");
+      if (text4[cursor.pos] === ",") cursor.pos += 1;
+      else if (text4[cursor.pos] !== "]") throw new ParseError("expected ',' or ']'");
     }
   }
   if (char === "{") {
@@ -23967,23 +24061,23 @@ function readTomlValue(cursor, path, depth) {
     const result = newDict();
     for (; ; ) {
       skipTomlSpace(cursor, true);
-      if (text3[cursor.pos] === "}") {
+      if (text4[cursor.pos] === "}") {
         cursor.pos += 1;
         return result;
       }
-      if (cursor.pos >= text3.length) throw new ParseError("unterminated table");
+      if (cursor.pos >= text4.length) throw new ParseError("unterminated table");
       const keys = readTomlKey(cursor);
-      if (text3[cursor.pos] !== "=") throw new ParseError("expected '='");
+      if (text4[cursor.pos] !== "=") throw new ParseError("expected '='");
       cursor.pos += 1;
       skipTomlSpace(cursor, false);
       const last = keys[keys.length - 1];
       tomlDescend(result, keys.slice(0, -1))[last] = readTomlValue(cursor, [...path, ...keys], depth + 1);
       skipTomlSpace(cursor, true);
-      if (text3[cursor.pos] === ",") cursor.pos += 1;
-      else if (text3[cursor.pos] !== "}") throw new ParseError("expected ',' or '}'");
+      if (text4[cursor.pos] === ",") cursor.pos += 1;
+      else if (text4[cursor.pos] !== "}") throw new ParseError("expected ',' or '}'");
     }
   }
-  const bare = /^[^\s,\]}#]+/.exec(text3.slice(cursor.pos, cursor.pos + 200));
+  const bare = /^[^\s,\]}#]+/.exec(text4.slice(cursor.pos, cursor.pos + 200));
   if (!bare) throw new ParseError("expected value");
   cursor.pos += bare[0].length;
   if (bare[0] === "true") return true;
@@ -24062,8 +24156,8 @@ function redactedPreview(secret) {
   const chars = [...secret];
   return `${chars.slice(0, 4).join("")}…${chars.slice(-2).join("")} (${chars.length} chars)`;
 }
-function redactText(text3) {
-  return text3.replace(new RegExp(TOKEN_REGEX.source, "g"), REDACTED).replace(
+function redactText(text4) {
+  return text4.replace(new RegExp(TOKEN_REGEX.source, "g"), REDACTED).replace(
     new RegExp(URL_CREDENTIALS, "g"),
     (match, _user, password) => isPlaceholder(password) ? match : match.replace(`:${password}@`, `:${REDACTED}@`)
   ).replace(
@@ -24131,15 +24225,15 @@ function parseMcpServers(path, content) {
   }
 }
 function isBroadClaudeRule(rule) {
-  const text3 = rule.trim();
-  if (!text3 || WILDCARD_ONLY.test(text3)) return true;
-  if (text3.startsWith("mcp__")) {
-    const rest = text3.slice(5);
+  const text4 = rule.trim();
+  if (!text4 || WILDCARD_ONLY.test(text4)) return true;
+  if (text4.startsWith("mcp__")) {
+    const rest = text4.slice(5);
     const separator = rest.indexOf("__");
     return separator < 0 || WILDCARD_ONLY.test(rest.slice(separator + 2)) || rest.startsWith("*");
   }
-  const call = /^([A-Za-z_]\w*)\(([\s\S]*)\)$/.exec(text3);
-  const tool = call ? call[1] : text3;
+  const call = /^([A-Za-z_]\w*)\(([\s\S]*)\)$/.exec(text4);
+  const tool = call ? call[1] : text4;
   const argument = call ? call[2].trim() : null;
   if (argument !== null && (argument === "" || WILDCARD_ONLY.test(argument))) return true;
   if (tool === "Bash") return argument === null || DANGEROUS_BASH.test(argument);
@@ -24201,9 +24295,9 @@ function stripYamlComment(line) {
 function yamlLines(content) {
   const lines = [];
   for (const raw of content.split(/\r?\n/)) {
-    const text3 = stripYamlComment(raw).replace(/\s+$/, "");
-    if (!text3.trim()) continue;
-    lines.push({ indent: text3.length - text3.trimStart().length, text: text3.trim() });
+    const text4 = stripYamlComment(raw).replace(/\s+$/, "");
+    if (!text4.trim()) continue;
+    lines.push({ indent: text4.length - text4.trimStart().length, text: text4.trim() });
   }
   return lines;
 }
@@ -24587,17 +24681,17 @@ function decodeUtf8(bytes) {
   }
   return result;
 }
-function readQuoted2(text3, start) {
-  if (text3[start] !== '"') return null;
+function readQuoted2(text4, start) {
+  if (text4[start] !== '"') return null;
   const bytes = [];
   let index = start + 1;
-  while (index < text3.length) {
-    const char = text3[index];
+  while (index < text4.length) {
+    const char = text4[index];
     if (char === '"') return { value: decodeUtf8(bytes), end: index + 1 };
     if (char === "\\") {
-      const next = text3[index + 1];
+      const next = text4[index + 1];
       if (next === void 0) return null;
-      const octal = /^[0-7]{1,3}/.exec(text3.slice(index + 1, index + 4));
+      const octal = /^[0-7]{1,3}/.exec(text4.slice(index + 1, index + 4));
       if (octal) {
         bytes.push(parseInt(octal[0], 8) & 255);
         index += 1 + octal[0].length;
@@ -24609,7 +24703,7 @@ function readQuoted2(text3, start) {
       index += 2;
       continue;
     }
-    const codePoint = text3.codePointAt(index) ?? 63;
+    const codePoint = text4.codePointAt(index) ?? 63;
     pushCodePoint(bytes, codePoint);
     index += codePoint > 65535 ? 2 : 1;
   }
@@ -24618,8 +24712,8 @@ function readQuoted2(text3, start) {
 function unquotePath(raw) {
   const trimmed = raw.trim();
   if (trimmed.startsWith('"')) {
-    const quoted2 = readQuoted2(trimmed, 0);
-    if (quoted2) return quoted2.value;
+    const quoted3 = readQuoted2(trimmed, 0);
+    if (quoted3) return quoted3.value;
   }
   return trimmed;
 }
@@ -24689,9 +24783,9 @@ function finishDraft(draft) {
   if (draft.binary) file2.binary = true;
   return file2;
 }
-function parseUnifiedDiff(text3) {
+function parseUnifiedDiff(text4) {
   const files = [];
-  const lines = text3.split("\n");
+  const lines = text4.split("\n");
   let draft = null;
   let oldLine = 0;
   let newLine = 0;
@@ -24797,7 +24891,7 @@ function fileAdded(path, content) {
   return {
     path,
     status: "added",
-    added: lines.map((text3, index) => ({ line: index + 1, text: text3.replace(/\r$/, "") })),
+    added: lines.map((text4, index) => ({ line: index + 1, text: text4.replace(/\r$/, "") })),
     removed: []
   };
 }
@@ -24882,16 +24976,16 @@ function isVerificationFile(path) {
   if (matchesAny(path, HOOK_PATTERNS)) return true;
   return SHELL_EXTENSIONS.has(extname(path)) && /(test|spec|ci|lint|check|verify)/i.test(basename(path));
 }
-function codeOnly(path, text3) {
-  if (!CODE_EXTENSIONS.has(extname(path).toLowerCase())) return text3;
-  return text3.replace(STRING_LITERAL, (match) => match.length <= 2 ? match : `${match[0]}${" ".repeat(match.length - 2)}${match[match.length - 1]}`);
+function codeOnly(path, text4) {
+  if (!CODE_EXTENSIONS.has(extname(path).toLowerCase())) return text4;
+  return text4.replace(STRING_LITERAL, (match) => match.length <= 2 ? match : `${match[0]}${" ".repeat(match.length - 2)}${match[match.length - 1]}`);
 }
-function excerpt(text3, max = 80) {
-  const trimmed = text3.trim().replace(/\s+/g, " ");
+function excerpt(text4, max = 80) {
+  const trimmed = text4.trim().replace(/\s+/g, " ");
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
-function ciCommand(text3) {
-  let body = text3.trim().replace(/^-\s+/, "");
+function ciCommand(text4) {
+  let body = text4.trim().replace(/^-\s+/, "");
   if (!body || body.startsWith("#")) return null;
   const key = /^([\w.-]+):(?:\s+(.*))?$/.exec(body);
   if (key) {
@@ -24904,13 +24998,13 @@ function ciCommand(text3) {
 function commandClasses(command) {
   return COMMAND_CLASSES.filter((entry) => entry.pattern.test(command)).map((entry) => entry.kind);
 }
-function thresholdOf(text3) {
-  const match = THRESHOLD_PATTERN.exec(text3);
+function thresholdOf(text4) {
+  const match = THRESHOLD_PATTERN.exec(text4);
   if (!match) return null;
   return { key: match[1].toLowerCase().replace(/-/g, "_"), value: Number(match[2]) };
 }
-function scriptOf(text3) {
-  const match = SCRIPT_PATTERN.exec(text3);
+function scriptOf(text4) {
+  const match = SCRIPT_PATTERN.exec(text4);
   return match ? { name: match[1], command: match[2] } : null;
 }
 function detectDeletedTest(change) {
@@ -24932,15 +25026,15 @@ function detectDeletedTest(change) {
 }
 function detectTestLineSignals(change) {
   const signals = [];
-  for (const { line, text: text3 } of change.added) {
-    const code = codeOnly(change.path, text3);
+  for (const { line, text: text4 } of change.added) {
+    const code = codeOnly(change.path, text4);
     if (SKIP_PATTERNS.some((pattern2) => pattern2.test(code))) {
       signals.push({
         path: change.path,
         line,
         signal: "test-skipped",
         severity: "warning",
-        message: `Test skipped or disabled: ${excerpt(text3)}`
+        message: `Test skipped or disabled: ${excerpt(text4)}`
       });
     }
     if (FOCUS_PATTERNS.some((pattern2) => pattern2.test(code))) {
@@ -24949,7 +25043,7 @@ function detectTestLineSignals(change) {
         line,
         signal: "test-focused",
         severity: "warning",
-        message: `Focused test silently skips every other test: ${excerpt(text3)}`
+        message: `Focused test silently skips every other test: ${excerpt(text4)}`
       });
     }
     if (TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(code))) {
@@ -24958,15 +25052,15 @@ function detectTestLineSignals(change) {
         line,
         signal: "assertion-trivialized",
         severity: "warning",
-        message: `Assertion cannot fail: ${excerpt(text3)}`
+        message: `Assertion cannot fail: ${excerpt(text4)}`
       });
     }
   }
   return signals;
 }
-function isAssertion(text3) {
-  if (COMMENTED_LINE.test(text3)) return false;
-  return ASSERTION_PATTERN.test(text3) && !TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(text3));
+function isAssertion(text4) {
+  if (COMMENTED_LINE.test(text4)) return false;
+  return ASSERTION_PATTERN.test(text4) && !TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(text4));
 }
 function detectRemovedAssertions(change) {
   if (change.status !== "modified" && change.status !== "renamed") return [];
@@ -24989,12 +25083,12 @@ function detectRemovedAssertions(change) {
     }
   ];
 }
-function shellExitFakesSuccess(text3, hook) {
-  if (!SHELL_EXIT_PATTERN.test(text3) || COMMENTED_LINE.test(text3)) return false;
-  if (/\|\|\s*exit\s+0\b/.test(text3)) return true;
-  if (hook && /^\s*exit\s+0\s*(?:#.*)?$/.test(text3)) return true;
-  const command = text3.replace(SHELL_EXIT_PATTERN, " ");
-  if (/\bif\b|\bthen\b|\bfi\b|\belse\b/.test(text3)) return false;
+function shellExitFakesSuccess(text4, hook) {
+  if (!SHELL_EXIT_PATTERN.test(text4) || COMMENTED_LINE.test(text4)) return false;
+  if (/\|\|\s*exit\s+0\b/.test(text4)) return true;
+  if (hook && /^\s*exit\s+0\s*(?:#.*)?$/.test(text4)) return true;
+  const command = text4.replace(SHELL_EXIT_PATTERN, " ");
+  if (/\bif\b|\bthen\b|\bfi\b|\belse\b/.test(text4)) return false;
   return commandClasses(command).some((kind) => kind === "test" || kind === "lint" || kind === "typecheck" || kind === "check");
 }
 function detectExitZero(change) {
@@ -25002,10 +25096,10 @@ function detectExitZero(change) {
   if (!isPackageJson && !isVerificationFile(change.path)) return [];
   const shell = isCiFile(change.path) || isShellLike(change.path) || matchesAny(change.path, HOOK_PATTERNS);
   const signals = [];
-  for (const { line, text: text3 } of change.added) {
+  for (const { line, text: text4 } of change.added) {
     if (isPackageJson) {
-      if (!scriptOf(text3) || !SHELL_EXIT_PATTERN.test(text3)) continue;
-    } else if (!EXIT_PATTERNS.some((pattern2) => pattern2.test(codeOnly(change.path, text3))) && !(shell && shellExitFakesSuccess(text3, matchesAny(change.path, HOOK_PATTERNS)))) {
+      if (!scriptOf(text4) || !SHELL_EXIT_PATTERN.test(text4)) continue;
+    } else if (!EXIT_PATTERNS.some((pattern2) => pattern2.test(codeOnly(change.path, text4))) && !(shell && shellExitFakesSuccess(text4, matchesAny(change.path, HOOK_PATTERNS)))) {
       continue;
     }
     signals.push({
@@ -25013,7 +25107,7 @@ function detectExitZero(change) {
       line,
       signal: "exit-zero",
       severity: "error",
-      message: `Forced success exit can fake a passing run: ${excerpt(text3)}`
+      message: `Forced success exit can fake a passing run: ${excerpt(text4)}`
     });
   }
   return signals;
@@ -25021,9 +25115,9 @@ function detectExitZero(change) {
 function detectSuppressions(change) {
   if (DOC_EXTENSIONS.has(extname(change.path).toLowerCase())) return [];
   const found = [];
-  for (const { line, text: text3 } of change.added) {
-    const match = SUPPRESSION_PATTERNS.find((entry) => entry.pattern.test(codeOnly(change.path, text3)));
-    if (match) found.push({ line, label: match.label, text: text3 });
+  for (const { line, text: text4 } of change.added) {
+    const match = SUPPRESSION_PATTERNS.find((entry) => entry.pattern.test(codeOnly(change.path, text4)));
+    if (match) found.push({ line, label: match.label, text: text4 });
   }
   if (found.length === 0) return [];
   if (found.length >= 3) {
@@ -25047,23 +25141,23 @@ function detectSuppressions(change) {
 }
 function detectTestExclusion(change) {
   const signals = [];
-  for (const { line, text: text3 } of change.added) {
-    if (COMMENTED_LINE.test(text3) || !TEST_EXCLUSION_PATTERNS.some((pattern2) => pattern2.test(text3))) continue;
+  for (const { line, text: text4 } of change.added) {
+    if (COMMENTED_LINE.test(text4) || !TEST_EXCLUSION_PATTERNS.some((pattern2) => pattern2.test(text4))) continue;
     signals.push({
       path: change.path,
       line,
       signal: "tests-excluded",
       severity: "warning",
-      message: `Test runner now excludes tests: ${excerpt(text3)}`
+      message: `Test runner now excludes tests: ${excerpt(text4)}`
     });
   }
   return signals;
 }
 function detectCiWeakening(change) {
   const signals = [];
-  for (const { line, text: text3 } of change.added) {
-    if (text3.trim().startsWith("#")) continue;
-    const match = CI_WEAKENING_PATTERNS.find((entry) => entry.pattern.test(text3));
+  for (const { line, text: text4 } of change.added) {
+    if (text4.trim().startsWith("#")) continue;
+    const match = CI_WEAKENING_PATTERNS.find((entry) => entry.pattern.test(text4));
     if (match) {
       signals.push({
         path: change.path,
@@ -25075,8 +25169,8 @@ function detectCiWeakening(change) {
     }
   }
   const addsPrTrigger = change.added.some((entry) => PR_TRIGGER.test(entry.text));
-  for (const { line, text: text3 } of change.removed) {
-    if (!PR_TRIGGER.test(text3) || addsPrTrigger) continue;
+  for (const { line, text: text4 } of change.removed) {
+    if (!PR_TRIGGER.test(text4) || addsPrTrigger) continue;
     signals.push({
       path: change.path,
       line,
@@ -25087,12 +25181,12 @@ function detectCiWeakening(change) {
   }
   const lost = [];
   const addedClasses = /* @__PURE__ */ new Set();
-  for (const { text: text3 } of change.added) {
-    const command = ciCommand(text3);
+  for (const { text: text4 } of change.added) {
+    const command = ciCommand(text4);
     if (command) for (const kind of commandClasses(command)) addedClasses.add(kind);
   }
-  for (const { line, text: text3 } of change.removed) {
-    const command = ciCommand(text3);
+  for (const { line, text: text4 } of change.removed) {
+    const command = ciCommand(text4);
     if (!command) continue;
     const classes = commandClasses(command);
     if (classes.length === 0 || classes.some((kind) => addedClasses.has(kind))) continue;
@@ -25120,17 +25214,17 @@ function detectCiWeakening(change) {
 }
 function detectCoverageLowered(change) {
   const addedByKey = /* @__PURE__ */ new Map();
-  for (const { line, text: text3 } of change.added) {
-    const threshold = thresholdOf(text3);
+  for (const { line, text: text4 } of change.added) {
+    const threshold = thresholdOf(text4);
     if (!threshold) continue;
-    const list = addedByKey.get(threshold.key) ?? [];
-    list.push({ line, value: threshold.value });
-    addedByKey.set(threshold.key, list);
+    const list2 = addedByKey.get(threshold.key) ?? [];
+    list2.push({ line, value: threshold.value });
+    addedByKey.set(threshold.key, list2);
   }
   const signals = [];
   const cursor = /* @__PURE__ */ new Map();
-  for (const { text: text3 } of change.removed) {
-    const threshold = thresholdOf(text3);
+  for (const { text: text4 } of change.removed) {
+    const threshold = thresholdOf(text4);
     if (!threshold) continue;
     const position = cursor.get(threshold.key) ?? 0;
     cursor.set(threshold.key, position + 1);
@@ -25210,11 +25304,11 @@ function detectTestSpecialCasing(change) {
   if (!CODE_EXTENSIONS.has(extname(change.path).toLowerCase()) || isVerificationFile(change.path)) return [];
   if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) return [];
   const signals = [];
-  for (const { line, text: text3 } of change.added) {
-    const masked = codeOnly(change.path, text3);
+  for (const { line, text: text4 } of change.added) {
+    const masked = codeOnly(change.path, text4);
     const inCode = TEST_DETECTION_PATTERNS.some((pattern2) => {
-      const match = pattern2.exec(text3);
-      return match !== null && masked[match.index] === text3[match.index] && masked[match.index] !== " ";
+      const match = pattern2.exec(text4);
+      return match !== null && masked[match.index] === text4[match.index] && masked[match.index] !== " ";
     });
     if (!inCode) continue;
     signals.push({
@@ -25222,7 +25316,7 @@ function detectTestSpecialCasing(change) {
       line,
       signal: "test-special-casing",
       severity: "warning",
-      message: `Production code now behaves differently under tests: ${excerpt(text3)}`
+      message: `Production code now behaves differently under tests: ${excerpt(text4)}`
     });
   }
   return signals;
@@ -25555,8 +25649,8 @@ async function readFilesAtRef(root, ref, paths) {
   const entries2 = parseCatFileBatch(result.stdout, wanted.length);
   entries2.forEach((entry, index) => {
     if (entry.type !== "blob" || !entry.body) return;
-    const text3 = decodeText(entry.body);
-    if (text3 !== null) contents.set(wanted[index], text3);
+    const text4 = decodeText(entry.body);
+    if (text4 !== null) contents.set(wanted[index], text4);
   });
   return contents;
 }
@@ -25766,14 +25860,14 @@ async function initCommand(args, io) {
     author: context.isGit ? await userName(context.root) ?? void 0 : void 0,
     now: (/* @__PURE__ */ new Date()).toISOString()
   });
-  const text3 = serializeBlueprint(blueprint);
+  const text4 = serializeBlueprint(blueprint);
   if (dryRun) {
-    io.stdout(text3);
+    io.stdout(text4);
     return EXIT_OK;
   }
   const target = join3(context.root, BLUEPRINT_PATH);
   await mkdir(dirname2(target), { recursive: true });
-  await writeFile(target, text3, "utf8");
+  await writeFile(target, text4, "utf8");
   io.stdout(nextSteps(blueprint));
   return EXIT_OK;
 }
@@ -25812,17 +25906,17 @@ function percent(ratio) {
   if (!Number.isFinite(ratio)) return 0;
   return Math.round(Math.min(1, Math.max(0, ratio)) * 100);
 }
-function oneLine(text3) {
+function oneLine(text4) {
   let out = "";
-  for (const char of text3) {
+  for (const char of text4) {
     const code = char.codePointAt(0) ?? 0;
     if (code === 9 || code === 10 || code === 13) out += " ";
     else if (code >= 32 && code !== 127) out += char;
   }
   return out.replace(/\s+/g, " ").trim();
 }
-function clip(text3, max) {
-  return text3.length <= max ? text3 : `${text3.slice(0, max - 1).trimEnd()}…`;
+function clip(text4, max) {
+  return text4.length <= max ? text4 : `${text4.slice(0, max - 1).trimEnd()}…`;
 }
 function budgetOf(value) {
   return value === void 0 || !Number.isFinite(value) ? DEFAULT_BUDGET : Math.max(0, Math.floor(value));
@@ -25880,7 +25974,7 @@ function summaryParts(report) {
   ];
 }
 function painter(color) {
-  return color ? (code, text3) => `\x1B[${code}m${text3}\x1B[0m` : (_code, text3) => text3;
+  return color ? (code, text4) => `\x1B[${code}m${text4}\x1B[0m` : (_code, text4) => text4;
 }
 function textLocations(locations) {
   if (locations.length === 0) return null;
@@ -25944,7 +26038,7 @@ function textImpact(report) {
   if (!hasImpact(report.impact)) return [];
   const impact = report.impact;
   const lines = ["", `Blast radius (${plural3(impact.changedFiles.length, "changed file")})`];
-  const touched = impact.touchedComponents.map((component) => `${oneLine(component.id)} (${plural3(component.files.length, "file")})`);
+  const touched = impact.touchedComponents.map((component2) => `${oneLine(component2.id)} (${plural3(component2.files.length, "file")})`);
   lines.push(`  touched: ${touched.length ? touched.join(", ") : "none"}`);
   const dependents = impact.dependents.map((dependent) => `${oneLine(dependent.id)} (depth ${dependent.depth})`);
   lines.push(`  dependents: ${dependents.length ? dependents.join(", ") : "none"}`);
@@ -26003,11 +26097,11 @@ function renderText(report, options = {}) {
   return `${lines.join("\n")}
 `;
 }
-function escapeMd(text3) {
-  return oneLine(text3).replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([`*_|[\]~])/g, "\\$1").replace(/^([#+-])/, "\\$1").replace(/@(?=[A-Za-z0-9])/g, "@&#8203;");
+function escapeMd(text4) {
+  return oneLine(text4).replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([`*_|[\]~])/g, "\\$1").replace(/^([#+-])/, "\\$1").replace(/@(?=[A-Za-z0-9])/g, "@&#8203;");
 }
-function codeSpan(text3) {
-  const clean = oneLine(text3) || " ";
+function codeSpan(text4) {
+  const clean = oneLine(text4) || " ";
   const longestRun = Math.max(0, ...(clean.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(longestRun + 1);
   const pad = clean.startsWith("`") || clean.endsWith("`") ? " " : "";
@@ -26091,7 +26185,7 @@ function mdContractChanges(report) {
 function mdImpact(report) {
   if (!hasImpact(report.impact)) return [];
   const impact = report.impact;
-  const touched = impact.touchedComponents.map((component) => `${codeSpan(component.id)} (${plural3(component.files.length, "file")})`);
+  const touched = impact.touchedComponents.map((component2) => `${codeSpan(component2.id)} (${plural3(component2.files.length, "file")})`);
   const dependents = impact.dependents.map((dependent) => `${codeSpan(dependent.id)} (depth ${dependent.depth})`);
   return [
     "### Blast radius",
@@ -26172,9 +26266,9 @@ function fitBlocks(blocks, room) {
   }
   return kept;
 }
-function cutAtLine(text3, max) {
-  if (text3.length <= max) return text3;
-  const cut = text3.slice(0, Math.max(0, max));
+function cutAtLine(text4, max) {
+  if (text4.length <= max) return text4;
+  const cut = text4.slice(0, Math.max(0, max));
   const lastBreak = cut.lastIndexOf("\n");
   return (lastBreak > 0 ? cut.slice(0, lastBreak) : cut).trimEnd();
 }
@@ -26266,11 +26360,11 @@ function renderSarif(report) {
     ]
   };
 }
-function escapeCommandData(text3) {
-  return text3.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+function escapeCommandData(text4) {
+  return text4.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 }
-function escapeCommandProperty(text3) {
-  return escapeCommandData(text3).replace(/:/g, "%3A").replace(/,/g, "%2C");
+function escapeCommandProperty(text4) {
+  return escapeCommandData(text4).replace(/:/g, "%3A").replace(/,/g, "%2C");
 }
 function annotation(finding) {
   const properties = [];
@@ -26304,12 +26398,12 @@ function graphNodes(view) {
     if (keys.has(id)) return;
     const base = `c_${id.replace(/[^A-Za-z0-9_]/g, "_")}`;
     let key = base;
-    for (let suffix = 2; used.has(key); suffix += 1) key = `${base}_${suffix}`;
+    for (let suffix2 = 2; used.has(key); suffix2 += 1) key = `${base}_${suffix2}`;
     used.add(key);
     keys.set(id, key);
     nodes.push({ key, label: oneLine(name) || id, external, flagged });
   };
-  for (const component of view.components) add(component.id, component.name, component.external === true, (component.findings ?? 0) > 0);
+  for (const component2 of view.components) add(component2.id, component2.name, component2.external === true, (component2.findings ?? 0) > 0);
   for (const edge of view.edges) {
     add(edge.from, edge.from, false, false);
     add(edge.to, edge.to, false, false);
@@ -26323,8 +26417,8 @@ function edgeLabel(status, count) {
   if (status === "forbidden") return `forbidden${times}`;
   return null;
 }
-function mermaidText(text3) {
-  return text3.replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;");
+function mermaidText(text4) {
+  return text4.replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;");
 }
 function renderMermaid(view) {
   const { nodes, keyOf } = graphNodes(view);
@@ -26346,8 +26440,8 @@ function renderMermaid(view) {
   return `${lines.join("\n")}
 `;
 }
-function dotString(text3) {
-  return `"${text3.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n")}"`;
+function dotString(text4) {
+  return `"${text4.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n")}"`;
 }
 function renderDot(view) {
   const { nodes, keyOf } = graphNodes(view);
@@ -26641,9 +26735,9 @@ function compareText2(left, right) {
 function quote(values) {
   return values.map((value) => `"${value}"`).join(", ");
 }
-function entries(selector) {
-  if (selector === void 0) return [];
-  return Array.isArray(selector) ? selector : [selector];
+function entries(selector2) {
+  if (selector2 === void 0) return [];
+  return Array.isArray(selector2) ? selector2 : [selector2];
 }
 function setDiff(base, head) {
   const baseSet = new Set(base ?? []);
@@ -26664,11 +26758,11 @@ function describeSetDiff(diff) {
 }
 function selectorDiff(base, head) {
   const diff = setDiff(entries(base), entries(head));
-  const widened = [];
-  const narrowed = [];
-  for (const entry of diff.added) (entry.startsWith("!") ? narrowed : widened).push(entry);
-  for (const entry of diff.removed) (entry.startsWith("!") ? widened : narrowed).push(entry);
-  return { widened: widened.sort(compareText2), narrowed: narrowed.sort(compareText2) };
+  const widened2 = [];
+  const narrowed2 = [];
+  for (const entry of diff.added) (entry.startsWith("!") ? narrowed2 : widened2).push(entry);
+  for (const entry of diff.removed) (entry.startsWith("!") ? widened2 : narrowed2).push(entry);
+  return { widened: widened2.sort(compareText2), narrowed: narrowed2.sort(compareText2) };
 }
 function selectorWords(values, verbs) {
   const plain = values.filter((value) => !value.startsWith("!"));
@@ -26715,9 +26809,9 @@ function ruleReferences(blueprint) {
   const components = /* @__PURE__ */ new Set();
   const tagPatterns = /* @__PURE__ */ new Set();
   for (const rule of blueprint.rules) {
-    for (const selector of ruleSelectors2(rule)) {
-      for (const ref of selectorComponentRefs(selector)) components.add(ref);
-      for (const raw of entries(selector)) {
+    for (const selector2 of ruleSelectors2(rule)) {
+      for (const ref of selectorComponentRefs(selector2)) components.add(ref);
+      for (const raw of entries(selector2)) {
         const entry = raw.startsWith("!") ? raw.slice(1) : raw;
         if (entry.startsWith("tag:")) tagPatterns.add(entry.slice("tag:".length));
       }
@@ -26728,8 +26822,8 @@ function ruleReferences(blueprint) {
 function tagSelected(tag, refs) {
   return refs.tagPatterns.some((pattern2) => pattern2 === tag || compileGlob(`/${pattern2}`).test(tag));
 }
-function isReferenced(component, refs) {
-  return refs.components.has(component.id) || (component.tags ?? []).some((tag) => tagSelected(tag, refs));
+function isReferenced(component2, refs) {
+  return refs.components.has(component2.id) || (component2.tags ?? []).some((tag) => tagSelected(tag, refs));
 }
 function diffLevel(field, base, head) {
   if (base === head) return [];
@@ -26848,6 +26942,7 @@ function diffComponent(base, head, refs) {
   if (Boolean(base.external) !== Boolean(head.external)) {
     parts.push(head.external ? "now marked external" : "no longer marked external");
   }
+  if (stable(base.runtime ?? null) !== stable(head.runtime ?? null)) parts.push("runtime");
   if (parts.length === 0) return null;
   return {
     kind: "component-changed",
@@ -27277,18 +27372,18 @@ var init_impact = __esm({
 });
 
 // src/blueprint/selectors.ts
-function selectorEntries(selector) {
-  if (selector === void 0) return [];
-  return Array.isArray(selector) ? [...selector] : [selector];
+function selectorEntries(selector2) {
+  if (selector2 === void 0) return [];
+  return Array.isArray(selector2) ? [...selector2] : [selector2];
 }
 function packageMatcher(pattern2) {
   return compileGlob(`/${pattern2.replace(/^\/+/, "")}`);
 }
 function componentsWithTag(blueprint, tagPattern) {
   const matcher = compileGlob(`/${tagPattern}`);
-  return blueprint.components.filter((component) => (component.tags ?? []).some((tag) => matcher.test(tag))).map((component) => component.id);
+  return blueprint.components.filter((component2) => (component2.tags ?? []).some((tag) => matcher.test(tag))).map((component2) => component2.id);
 }
-function resolveSelector(selector, blueprint) {
+function resolveSelector(selector2, blueprint) {
   const resolved = {
     all: false,
     components: /* @__PURE__ */ new Set(),
@@ -27299,7 +27394,7 @@ function resolveSelector(selector, blueprint) {
     excludePackages: [],
     hasInternal: false,
     hasPackages: false,
-    entries: selectorEntries(selector)
+    entries: selectorEntries(selector2)
   };
   for (const raw of resolved.entries) {
     const negated = raw.startsWith("!");
@@ -27339,37 +27434,37 @@ function resolveSelector(selector, blueprint) {
   }
   return resolved;
 }
-function matchesFile(selector, path, componentId) {
-  if (!selector.hasInternal) return false;
-  if (componentId !== null && selector.excludeComponents.has(componentId)) return false;
-  if (selector.excludePaths.some((matcher) => matcher.test(path))) return false;
-  if (selector.all) return true;
-  if (componentId !== null && selector.components.has(componentId)) return true;
-  return selector.paths.some((matcher) => matcher.test(path));
+function matchesFile(selector2, path, componentId) {
+  if (!selector2.hasInternal) return false;
+  if (componentId !== null && selector2.excludeComponents.has(componentId)) return false;
+  if (selector2.excludePaths.some((matcher) => matcher.test(path))) return false;
+  if (selector2.all) return true;
+  if (componentId !== null && selector2.components.has(componentId)) return true;
+  return selector2.paths.some((matcher) => matcher.test(path));
 }
-function matchesComponent(selector, componentId) {
-  if (selector.excludeComponents.has(componentId)) return false;
-  return selector.all || selector.components.has(componentId);
+function matchesComponent(selector2, componentId) {
+  if (selector2.excludeComponents.has(componentId)) return false;
+  return selector2.all || selector2.components.has(componentId);
 }
-function matchesPackage(selector, pkg) {
-  if (!selector.hasPackages) return false;
-  if (selector.excludePackages.some((matcher) => matcher.test(pkg))) return false;
-  return selector.packages.some((matcher) => matcher.test(pkg));
+function matchesPackage(selector2, pkg) {
+  if (!selector2.hasPackages) return false;
+  if (selector2.excludePackages.some((matcher) => matcher.test(pkg))) return false;
+  return selector2.packages.some((matcher) => matcher.test(pkg));
 }
-function describeSelector(selector) {
-  const entries2 = selectorEntries(selector);
+function describeSelector(selector2) {
+  const entries2 = selectorEntries(selector2);
   if (!entries2.length) return "nothing";
   const parts = entries2.map((entry) => {
     if (entry === "*") return "any file";
     if (entry === "!*") return "no file";
     const negated = entry.startsWith("!");
     const body = negated ? entry.slice(1) : entry;
-    let text3;
-    if (body.startsWith("package:")) text3 = `package ${body.slice(8)}`;
-    else if (body.startsWith("path:")) text3 = `files matching ${body.slice(5)}`;
-    else if (body.startsWith("tag:")) text3 = `components tagged ${body.slice(4)}`;
-    else text3 = body.startsWith("component:") ? body.slice(10) : body;
-    return negated ? `except ${text3}` : text3;
+    let text4;
+    if (body.startsWith("package:")) text4 = `package ${body.slice(8)}`;
+    else if (body.startsWith("path:")) text4 = `files matching ${body.slice(5)}`;
+    else if (body.startsWith("tag:")) text4 = `components tagged ${body.slice(4)}`;
+    else text4 = body.startsWith("component:") ? body.slice(10) : body;
+    return negated ? `except ${text4}` : text4;
   });
   return parts.join(", ");
 }
@@ -27420,7 +27515,7 @@ function compileRules(blueprint) {
   });
 }
 function createLabeler(blueprint) {
-  const names = new Map((blueprint?.components ?? []).map((component) => [component.id, component.name]));
+  const names = new Map((blueprint?.components ?? []).map((component2) => [component2.id, component2.name]));
   return {
     component: (id) => id ? names.get(id) ?? id : "unmapped code",
     file: (path) => path
@@ -27537,7 +27632,7 @@ function evaluateRules(model, compiled = compileRules(model.blueprint)) {
   for (const entry of compiled) {
     const rule = entry.rule;
     if (rule.kind === "no-cycles" && "scope" in entry) {
-      const nodes = blueprint.components.filter((component) => !entry.scope || matchesComponent(entry.scope, component.id)).map((component) => component.id);
+      const nodes = blueprint.components.filter((component2) => !entry.scope || matchesComponent(entry.scope, component2.id)).map((component2) => component2.id);
       const edges = componentGraph.edges.filter((edge) => entry.includeTypeOnly || !edge.typeOnly);
       for (const members2 of findCycles(nodes, edges)) {
         const path = cyclePath(members2, edges);
@@ -27561,8 +27656,8 @@ function evaluateRules(model, compiled = compileRules(model.blueprint)) {
       }
     } else if (rule.kind === "secret-access" && "secrets" in entry) {
       for (const [path, facts] of fileGraph.facts) {
-        const component = membership.fileToComponent.get(path) ?? null;
-        if (matchesFile(entry.allow, path, component)) continue;
+        const component2 = membership.fileToComponent.get(path) ?? null;
+        if (matchesFile(entry.allow, path, component2)) continue;
         for (const ref of facts.envRefs) {
           if (!entry.secrets.some((matcher) => matcher.test(ref.name))) continue;
           push(rule.id, {
@@ -27573,7 +27668,7 @@ function evaluateRules(model, compiled = compileRules(model.blueprint)) {
             title: `${ref.name} may only be read by ${describeSelector(rule.allow)}`,
             message: `${path} reads ${ref.name} at line ${ref.line}, outside the components allowed to hold this secret.`,
             reason: rule.reason,
-            components: component ? [component] : [],
+            components: component2 ? [component2] : [],
             locations: [{ path, line: ref.line }]
           });
         }
@@ -27587,7 +27682,7 @@ function evaluatePolicy(model) {
   const labels = createLabeler(blueprint);
   const violations = [];
   const policy = blueprint.policy;
-  const componentById = new Map(blueprint.components.map((component) => [component.id, component]));
+  const componentById = new Map(blueprint.components.map((component2) => [component2.id, component2]));
   if (policy.undeclaredDependencies !== "off") {
     const declared = new Set(blueprint.dependencies.map((dependency) => `${dependency.from}\0${dependency.to}`));
     for (const edge of componentGraph.edges) {
@@ -27620,32 +27715,32 @@ function evaluatePolicy(model) {
       });
     }
   }
-  for (const component of blueprint.components) {
-    if (component.external || !component.paths.length) continue;
-    const files = membership.componentFiles.get(component.id) ?? [];
+  for (const component2 of blueprint.components) {
+    if (component2.external || !component2.paths.length) continue;
+    const files = membership.componentFiles.get(component2.id) ?? [];
     if (!files.length) {
       violations.push({
-        id: fingerprint("empty-component", component.id),
+        id: fingerprint("empty-component", component2.id),
         kind: "empty-component",
         severity: "warning",
-        title: `Component "${component.name}" matches no files`,
-        message: `None of its paths (${component.paths.join(", ")}) match a file. The globs may be stale after a move or rename.`,
-        components: [component.id],
+        title: `Component "${component2.name}" matches no files`,
+        message: `None of its paths (${component2.paths.join(", ")}) match a file. The globs may be stale after a move or rename.`,
+        components: [component2.id],
         locations: []
       });
       continue;
     }
-    const declared = component.assurance;
+    const declared = component2.assurance;
     if (declared === "tested" || declared === "property-tested" || declared === "formally-verified") {
-      const hasTests = (componentGraph.tests.get(component.id)?.length ?? 0) > 0 || files.some((path) => fileGraph.facts.get(path)?.isTest);
+      const hasTests = (componentGraph.tests.get(component2.id)?.length ?? 0) > 0 || files.some((path) => fileGraph.facts.get(path)?.isTest);
       if (!hasTests) {
         violations.push({
-          id: fingerprint("assurance-drift", component.id),
+          id: fingerprint("assurance-drift", component2.id),
           kind: "assurance-drift",
           severity: "warning",
-          title: `"${component.name}" is declared ${declared} but no tests import it`,
+          title: `"${component2.name}" is declared ${declared} but no tests import it`,
           message: `The blueprint claims assurance level "${declared}", but no test file imports any of its ${plural2(files.length, "file")}.`,
-          components: [component.id],
+          components: [component2.id],
           locations: [{ path: files[0] }]
         });
       }
@@ -27721,7 +27816,7 @@ function authorshipStats(blueprint) {
     derived: facts.filter((fact) => fact.provenance?.source === "derived" && !fact.verified).length,
     agent: facts.filter((fact) => fact.provenance?.source === "agent" && !fact.verified).length,
     verified: facts.filter((fact) => Boolean(fact.verified)).length,
-    componentsWithIntent: blueprint?.components.filter((component) => Boolean(component.intent?.trim())).length ?? 0,
+    componentsWithIntent: blueprint?.components.filter((component2) => Boolean(component2.intent?.trim())).length ?? 0,
     components: blueprint?.components.length ?? 0,
     ratio: humanAuthoredRatio(blueprint)
   };
@@ -27818,14 +27913,25 @@ function ruleReferencedComponents(blueprint) {
     }
   };
   for (const rule of blueprint.rules) {
-    for (const selector of selectorsOf(rule)) {
-      const resolved = resolveSelector(selector, blueprint);
-      for (const component of blueprint.components) {
-        if (resolved.components.has(component.id) || resolved.excludeComponents.has(component.id)) referenced.add(component.id);
+    for (const selector2 of selectorsOf(rule)) {
+      const resolved = resolveSelector(selector2, blueprint);
+      for (const component2 of blueprint.components) {
+        if (resolved.components.has(component2.id) || resolved.excludeComponents.has(component2.id)) referenced.add(component2.id);
       }
     }
   }
   return referenced;
+}
+function ruleSelects(blueprint, rule, id) {
+  if (!rule) return false;
+  const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "secret-access" ? [rule.allow] : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
+  return selectors.some((selector2) => {
+    const resolved = resolveSelector(selector2, blueprint);
+    return resolved.all || resolved.components.has(id);
+  });
+}
+function coveredBySameRules(base, head, fromId, toId) {
+  return base.rules.every((rule) => !ruleSelects(base, rule, fromId) || ruleSelects(head, head.rules.find((candidate) => candidate.id === rule.id), toId));
 }
 function membershipMoves(base, head, files, approved) {
   const constrained = ruleReferencedComponents(base);
@@ -27838,10 +27944,11 @@ function membershipMoves(base, head, files, approved) {
     if (!from || !constrained.has(from)) continue;
     const to = after.get(path) ?? "(unmapped)";
     if (to === from) continue;
+    if (to !== "(unmapped)" && coveredBySameRules(base, head, from, to)) continue;
     const key = `${from}\0${to}`;
     moves.set(key, [...moves.get(key) ?? [], path]);
   }
-  const names = new Map([...base.components, ...head.components].map((component) => [component.id, component.name]));
+  const names = new Map([...base.components, ...head.components].map((component2) => [component2.id, component2.name]));
   return [...moves.entries()].map(([key, paths]) => {
     const [from, to] = key.split("\0");
     const summary = `${plural2(paths.length, "file")} moved out of "${names.get(from) ?? from}" (constrained by rules) into ${to === "(unmapped)" ? "no component" : `"${names.get(to) ?? to}"`}`;
@@ -27876,9 +27983,9 @@ function membershipChanged(base, head) {
 function claimedPaths(base, head, alreadyReported, approved) {
   const constrained = ruleReferencedComponents(base);
   if (!constrained.size) return [];
-  const baseById = new Map(base.components.map((component) => [component.id, component]));
-  const headById = new Map(head.components.map((component) => [component.id, component]));
-  const changed = head.components.filter((component) => membershipChanged(baseById.get(component.id), component));
+  const baseById = new Map(base.components.map((component2) => [component2.id, component2]));
+  const headById = new Map(head.components.map((component2) => [component2.id, component2]));
+  const changed = head.components.filter((component2) => membershipChanged(baseById.get(component2.id), component2));
   if (!changed.length) return [];
   const constrainedPrefixes = [...constrained].flatMap((id) => (baseById.get(id)?.paths ?? []).map(literalPrefix));
   const probes = /* @__PURE__ */ new Set();
@@ -27890,30 +27997,24 @@ function claimedPaths(base, head, alreadyReported, approved) {
       if (prefix !== own2 && prefix.startsWith(own2)) probes.add(`${prefix}${probePathFor(normalized.slice(own2.length))}`);
     }
   };
-  for (const component of changed) for (const glob of component.paths) addProbes(glob);
+  for (const component2 of changed) for (const glob of component2.paths) addProbes(glob);
   for (const id of constrained) for (const glob of baseById.get(id)?.paths ?? []) addProbes(glob);
-  const list = [...probes];
-  const before = assignComponents(list, base).fileToComponent;
-  const after = assignComponents(list, head).fileToComponent;
+  const list2 = [...probes];
+  const before = assignComponents(list2, base).fileToComponent;
+  const after = assignComponents(list2, head).fileToComponent;
   const moves = /* @__PURE__ */ new Map();
-  for (const probe of list) {
+  for (const probe of list2) {
     const from = before.get(probe);
     const to = after.get(probe);
     if (!from || !to || to === from || !constrained.has(from)) continue;
     const key = `${from}\0${to}`;
     moves.set(key, [...moves.get(key) ?? [], probe]);
   }
-  const selects = (blueprint, rule, id) => {
-    if (!rule) return false;
-    const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "secret-access" ? [rule.allow] : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
-    return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
-  };
   const findings = [];
   for (const [key, probePaths] of moves) {
     const [targetId, ownerId] = key.split("\0");
     if (alreadyReported.has(key)) continue;
-    const coveredBySameRules = base.rules.every((rule) => !selects(base, rule, targetId) || selects(head, head.rules.find((candidate) => candidate.id === rule.id), ownerId));
-    if (coveredBySameRules) continue;
+    if (coveredBySameRules(base, head, targetId, ownerId)) continue;
     const owner = headById.get(ownerId);
     const target = baseById.get(targetId);
     const globs = (owner?.paths ?? []).filter((glob) => probePaths.some((probe) => compileGlob(glob).test(probe)));
@@ -28121,15 +28222,15 @@ function runCheck(input2) {
         const owner = componentForPath(path, judge);
         if (owner) touched.add(owner);
       }
-      for (const component of judge.components) {
-        if (!component.verified || !touched.has(component.id)) continue;
+      for (const component2 of judge.components) {
+        if (!component2.verified || !touched.has(component2.id)) continue;
         add([{
-          id: fingerprint("stale-verification", component.id, component.verified.commit, component.verified.at),
+          id: fingerprint("stale-verification", component2.id, component2.verified.commit, component2.verified.at),
           kind: "stale-verification",
           severity: "info",
-          title: `Sign-off on "${component.name}" is now stale`,
-          message: `${component.verified.by} verified this component${component.verified.commit ? ` at ${component.verified.commit.slice(0, 10)}` : ""} on ${component.verified.at}. This change touches it; re-verify with \`rassam verify ${component.id}\`.`,
-          components: [component.id],
+          title: `Sign-off on "${component2.name}" is now stale`,
+          message: `${component2.verified.by} verified this component${component2.verified.commit ? ` at ${component2.verified.commit.slice(0, 10)}` : ""} on ${component2.verified.at}. This change touches it; re-verify with \`rassam verify ${component2.id}\`.`,
+          components: [component2.id],
           locations: [{ path: BLUEPRINT_PATH }]
         }]);
       }
@@ -28149,7 +28250,7 @@ function runCheck(input2) {
   const findings = [...unique.values()].sort((left, right) => right.score - left.score || severityRank[left.severity] - severityRank[right.severity] || left.id.localeCompare(right.id));
   const membership = model?.membership;
   const declared = new Set((judge?.dependencies ?? []).map((dependency) => `${dependency.from}\0${dependency.to}`));
-  const componentById = new Map((judge?.components ?? []).map((component) => [component.id, component]));
+  const componentById = new Map((judge?.components ?? []).map((component2) => [component2.id, component2]));
   const componentEdges = model?.componentGraph.edges ?? [];
   const undeclaredEdges = componentEdges.filter((edge) => !declared.has(`${edge.from}\0${edge.to}`) && !componentById.get(edge.to)?.public && componentById.get(edge.from)?.kind !== "test");
   return {
@@ -28259,11 +28360,11 @@ function runShellCommand(command, options) {
       captured += chunk.toString("utf8");
       if (captured.length > CAPTURE_LIMIT) captured = captured.slice(-CAPTURE_LIMIT / 2);
     };
-    const finish = (ok, suffix = "") => {
+    const finish = (ok, suffix2 = "") => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolvePromise({ ok, output: tailBytes(`${captured}${suffix}`.trim(), OUTPUT_TAIL_BYTES) });
+      resolvePromise({ ok, output: tailBytes(`${captured}${suffix2}`.trim(), OUTPUT_TAIL_BYTES) });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -28314,10 +28415,30 @@ function basePathsFor(changes) {
   return [...paths];
 }
 async function loadBaseBlueprint(root, sha) {
-  const text3 = await readFileAtRef(root, sha, BLUEPRINT_PATH);
-  if (text3 === null) return { blueprint: null, state: "missing" };
-  const parsed = parseBlueprintText(text3);
+  const text4 = await readFileAtRef(root, sha, BLUEPRINT_PATH);
+  if (text4 === null) return { blueprint: null, state: "missing" };
+  const parsed = parseBlueprintText(text4);
   return parsed.ok ? { blueprint: parsed.blueprint, state: "ok" } : { blueprint: null, state: "invalid" };
+}
+async function loadBaseSnapshot(context, base) {
+  if (!context.isGit) throw new CliError("Comparing against a base ref needs a git repository");
+  const sha = await mergeBase(context.root, base);
+  const changes = await diffAgainst(context.root, sha);
+  const contents = await readFilesAtRef(context.root, sha, basePathsFor(changes));
+  const byPath = new Map(context.files.map((file2) => [file2.path, file2]));
+  for (const change of changes) {
+    if (change.status === "added") {
+      byPath.delete(change.path);
+      continue;
+    }
+    const path = change.status === "renamed" ? change.previousPath ?? change.path : change.path;
+    if (change.status === "renamed") byPath.delete(change.path);
+    const content = contents.get(path);
+    byPath.set(path, { path, content: content ?? null, size: content === void 0 ? void 0 : Buffer.byteLength(content) });
+  }
+  const files = [...byPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const blueprint = await loadBaseBlueprint(context.root, sha);
+  return { sha, files, blueprint: blueprint.blueprint, blueprintState: blueprint.state };
 }
 async function headIdentity(root, override) {
   const sha = override?.sha ?? await headSha(root) ?? void 0;
@@ -28441,8 +28562,8 @@ function hasApprovalLabel(context, label) {
   const wanted = label.trim().toLowerCase();
   return wanted.length > 0 && context.labels.some((name) => name.trim().toLowerCase() === wanted);
 }
-function truncate(text3, limit, notice) {
-  return text3.length <= limit ? text3 : `${text3.slice(0, limit - notice.length - 2)}
+function truncate(text4, limit, notice) {
+  return text4.length <= limit ? text4 : `${text4.slice(0, limit - notice.length - 2)}
 
 ${notice}`;
 }
@@ -28541,10 +28662,10 @@ function colorEnabled(args, io) {
   if (io.env.NO_COLOR !== void 0 && io.env.NO_COLOR !== "") return false;
   return io.isTTY;
 }
-async function writeOutput(io, file2, text3) {
+async function writeOutput(io, file2, text4) {
   const target = resolve3(io.cwd, file2);
   await mkdir2(dirname3(target), { recursive: true });
-  await writeFile2(target, text3, "utf8");
+  await writeFile2(target, text4, "utf8");
 }
 async function githubBaseRef(context, github, io) {
   if (!github.isPullRequest || !github.baseRef) return void 0;
@@ -28706,7 +28827,7 @@ function ruleSelectors3(rule) {
   }
 }
 function ruleTouchesComponent(rule, blueprint, componentId) {
-  return ruleSelectors3(rule).some((selector) => selectorComponentRefs(selector).includes(componentId) || matchesComponent(resolveSelector(selector, blueprint), componentId));
+  return ruleSelectors3(rule).some((selector2) => selectorComponentRefs(selector2).includes(componentId) || matchesComponent(resolveSelector(selector2, blueprint), componentId));
 }
 function firstLine(value) {
   const line = value?.split(/\r?\n/).map((part) => part.trim()).find(Boolean);
@@ -28720,7 +28841,7 @@ function createWorkspace(files, blueprint, options = {}) {
   const compiled = blueprint ? compileRules(blueprint) : [];
   const labels = createLabeler(blueprint);
   const fileSet = new Set(fileGraph.files);
-  const componentById = new Map((blueprint?.components ?? []).map((component) => [component.id, component]));
+  const componentById = new Map((blueprint?.components ?? []).map((component2) => [component2.id, component2]));
   const declared = new Set((blueprint?.dependencies ?? []).map((dependency) => `${dependency.from}\0${dependency.to}`));
   const componentOf = (path) => {
     const normalized = repoPath(path);
@@ -28802,7 +28923,7 @@ function createWorkspace(files, blueprint, options = {}) {
   const explainPath = (rawPath) => {
     const path = repoPath(rawPath);
     const componentId = componentOf(path);
-    const component = componentId ? componentById.get(componentId) ?? null : null;
+    const component2 = componentId ? componentById.get(componentId) ?? null : null;
     const protectedReasons = protectionFor(path);
     const from = { path, component: componentId };
     const constraints = (blueprint?.rules ?? []).filter((rule) => {
@@ -28810,11 +28931,11 @@ function createWorkspace(files, blueprint, options = {}) {
       if (rule.kind === "secret-access") return true;
       if (rule.kind === "no-cycles") return !rule.scope || componentId !== null && ruleTouchesComponent(rule, blueprint, componentId);
       if (rule.kind === "layers") return rule.layers.some((layer) => {
-        const selector2 = resolveSelector(layer, blueprint);
-        return selector2.paths.some((matcher) => matcher.test(path)) || componentId !== null && matchesComponent(selector2, componentId);
+        const selector3 = resolveSelector(layer, blueprint);
+        return selector3.paths.some((matcher) => matcher.test(path)) || componentId !== null && matchesComponent(selector3, componentId);
       });
-      const selector = resolveSelector(rule.from, blueprint);
-      return selector.paths.some((matcher) => matcher.test(path)) || componentId !== null && matchesComponent(selector, componentId);
+      const selector2 = resolveSelector(rule.from, blueprint);
+      return selector2.paths.some((matcher) => matcher.test(path)) || componentId !== null && matchesComponent(selector2, componentId);
     }).map(toRuleSummary);
     const forbiddenComponents = [];
     const allowedComponents = [];
@@ -28839,10 +28960,10 @@ function createWorkspace(files, blueprint, options = {}) {
     const neighbors = componentId ? observedNeighbors(componentId) : { dependsOn: [], dependents: [] };
     const guidanceParts = [];
     if (!blueprint) guidanceParts.push("No blueprint exists yet; run `rassam init`.");
-    else if (!component) guidanceParts.push("No component owns this path. New code here is not covered by any rule; ask a human which component it belongs to, or propose a path mapping.");
+    else if (!component2) guidanceParts.push("No component owns this path. New code here is not covered by any rule; ask a human which component it belongs to, or propose a path mapping.");
     else {
-      guidanceParts.push(`Owned by "${component.name}" (${component.kind}).`);
-      if (component.intent) guidanceParts.push(`Intent: ${firstLine(component.intent)}`);
+      guidanceParts.push(`Owned by "${component2.name}" (${component2.kind}).`);
+      if (component2.intent) guidanceParts.push(`Intent: ${firstLine(component2.intent)}`);
       if (forbiddenComponents.length) guidanceParts.push(`Must not depend on: ${forbiddenComponents.map((id) => labels.component(id)).join(", ")}.`);
       if (restricted) guidanceParts.push(`May only depend on: ${allowedComponents.map((id) => labels.component(id)).join(", ") || "nothing outside itself"}.`);
       if (forbiddenPackages.length) guidanceParts.push(`Forbidden packages: ${forbiddenPackages.join(", ")}.`);
@@ -28851,16 +28972,16 @@ function createWorkspace(files, blueprint, options = {}) {
     return {
       path,
       exists: fileSet.has(path),
-      component: component ? {
-        id: component.id,
-        name: component.name,
-        kind: component.kind,
-        description: component.description,
-        intent: component.intent,
-        owners: component.owners,
-        assurance: component.assurance,
-        verified: component.verified,
-        external: component.external
+      component: component2 ? {
+        id: component2.id,
+        name: component2.name,
+        kind: component2.kind,
+        description: component2.description,
+        intent: component2.intent,
+        owners: component2.owners,
+        assurance: component2.assurance,
+        verified: component2.verified,
+        external: component2.external
       } : null,
       protected: protectedReasons.length > 0,
       protectedReasons,
@@ -28876,8 +28997,8 @@ function createWorkspace(files, blueprint, options = {}) {
     };
   };
   const componentSummary = (id) => {
-    const component = componentById.get(id);
-    if (!component || !blueprint) return null;
+    const component2 = componentById.get(id);
+    if (!component2 || !blueprint) return null;
     const files2 = membership.componentFiles.get(id) ?? [];
     const neighbors = observedNeighbors(id);
     const merge2 = (observed, declaredIds, side) => {
@@ -28894,7 +29015,7 @@ function createWorkspace(files, blueprint, options = {}) {
       envByName.set(ref.name, entry);
     }
     return {
-      component,
+      component: component2,
       files: files2,
       fileCount: files2.length,
       dependsOn: merge2(neighbors.dependsOn, blueprint.dependencies.filter((dependency) => dependency.from === id).map((dependency) => dependency.to), "to"),
@@ -28909,15 +29030,15 @@ function createWorkspace(files, blueprint, options = {}) {
   };
   const overview = () => ({
     system: blueprint?.system ?? null,
-    components: (blueprint?.components ?? []).map((component) => ({
-      id: component.id,
-      name: component.name,
-      kind: component.kind,
-      external: Boolean(component.external),
-      fileCount: membership.componentFiles.get(component.id)?.length ?? 0,
-      intent: firstLine(component.intent),
-      verified: Boolean(component.verified),
-      assurance: component.assurance ?? "unknown"
+    components: (blueprint?.components ?? []).map((component2) => ({
+      id: component2.id,
+      name: component2.name,
+      kind: component2.kind,
+      external: Boolean(component2.external),
+      fileCount: membership.componentFiles.get(component2.id)?.length ?? 0,
+      intent: firstLine(component2.intent),
+      verified: Boolean(component2.verified),
+      assurance: component2.assurance ?? "unknown"
     })),
     rules: (blueprint?.rules ?? []).map(toRuleSummary),
     invariants: blueprint?.invariants.length ?? 0,
@@ -28948,12 +29069,13 @@ function createWorkspace(files, blueprint, options = {}) {
       if (!observed.has(`${dependency.from}\0${dependency.to}`)) edges.push({ from: dependency.from, to: dependency.to, status: "missing" });
     }
     return {
-      components: blueprint.components.map((component) => ({
-        id: component.id,
-        name: component.name,
-        kind: component.kind,
-        external: Boolean(component.external),
-        findings: findingCounts.get(component.id) ?? 0
+      components: blueprint.components.map((component2) => ({
+        id: component2.id,
+        name: component2.name,
+        kind: component2.kind,
+        external: Boolean(component2.external),
+        findings: findingCounts.get(component2.id) ?? 0,
+        files: membership.componentFiles.get(component2.id)?.length ?? 0
       })),
       edges
     };
@@ -29050,18 +29172,18 @@ function ruleLine(rule) {
       why: ${rule.reason.replace(/\s+/g, " ").trim()}` : "";
   return `[${rule.severity}] ${rule.id} (${rule.kind}${rule.human ? ", human-authored" : ""}): ${rule.summary}${reason}`;
 }
-function indentBlock(text3, pad) {
-  return text3.trim().split("\n").map((line) => `${pad}${line.trimEnd()}`);
+function indentBlock(text4, pad) {
+  return text4.trim().split("\n").map((line) => `${pad}${line.trimEnd()}`);
 }
 function renderExplanation(explanation) {
-  const { component } = explanation;
+  const { component: component2 } = explanation;
   const lines = [`${explanation.path}${explanation.exists ? "" : "  (not in the working tree)"}`, ""];
-  if (component) {
-    const signed = component.verified ? `verified by ${component.verified.by} on ${component.verified.at}` : "not verified by a human";
-    lines.push(`Component: ${component.name} (${component.id}, ${component.kind})`, `  ${signed}${component.assurance ? ` · assurance: ${component.assurance}` : ""}`);
-    if (component.owners?.length) lines.push(`  owners: ${component.owners.join(", ")}`);
-    if (component.intent) lines.push("  intent:", ...indentBlock(component.intent, "    "));
-    else if (component.description) lines.push(...indentBlock(component.description, "  "));
+  if (component2) {
+    const signed = component2.verified ? `verified by ${component2.verified.by} on ${component2.verified.at}` : "not verified by a human";
+    lines.push(`Component: ${component2.name} (${component2.id}, ${component2.kind})`, `  ${signed}${component2.assurance ? ` · assurance: ${component2.assurance}` : ""}`);
+    if (component2.owners?.length) lines.push(`  owners: ${component2.owners.join(", ")}`);
+    if (component2.intent) lines.push("  intent:", ...indentBlock(component2.intent, "    "));
+    else if (component2.description) lines.push(...indentBlock(component2.description, "  "));
     else lines.push("  intent: not written yet");
     lines.push("");
   } else {
@@ -29161,10 +29283,10 @@ var init_query = __esm({
 // src/blueprint/verify.ts
 function stampVerification(blueprint, targetId, verification) {
   const next = blueprintSchema.parse(JSON.parse(JSON.stringify(blueprint)));
-  const component = next.components.find((item) => item.id === targetId);
-  if (component) {
-    component.verified = verification;
-    return { blueprint: next, target: component.name, kind: "component" };
+  const component2 = next.components.find((item) => item.id === targetId);
+  if (component2) {
+    component2.verified = verification;
+    return { blueprint: next, target: component2.name, kind: "component" };
   }
   const rule = next.rules.find((item) => item.id === targetId);
   if (rule) {
@@ -29268,7 +29390,7 @@ function syncBlueprint(existing, files, options = {}) {
     if (unmapped.length) {
       const unmappedSet = new Set(unmapped);
       const draft = deriveBlueprint(files.filter((file2) => unmappedSet.has(file2.path)), { now: provenance.at });
-      const used = new Set(next.components.map((component) => component.id));
+      const used = new Set(next.components.map((component2) => component2.id));
       for (const proposed of draft.components) {
         const candidate = { ...proposed, id: uniqueId2(proposed.id, used), provenance };
         const trial = { ...next, components: [...next.components, candidate] };
@@ -29293,7 +29415,7 @@ function syncBlueprint(existing, files, options = {}) {
   if (options.dependencies !== false) {
     const merged = buildSnapshotModel(files, next);
     const declared = new Set(next.dependencies.map((dependency) => `${dependency.from}\0${dependency.to}`));
-    const byId2 = new Map(next.components.map((component) => [component.id, component]));
+    const byId2 = new Map(next.components.map((component2) => [component2.id, component2]));
     for (const edge of merged.componentGraph.edges) {
       if (declared.has(`${edge.from}\0${edge.to}`)) continue;
       if (byId2.get(edge.from)?.kind === "test" || byId2.get(edge.to)?.public) continue;
@@ -29347,8 +29469,8 @@ async function syncCommand(args, io) {
       lines.push("The blueprint already covers the code: no unclaimed files, no undeclared dependencies.");
     } else {
       lines.push(write ? `Updated ${BLUEPRINT_PATH}:` : `Proposed additions (dry run; use --write to apply):`);
-      for (const component of result.addedComponents) {
-        lines.push(`  + component ${component.id} (${component.kind}): ${component.paths.join(", ")}`);
+      for (const component2 of result.addedComponents) {
+        lines.push(`  + component ${component2.id} (${component2.kind}): ${component2.paths.join(", ")}`);
       }
       for (const dependency of result.addedDependencies) lines.push(`  + dependency ${dependency.from} -> ${dependency.to}`);
       lines.push("", 'Every addition is marked provenance "derived". Review them, write intent for new components,');
@@ -29375,32 +29497,3712 @@ var init_sync2 = __esm({
   }
 });
 
+// src/blueprint/layout.ts
+function countCrossings(segments, position, lowerSize) {
+  if (segments.length < 2) return 0;
+  const sorted = segments.map(([upper, lower]) => [position[upper], position[lower]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const tree = new Array(lowerSize + 1).fill(0);
+  let crossings = 0;
+  let seen = 0;
+  for (const [, lower] of sorted) {
+    let notAfter = 0;
+    for (let index = lower + 1; index > 0; index -= index & -index) notAfter += tree[index];
+    crossings += seen - notAfter;
+    for (let index = lower + 1; index <= lowerSize; index += index & -index) tree[index] += 1;
+    seen += 1;
+  }
+  return crossings;
+}
+function placeInOrder(desired, separation, weight) {
+  const count = desired.length;
+  const offset = new Array(count).fill(0);
+  for (let index = 1; index < count; index += 1) offset[index] = offset[index - 1] + separation[index - 1];
+  const blocks = [];
+  for (let index = 0; index < count; index += 1) {
+    blocks.push({ sum: (desired[index] - offset[index]) * weight[index], weight: weight[index], size: 1 });
+    while (blocks.length > 1) {
+      const last = blocks[blocks.length - 1];
+      const previous = blocks[blocks.length - 2];
+      if (previous.sum / previous.weight <= last.sum / last.weight) break;
+      previous.sum += last.sum;
+      previous.weight += last.weight;
+      previous.size += last.size;
+      blocks.pop();
+    }
+  }
+  const result = [];
+  for (const block of blocks) {
+    const value = block.sum / block.weight;
+    for (let index = 0; index < block.size; index += 1) result.push(value + offset[result.length]);
+  }
+  return result;
+}
+function layoutGraph(nodes, edges, options = {}) {
+  const direction = options.direction === "TB" ? "TB" : "LR";
+  const horizontal = direction === "LR";
+  const nodeGap = finite(options.nodeGap, 32, 0, 1e3);
+  const layerGap = finite(options.layerGap, 96, 0, 2e3);
+  const padding = finite(options.padding, 24, 0, 1e3);
+  const maxPerLayer = Math.round(finite(options.maxPerLayer, 6, 1, 1e3));
+  const sweeps = Math.round(finite(options.sweeps, 4, 0, 12));
+  const byId2 = /* @__PURE__ */ new Map();
+  for (const node2 of nodes) if (!byId2.has(node2.id)) byId2.set(node2.id, node2);
+  const ids = [...byId2.keys()].sort(compare3);
+  const indexOf = new Map(ids.map((id, index) => [id, index]));
+  const real = ids.length;
+  const input2 = ids.map((id) => byId2.get(id));
+  const sizeOf = (index, axis) => {
+    const node2 = input2[index];
+    const value = axis === "main" === horizontal ? node2.width : node2.height;
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+  const seenEdges = /* @__PURE__ */ new Set();
+  const pairs = [];
+  for (const edge of edges) {
+    const from = indexOf.get(edge.from);
+    const to = indexOf.get(edge.to);
+    if (from === void 0 || to === void 0 || from === to) continue;
+    const key = `${from}:${to}`;
+    if (seenEdges.has(key)) continue;
+    seenEdges.add(key);
+    pairs.push({ from, to });
+  }
+  pairs.sort((a, b) => a.from - b.from || a.to - b.to);
+  const connected = new Array(real).fill(false);
+  for (const pair of pairs) {
+    connected[pair.from] = true;
+    connected[pair.to] = true;
+  }
+  const outgoing = Array.from({ length: real }, () => []);
+  pairs.forEach((pair, edgeIndex) => outgoing[pair.from].push(edgeIndex));
+  const reversed = new Array(pairs.length).fill(false);
+  const state = new Uint8Array(real);
+  for (let root = 0; root < real; root += 1) {
+    if (state[root] !== 0) continue;
+    const stack = [{ node: root, next: 0 }];
+    state[root] = 1;
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      if (frame.next >= outgoing[frame.node].length) {
+        state[frame.node] = 2;
+        stack.pop();
+        continue;
+      }
+      const edgeIndex = outgoing[frame.node][frame.next];
+      frame.next += 1;
+      const target = pairs[edgeIndex].to;
+      if (state[target] === 1) reversed[edgeIndex] = true;
+      else if (state[target] === 0) {
+        state[target] = 1;
+        stack.push({ node: target, next: 0 });
+      }
+    }
+  }
+  const dag = pairs.map((pair, edgeIndex) => reversed[edgeIndex] ? { upper: pair.to, lower: pair.from } : { upper: pair.from, lower: pair.to });
+  const successors = Array.from({ length: real }, () => []);
+  const indegree = new Array(real).fill(0);
+  for (const edge of dag) {
+    successors[edge.upper].push(edge.lower);
+    indegree[edge.lower] += 1;
+  }
+  const layer = new Array(real).fill(0);
+  const remaining = indegree.slice();
+  const queue = [];
+  for (let index = 0; index < real; index += 1) if (remaining[index] === 0) queue.push(index);
+  for (let head = 0; head < queue.length; head += 1) {
+    const node2 = queue[head];
+    for (const next of successors[node2]) {
+      if (layer[next] < layer[node2] + 1) layer[next] = layer[node2] + 1;
+      remaining[next] -= 1;
+      if (remaining[next] === 0) queue.push(next);
+    }
+  }
+  for (let index = 0; index < real; index += 1) {
+    if (indegree[index] !== 0 || successors[index].length === 0) continue;
+    let nearest = Infinity;
+    for (const next of successors[index]) nearest = Math.min(nearest, layer[next]);
+    layer[index] = nearest - 1;
+  }
+  const groupOf = (index) => input2[index].group ?? "";
+  const byGroupThenId = (a, b) => compare3(groupOf(a), groupOf(b)) || a - b;
+  const logical = /* @__PURE__ */ new Map();
+  for (let index = 0; index < real; index += 1) {
+    if (!connected[index]) continue;
+    const members2 = logical.get(layer[index]);
+    if (members2) members2.push(index);
+    else logical.set(layer[index], [index]);
+  }
+  const rank = new Array(real).fill(-1);
+  let rankCount = 0;
+  for (const key of [...logical.keys()].sort((a, b) => a - b)) {
+    const members2 = logical.get(key);
+    const parts = Math.ceil(members2.length / maxPerLayer);
+    const perPart = Math.ceil(members2.length / parts);
+    members2.sort((a, b) => Number(successors[a].length > 0) - Number(successors[b].length > 0) || byGroupThenId(a, b));
+    members2.forEach((member, position2) => {
+      rank[member] = rankCount + Math.floor(position2 / perPart);
+    });
+    rankCount += parts;
+  }
+  const nodeRank = rank.slice();
+  const group = input2.map((node2, index) => node2.group !== void 0 ? `g:${node2.group}` : `n:${index}`);
+  const chains = [];
+  dag.forEach((edge, edgeIndex) => {
+    const chain = [edge.upper];
+    for (let at = rank[edge.upper] + 1; at < rank[edge.lower]; at += 1) {
+      const waypoint = nodeRank.length;
+      nodeRank.push(at);
+      group.push(`w:${edgeIndex}:${at}`);
+      chain.push(waypoint);
+    }
+    chain.push(edge.lower);
+    chains.push(chain);
+  });
+  const total = nodeRank.length;
+  const isWaypoint = (index) => index >= real;
+  const above = Array.from({ length: total }, () => []);
+  const below = Array.from({ length: total }, () => []);
+  const segments = Array.from({ length: Math.max(0, rankCount - 1) }, () => []);
+  for (const chain of chains) {
+    for (let step = 0; step + 1 < chain.length; step += 1) {
+      const upper = chain[step];
+      const lower = chain[step + 1];
+      below[upper].push(lower);
+      above[lower].push(upper);
+      segments[nodeRank[upper]].push([upper, lower]);
+    }
+  }
+  let order = Array.from({ length: rankCount }, () => []);
+  for (let index = 0; index < total; index += 1) if (nodeRank[index] >= 0) order[nodeRank[index]].push(index);
+  for (const members2 of order) members2.sort((a, b) => Number(isWaypoint(a)) - Number(isWaypoint(b)) || (isWaypoint(a) ? a - b : byGroupThenId(a, b)));
+  const position = new Array(total).fill(0);
+  const reindex = () => {
+    for (const members2 of order) members2.forEach((member, at) => position[member] = at);
+  };
+  reindex();
+  const reorder = (at, neighbours) => {
+    const members2 = order[at];
+    const barycenter = /* @__PURE__ */ new Map();
+    const groupSum = /* @__PURE__ */ new Map();
+    for (const member of members2) {
+      const around = neighbours[member];
+      let value = position[member];
+      if (around.length) {
+        value = 0;
+        for (const other of around) value += position[other];
+        value /= around.length;
+      }
+      barycenter.set(member, value);
+      const entry = groupSum.get(group[member]);
+      if (entry) {
+        entry.sum += value;
+        entry.count += 1;
+      } else groupSum.set(group[member], { sum: value, count: 1 });
+    }
+    const groupCenter = (member) => {
+      const entry = groupSum.get(group[member]);
+      return entry.sum / entry.count;
+    };
+    members2.sort(
+      (a, b) => groupCenter(a) - groupCenter(b) || compare3(group[a], group[b]) || barycenter.get(a) - barycenter.get(b) || position[a] - position[b] || a - b
+    );
+    members2.forEach((member, slot) => position[member] = slot);
+  };
+  const crossings = () => {
+    let sum = 0;
+    for (let at = 0; at + 1 < rankCount; at += 1) sum += countCrossings(segments[at], position, order[at + 1].length);
+    return sum;
+  };
+  for (let at = 1; at < rankCount; at += 1) reorder(at, above);
+  let best = order.map((members2) => members2.slice());
+  let bestCrossings = crossings();
+  for (let sweep = 0; sweep < sweeps && bestCrossings > 0; sweep += 1) {
+    if (sweep % 2 === 0) for (let at = rankCount - 2; at >= 0; at -= 1) reorder(at, below);
+    else for (let at = 1; at < rankCount; at += 1) reorder(at, above);
+    const current = crossings();
+    if (current < bestCrossings) {
+      bestCrossings = current;
+      best = order.map((members2) => members2.slice());
+    }
+  }
+  order = best;
+  reindex();
+  const crossSize = (member) => isWaypoint(member) ? 0 : sizeOf(member, "cross");
+  const gapBetween = (a, b) => {
+    const waypoints = Number(isWaypoint(a)) + Number(isWaypoint(b));
+    return waypoints === 2 ? Math.max(10, nodeGap * 0.4) : waypoints === 1 ? Math.max(12, nodeGap * 0.6) : nodeGap;
+  };
+  const separations = order.map(
+    (members2) => members2.slice(0, -1).map((member, at) => (crossSize(member) + crossSize(members2[at + 1])) / 2 + gapBetween(member, members2[at + 1]))
+  );
+  const weights = order.map((members2) => members2.map((member) => isWaypoint(member) ? 8 : 1));
+  const center = new Array(total).fill(0);
+  order.forEach((members2, at) => {
+    const packed = placeInOrder(members2.map(() => 0), separations[at], weights[at]);
+    const span = packed.length ? packed[packed.length - 1] : 0;
+    members2.forEach((member, slot) => center[member] = packed[slot] - span / 2);
+  });
+  const align = (at, neighbours) => {
+    const members2 = order[at];
+    const desired = members2.map((member) => {
+      const around = neighbours(member);
+      if (!around.length) return center[member];
+      let sum = 0;
+      for (const other of around) sum += center[other];
+      return sum / around.length;
+    });
+    const placed = placeInOrder(desired, separations[at], weights[at]);
+    members2.forEach((member, slot) => center[member] = placed[slot]);
+  };
+  const both = (member) => above[member].concat(below[member]);
+  for (let pass = 0; pass < 6; pass += 1) {
+    for (let at = 1; at < rankCount; at += 1) align(at, (member) => above[member]);
+    for (let at = rankCount - 2; at >= 0; at -= 1) align(at, (member) => below[member]);
+  }
+  for (let pass = 0; pass < 4; pass += 1) for (let at = 0; at < rankCount; at += 1) align(at, both);
+  const thickness = order.map((members2) => members2.reduce((max, member) => isWaypoint(member) ? max : Math.max(max, sizeOf(member, "main")), 0));
+  const start = [];
+  let cursor = padding;
+  for (let at = 0; at < rankCount; at += 1) {
+    start.push(cursor);
+    cursor += thickness[at] + layerGap;
+  }
+  const mainEnd = rankCount ? cursor - layerGap : padding;
+  let crossMin = Infinity;
+  let crossMax = -Infinity;
+  for (let member = 0; member < total; member += 1) {
+    if (nodeRank[member] < 0) continue;
+    crossMin = Math.min(crossMin, center[member] - crossSize(member) / 2);
+    crossMax = Math.max(crossMax, center[member] + crossSize(member) / 2);
+  }
+  const shift = rankCount ? padding - crossMin : 0;
+  const crossEnd = rankCount ? crossMax + shift : padding;
+  const round = (value) => Math.round(value * 100) / 100;
+  const toPoint = (main2, cross) => horizontal ? { x: round(main2), y: round(cross) } : { x: round(cross), y: round(main2) };
+  const result = /* @__PURE__ */ new Map();
+  const mainStart = new Array(real).fill(0);
+  for (let at = 0; at < rankCount; at += 1) {
+    let slot = 0;
+    for (const member of order[at]) {
+      if (isWaypoint(member)) continue;
+      mainStart[member] = start[at] + (thickness[at] - sizeOf(member, "main")) / 2;
+      const corner = toPoint(mainStart[member], center[member] + shift - crossSize(member) / 2);
+      result.set(ids[member], { x: corner.x, y: corner.y, width: input2[member].width, height: input2[member].height, layer: at, order: slot });
+      slot += 1;
+    }
+  }
+  let width = horizontal ? mainEnd : crossEnd;
+  let height = horizontal ? crossEnd : mainEnd;
+  const isolated = [];
+  for (let node2 = 0; node2 < real; node2 += 1) if (!connected[node2]) isolated.push(node2);
+  if (isolated.length) {
+    isolated.sort(byGroupThenId);
+    const cellWidth = Math.max(...isolated.map((node2) => input2[node2].width || 0));
+    const cellHeight = Math.max(...isolated.map((node2) => input2[node2].height || 0));
+    const gap = nodeGap;
+    let columns;
+    if (rankCount) {
+      const available = Math.max(width - padding, 3 * cellWidth + 2 * gap);
+      columns = Math.floor((available + gap) / (cellWidth + gap));
+    } else {
+      columns = Math.ceil(Math.sqrt(1.6 * isolated.length * (cellHeight + gap) / (cellWidth + gap)));
+    }
+    columns = Math.max(1, Math.min(isolated.length, columns));
+    const top = rankCount ? height + Math.max(nodeGap, layerGap / 2) : padding;
+    isolated.forEach((node2, at) => {
+      const column = at % columns;
+      const row = Math.floor(at / columns);
+      const cellX = padding + column * (cellWidth + gap);
+      const cellY = top + row * (cellHeight + gap);
+      result.set(ids[node2], {
+        x: round(cellX + (cellWidth - input2[node2].width) / 2),
+        y: round(cellY + (cellHeight - input2[node2].height) / 2),
+        width: input2[node2].width,
+        height: input2[node2].height,
+        layer: rankCount + row,
+        order: column
+      });
+    });
+    const rows = Math.ceil(isolated.length / columns);
+    width = Math.max(width, padding + columns * cellWidth + (columns - 1) * gap);
+    height = top + rows * cellHeight + (rows - 1) * gap;
+  }
+  const routes = pairs.map((pair, edgeIndex) => {
+    const chain = chains[edgeIndex];
+    const points = [];
+    chain.forEach((member, step) => {
+      const cross = center[member] + shift;
+      if (step === 0) points.push(toPoint(mainStart[member] + sizeOf(member, "main"), cross));
+      else if (step === chain.length - 1) points.push(toPoint(mainStart[member], cross));
+      else {
+        const at = nodeRank[member];
+        points.push(toPoint(start[at], cross));
+        if (thickness[at] > 0) points.push(toPoint(start[at] + thickness[at], cross));
+      }
+    });
+    if (reversed[edgeIndex]) points.reverse();
+    return { from: ids[pair.from], to: ids[pair.to], reversed: reversed[edgeIndex], points };
+  });
+  return { nodes: result, edges: routes, width: round(width + padding), height: round(height + padding) };
+}
+var compare3, finite;
+var init_layout = __esm({
+  "src/blueprint/layout.ts"() {
+    "use strict";
+    compare3 = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    finite = (value, fallback, min, max) => typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+  }
+});
+
+// src/blueprint/status.ts
+function issuePath2(path) {
+  return path.map((segment) => typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`).join("").replace(/^\./, "") || "(root)";
+}
+function parseSystemStatus(text4) {
+  let value;
+  try {
+    value = JSON.parse(text4.charCodeAt(0) === 65279 ? text4.slice(1) : text4);
+  } catch (error62) {
+    return { ok: false, issues: [{ path: "(root)", message: `Invalid JSON: ${error62 instanceof Error ? error62.message : String(error62)}` }] };
+  }
+  const result = systemStatusSchema.safeParse(value);
+  if (!result.success) {
+    return { ok: false, issues: result.error.issues.map((issue2) => ({ path: issuePath2(issue2.path), message: issue2.message })) };
+  }
+  return { ok: true, status: result.data, issues: [] };
+}
+function serializeSystemStatus(status) {
+  const components = {};
+  for (const id of Object.keys(status.components).sort()) {
+    const entry = status.components[id];
+    const ordered2 = {};
+    for (const key of COMPONENT_KEY_ORDER) if (entry[key] !== void 0) ordered2[key] = entry[key];
+    components[id] = ordered2;
+  }
+  const ordered = { version: status.version, checkedAt: status.checkedAt };
+  if (status.commit !== void 0) ordered.commit = status.commit;
+  ordered.components = components;
+  return `${JSON.stringify(ordered, null, 2)}
+`;
+}
+function overallStatus(counts) {
+  if (counts.down > 0) return "outage";
+  if (counts.degraded > 0) return "degraded";
+  return counts.up > 0 ? "operational" : "unknown";
+}
+function summarizeStatus(status, blueprint) {
+  const summary = { up: 0, degraded: 0, down: 0, unknown: 0, monitored: 0, overall: "unknown" };
+  for (const component2 of blueprint?.components ?? []) {
+    if (!component2.runtime) continue;
+    summary.monitored += 1;
+    const entry = status?.components[component2.id];
+    summary[entry?.state ?? "unknown"] += 1;
+  }
+  summary.overall = overallStatus(summary);
+  return summary;
+}
+function isStale(status, now, maxAgeMinutes = 30) {
+  const checked = Date.parse(status.checkedAt);
+  const current = now instanceof Date ? now.getTime() : typeof now === "number" ? now : Date.parse(now);
+  if (!Number.isFinite(checked) || !Number.isFinite(current)) return true;
+  return Math.abs(current - checked) > maxAgeMinutes * 6e4;
+}
+var STATUS_VERSION, STATUS_PATH, componentStateSchema, statusSourceSchema, timestampSchema2, componentStatusSchema, systemStatusSchema, COMPONENT_KEY_ORDER;
+var init_status = __esm({
+  "src/blueprint/status.ts"() {
+    "use strict";
+    init_zod();
+    init_schema();
+    STATUS_VERSION = 1;
+    STATUS_PATH = ".rassam/status.json";
+    componentStateSchema = external_exports.enum(["up", "degraded", "down", "unknown"]);
+    statusSourceSchema = external_exports.enum(["health-check", "deployment", "workflow", "manual"]);
+    timestampSchema2 = external_exports.string().trim().min(4).max(40);
+    componentStatusSchema = external_exports.object({
+      state: componentStateSchema,
+      source: statusSourceSchema,
+      detail: external_exports.string().max(300).optional(),
+      latencyMs: external_exports.number().min(0).max(36e5).optional(),
+      url: external_exports.string().trim().max(500).optional(),
+      checkedAt: timestampSchema2.optional()
+    }).strict();
+    systemStatusSchema = external_exports.object({
+      version: external_exports.literal(STATUS_VERSION),
+      /** ISO-8601 time of the probe run. */
+      checkedAt: timestampSchema2,
+      commit: external_exports.string().trim().max(64).optional(),
+      components: external_exports.record(blueprintIdSchema, componentStatusSchema)
+    }).strict();
+    COMPONENT_KEY_ORDER = ["state", "source", "detail", "latencyMs", "url", "checkedAt"];
+  }
+});
+
+// src/blueprint/diagram.ts
+function escapeXml(value) {
+  let out = "";
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === 9 || code === 10 || code === 13) out += " ";
+    else if (code < 32 || code >= 127 && code <= 159 || code >= 55296 && code <= 57343 || code === 65534 || code === 65535) continue;
+    else if (char === "&") out += "&amp;";
+    else if (char === "<") out += "&lt;";
+    else if (char === ">") out += "&gt;";
+    else if (char === '"') out += "&quot;";
+    else if (char === "'") out += "&#39;";
+    else out += char;
+  }
+  return out;
+}
+function charEm(char) {
+  const code = char.codePointAt(0);
+  if (code >= 126976) return 1.2;
+  if (code >= 11904) return 1.02;
+  if (char === "…" || char === "—") return 1;
+  if (NARROW.has(char)) return 0.32;
+  if (SLIM.has(char)) return 0.4;
+  if (WIDE.has(char)) return 0.95;
+  if (code >= 65 && code <= 90) return 0.74;
+  if (char === "w") return 0.76;
+  if (code >= 48 && code <= 57) return 0.58;
+  if (code < 128) return 0.57;
+  return 0.64;
+}
+function estimateTextWidth(text4, fontSize, fontWeight = 400) {
+  let em = 0;
+  for (const char of text4) em += charEm(char);
+  return em * fontSize * (fontWeight >= 600 ? 1.07 : 1);
+}
+function truncateText(text4, maxWidth, fontSize, fontWeight = 400) {
+  const clean = text4.replace(/\s+/g, " ").trim();
+  if (estimateTextWidth(clean, fontSize, fontWeight) <= maxWidth) return clean;
+  const chars = Array.from(clean);
+  for (let length = chars.length - 1; length > 0; length -= 1) {
+    const candidate = `${chars.slice(0, length).join("").trimEnd()}…`;
+    if (estimateTextWidth(candidate, fontSize, fontWeight) <= maxWidth) return candidate;
+  }
+  return estimateTextWidth("…", fontSize, fontWeight) <= maxWidth ? "…" : "";
+}
+function n(value) {
+  const rounded = Math.round(value * 100) / 100;
+  return Object.is(rounded, -0) ? "0" : String(rounded);
+}
+function text(x, y, content, style) {
+  if (!content) return "";
+  const weight = style.weight && style.weight !== 400 ? ` font-weight="${style.weight}"` : "";
+  const anchor2 = style.anchor && style.anchor !== "start" ? ` text-anchor="${style.anchor}"` : "";
+  return `<text x="${n(x)}" y="${n(y)}" font-size="${n(style.size)}"${weight}${anchor2} fill="${style.fill}"${style.extra ?? ""}>${escapeXml(content)}</text>`;
+}
+function stateShape(state, cx, cy, palette) {
+  switch (state) {
+    case "up":
+      return `<circle data-state="up" cx="${n(cx)}" cy="${n(cy)}" r="4.5" fill="${palette.ok}"/>`;
+    case "degraded":
+      return `<path data-state="degraded" d="M${n(cx)} ${n(cy - 5)}L${n(cx + 5.4)} ${n(cy + 4.2)}L${n(cx - 5.4)} ${n(cy + 4.2)}Z" fill="${palette.warn}"/>`;
+    case "down":
+      return `<rect data-state="down" x="${n(cx - 4.3)}" y="${n(cy - 4.3)}" width="8.6" height="8.6" rx="1.5" fill="${palette.error}"/>`;
+    case "unknown":
+      return `<circle data-state="unknown" cx="${n(cx)}" cy="${n(cy)}" r="3.8" fill="none" stroke="${palette.muted}" stroke-width="1.5"/>`;
+  }
+}
+function stateTextColor(state, palette) {
+  return state === "up" ? palette.okText : state === "degraded" ? palette.warnText : state === "down" ? palette.errorText : palette.muted;
+}
+function checkMark(x, y, color) {
+  return `<path d="M${n(x)} ${n(y)}l2.8 2.8l5.2 -6.2" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+function pill(label, tone, icon) {
+  const size = 12;
+  const labelWidth = estimateTextWidth(label, size, 600);
+  const iconWidth = icon ? 16 : 0;
+  const width = Math.ceil(labelWidth + iconWidth + 24);
+  return {
+    width,
+    svg: (x, y) => `<rect x="${n(x)}" y="${n(y)}" width="${width}" height="${PILL_HEIGHT}" rx="13" fill="${tone.line}" fill-opacity="0.1" stroke="${tone.line}" stroke-opacity="0.4"/>` + (icon ? icon(x + 17, y + PILL_HEIGHT / 2) : "") + text(x + 12 + iconWidth, y + 17.2, label, { size, weight: 600, fill: tone.text })
+  };
+}
+function edgeStroke(status, palette) {
+  switch (status) {
+    case "declared":
+      return { color: palette.edge, label: palette.muted, attrs: ' stroke-width="1.4"' };
+    case "undeclared":
+      return { color: palette.warn, label: palette.warnText, attrs: ' stroke-width="1.5" stroke-dasharray="6 4"' };
+    case "forbidden":
+      return { color: palette.error, label: palette.errorText, attrs: ' stroke-width="2.5"' };
+    case "missing":
+      return { color: palette.edge, label: palette.muted, attrs: ' stroke-width="1.6" stroke-dasharray="0.1 4.5" stroke-linecap="round"' };
+  }
+}
+function routePath(points, horizontal) {
+  let d = `M${n(points[0].x)} ${n(points[0].y)}`;
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1];
+    const b = points[index];
+    if (horizontal ? Math.abs(a.y - b.y) < 0.01 : Math.abs(a.x - b.x) < 0.01) d += `L${n(b.x)} ${n(b.y)}`;
+    else if (horizontal) {
+      const half = (b.x - a.x) / 2;
+      d += `C${n(a.x + half)} ${n(a.y)} ${n(b.x - half)} ${n(b.y)} ${n(b.x)} ${n(b.y)}`;
+    } else {
+      const half = (b.y - a.y) / 2;
+      d += `C${n(a.x)} ${n(a.y + half)} ${n(b.x)} ${n(b.y - half)} ${n(b.x)} ${n(b.y)}`;
+    }
+  }
+  return d;
+}
+function renderCard(card, box, palette) {
+  const inner = CARD_WIDTH - CARD_PAD * 2;
+  const removed = card.change === "removed";
+  const parts = [];
+  const stroke = card.change === "added" ? palette.ok : removed ? palette.error : palette.border;
+  const strokeWidth = card.change === "added" ? 2 : 1;
+  const dash = card.external || removed ? ' stroke-dasharray="5 4"' : "";
+  parts.push(
+    `<rect x="0.5" y="0.5" width="${n(box.width - 1)}" height="${n(box.height - 1)}" rx="12" fill="${palette.card}" stroke="${stroke}" stroke-width="${strokeWidth}"${dash}/>`
+  );
+  let nameRoom = inner;
+  if (card.findings > 0) {
+    const label = card.findings > 99 ? "99+" : String(card.findings);
+    const width = Math.max(20, Math.ceil(estimateTextWidth(label, 10.5, 700) + 12));
+    const x = CARD_WIDTH - CARD_PAD - width;
+    parts.push(
+      `<rect data-badge="violations" x="${n(x)}" y="11" width="${width}" height="18" rx="9" fill="${palette.error}"/>` + text(x + width / 2, 23.8, label, { size: 10.5, weight: 700, fill: palette.onError, anchor: "middle" })
+    );
+    nameRoom -= width + 8;
+  }
+  parts.push(
+    text(CARD_PAD, 25, truncateText(card.name, nameRoom, 13.5, 600), {
+      size: 13.5,
+      weight: 600,
+      fill: palette.text,
+      extra: removed ? ' text-decoration="line-through"' : ""
+    })
+  );
+  const facts = [card.external ? "external" : "", card.kind && card.kind !== "default" ? card.kind : card.external ? "" : "component"].filter(Boolean);
+  if (card.files !== null && !card.external) facts.push(plural2(card.files, "file"));
+  let factsRoom = inner;
+  if (card.shared) {
+    const label = "shared by all";
+    const width = Math.ceil(estimateTextWidth(label, 9.5) + 12);
+    const x = CARD_WIDTH - CARD_PAD - width;
+    parts.push(
+      `<rect x="${n(x)}" y="32.5" width="${width}" height="15" rx="7.5" fill="${palette.surface}" stroke="${palette.border}"/>` + text(x + width / 2, 43.2, label, { size: 9.5, fill: palette.muted, anchor: "middle", extra: ' data-tag="shared"' })
+    );
+    factsRoom -= width + 6;
+  }
+  parts.push(text(CARD_PAD, 43, truncateText(facts.join(" · "), factsRoom, 11), { size: 11, fill: palette.muted }));
+  let markWidth = 0;
+  if (card.mark) {
+    const label = card.mark;
+    const labelWidth = estimateTextWidth(label, 10.5);
+    markWidth = labelWidth + (card.mark === "verified" ? 14 : 0);
+    if (card.mark === "verified") parts.push(checkMark(CARD_WIDTH - CARD_PAD - labelWidth - 13, 58.4, palette.ok));
+    parts.push(
+      text(CARD_WIDTH - CARD_PAD, 62, label, { size: 10.5, fill: card.mark === "verified" ? palette.okText : palette.muted, anchor: "end", extra: ` data-mark="${card.mark}"` })
+    );
+  }
+  if (card.state) {
+    parts.push(stateShape(card.state, CARD_PAD + 5, 58.2, palette));
+    const room = inner - 16 - (markWidth ? markWidth + 10 : 0);
+    parts.push(text(CARD_PAD + 16, 62, truncateText(STATE_LABEL[card.state], room, 11, 600), { size: 11, weight: 600, fill: stateTextColor(card.state, palette) }));
+  }
+  if (card.change) {
+    const label = card.change === "added" ? "+ new" : "removed";
+    const color = card.change === "added" ? palette.ok : palette.error;
+    const width = Math.ceil(estimateTextWidth(label, 10, 600) + 14);
+    const x = CARD_WIDTH - CARD_PAD - width;
+    parts.push(
+      `<rect x="${n(x)}" y="-9" width="${width}" height="18" rx="9" fill="${palette.surface}" stroke="${color}" stroke-width="1.2"/>` + text(x + width / 2, 3.6, label, {
+        size: 10,
+        weight: 600,
+        fill: card.change === "added" ? palette.okText : palette.errorText,
+        anchor: "middle",
+        extra: ` data-change="${card.change}"`
+      })
+    );
+  }
+  const opacity = removed ? ' opacity="0.62"' : "";
+  return `<g data-component="${escapeXml(card.id)}" transform="translate(${n(box.x)} ${n(box.y)})"${opacity}>${parts.join("")}</g>`;
+}
+function formatTime(value) {
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(value.trim());
+  if (!match) return value.trim().slice(0, 40);
+  const zone = !match[3] ? "" : match[3] === "Z" || /^[+-]00:?00$/.test(match[3]) ? " UTC" : ` ${match[3]}`;
+  return `${match[1]} ${match[2]}${zone}`;
+}
+function violationText(findings) {
+  const errors = Math.max(0, Math.floor(findings.errors) || 0);
+  const warnings = Math.max(0, Math.floor(findings.warnings) || 0);
+  if (errors + warnings === 0) return "0 violations";
+  return [errors ? plural2(errors, "error") : "", warnings ? plural2(warnings, "warning") : ""].filter(Boolean).join(" · ");
+}
+function chooseLayout(nodes, edges, direction) {
+  const run = (dir) => layoutGraph(nodes, edges, dir === "LR" ? { direction: dir, nodeGap: 30, layerGap: 124, padding: 0, maxPerLayer: 6 } : { direction: dir, nodeGap: 40, layerGap: 88, padding: 0, maxPerLayer: 5 });
+  if (direction) return { layout: run(direction), direction };
+  const lr = run("LR");
+  const tb = run("TB");
+  const score = (layout) => Math.abs(Math.log(Math.max(layout.width, MIN_CONTENT_WIDTH) / Math.max(layout.height, 1) / 1.5));
+  return score(tb) < score(lr) - 1e-9 ? { layout: tb, direction: "TB" } : { layout: lr, direction: "LR" };
+}
+function renderSystemDiagram(input2, options = {}) {
+  const theme = options.theme === "dark" ? "dark" : "light";
+  const palette = DIAGRAM_PALETTES[theme];
+  const showHeader = options.showHeader !== false;
+  const showLegend = options.showLegend !== false;
+  const uid = `rs${hash53(`${input2.title}\0${theme}`).toString(36).slice(0, 7)}`;
+  const diff = input2.diff && input2.diff.changed ? input2.diff : null;
+  const blueprintById = new Map((input2.blueprint?.components ?? []).map((component2) => [component2.id, component2]));
+  const addedComponents = new Set(diff?.components.added ?? []);
+  const edgeKey2 = (edge) => `${edge.from}\0${edge.to}`;
+  const addedEdges = new Set((diff?.edges.added ?? []).map(edgeKey2));
+  const calm = options.detail !== "full";
+  const viewIds = new Set(input2.view.components.map((component2) => component2.id));
+  const viewEdges = /* @__PURE__ */ new Map();
+  for (const edge of input2.view.edges) {
+    if (edge.from === edge.to || !viewIds.has(edge.from) || !viewIds.has(edge.to) || viewEdges.has(edgeKey2(edge))) continue;
+    viewEdges.set(edgeKey2(edge), edge);
+  }
+  const hidden = { tests: 0, shared: 0, implied: 0 };
+  const hiddenComponents = /* @__PURE__ */ new Set();
+  const sharedComponents = /* @__PURE__ */ new Set();
+  if (calm) {
+    const changedEdges = /* @__PURE__ */ new Set([...(diff?.edges.statusChanged ?? []).map(edgeKey2), ...addedEdges]);
+    const keep = (edge) => edge.status !== "declared" || changedEdges.has(edgeKey2(edge));
+    const pinned = /* @__PURE__ */ new Set();
+    for (const edge of viewEdges.values()) {
+      if (!keep(edge)) continue;
+      pinned.add(edge.from);
+      pinned.add(edge.to);
+    }
+    for (const edge of diff?.edges.removed ?? []) {
+      pinned.add(edge.from);
+      pinned.add(edge.to);
+    }
+    for (const component2 of input2.view.components) {
+      if (component2.kind !== "test" || (component2.findings ?? 0) > 0 || addedComponents.has(component2.id) || pinned.has(component2.id)) continue;
+      hiddenComponents.add(component2.id);
+    }
+    hidden.tests = hiddenComponents.size;
+    for (const [key, edge] of [...viewEdges]) {
+      if (hiddenComponents.has(edge.from) || hiddenComponents.has(edge.to)) viewEdges.delete(key);
+      else if (!keep(edge) && blueprintById.get(edge.to)?.public) {
+        viewEdges.delete(key);
+        sharedComponents.add(edge.to);
+        hidden.shared += 1;
+      }
+    }
+    const next = /* @__PURE__ */ new Map();
+    for (const edge of viewEdges.values()) {
+      if (edge.status !== "declared") continue;
+      const targets = next.get(edge.from);
+      if (targets) targets.add(edge.to);
+      else next.set(edge.from, /* @__PURE__ */ new Set([edge.to]));
+    }
+    const reaches = (from, to) => {
+      const seen = /* @__PURE__ */ new Set([from]);
+      const stack = [from];
+      while (stack.length) {
+        const node2 = stack.pop();
+        for (const target of next.get(node2) ?? []) {
+          if (node2 === from && target === to) continue;
+          if (target === to) return true;
+          if (seen.has(target)) continue;
+          seen.add(target);
+          stack.push(target);
+        }
+      }
+      return false;
+    };
+    for (const key of [...viewEdges.keys()].sort()) {
+      const edge = viewEdges.get(key);
+      if (keep(edge) || !reaches(edge.from, edge.to)) continue;
+      next.get(edge.from)?.delete(edge.to);
+      viewEdges.delete(key);
+      hidden.implied += 1;
+    }
+  }
+  const simplified = [
+    hidden.tests ? plural2(hidden.tests, "test component") : "",
+    hidden.shared ? `${plural2(hidden.shared, "edge")} into shared components` : "",
+    hidden.implied ? plural2(hidden.implied, "implied dependency", "implied dependencies") : ""
+  ].filter(Boolean);
+  const footnote = simplified.length ? `Hidden for clarity: ${simplified.join(", ")}` : "";
+  const cards = /* @__PURE__ */ new Map();
+  for (const component2 of input2.view.components) {
+    if (cards.has(component2.id) || hiddenComponents.has(component2.id)) continue;
+    const declared = blueprintById.get(component2.id);
+    const reported = input2.status?.components[component2.id]?.state;
+    const state = reported && reported !== "unknown" ? reported : declared?.runtime ? "unknown" : null;
+    const files = typeof component2.files === "number" ? component2.files : input2.fileCounts && Object.prototype.hasOwnProperty.call(input2.fileCounts, component2.id) ? input2.fileCounts[component2.id] : null;
+    const source = declared?.provenance?.source;
+    cards.set(component2.id, {
+      id: component2.id,
+      name: component2.name || component2.id,
+      kind: component2.kind ?? "",
+      external: Boolean(component2.external),
+      findings: Math.max(0, Math.floor(component2.findings ?? 0) || 0),
+      files: typeof files === "number" && Number.isFinite(files) && files >= 0 ? Math.floor(files) : null,
+      state,
+      mark: declared?.verified ? "verified" : source === "derived" || source === "agent" ? source : null,
+      shared: sharedComponents.has(component2.id),
+      change: addedComponents.has(component2.id) ? "added" : null
+    });
+  }
+  const removedCards = (diff?.components.removed ?? []).filter((id, index, all) => !cards.has(id) && all.indexOf(id) === index).map((id) => ({ id, name: id, kind: "", external: false, findings: 0, files: null, state: null, mark: null, shared: false, change: "removed" }));
+  const live = [...cards.values()];
+  const hasFooter = live.some((card) => card.state !== null || card.mark !== null);
+  const cardHeight = hasFooter ? 76 : 56;
+  const drawn = /* @__PURE__ */ new Map();
+  for (const edge of viewEdges.values()) {
+    if (!cards.has(edge.from) || !cards.has(edge.to)) continue;
+    drawn.set(edgeKey2(edge), { from: edge.from, to: edge.to, status: edge.status, change: addedEdges.has(edgeKey2(edge)) ? "added" : null });
+  }
+  const ghostEdges = [];
+  const removedIds = new Set(removedCards.map((card) => card.id));
+  for (const edge of diff?.edges.removed ?? []) {
+    if (edge.from === edge.to || drawn.has(edgeKey2(edge))) continue;
+    const entry = { from: edge.from, to: edge.to, status: edge.status, change: "removed" };
+    if ((cards.has(edge.from) || removedIds.has(edge.from)) && (cards.has(edge.to) || removedIds.has(edge.to))) ghostEdges.push(entry);
+  }
+  const { layout, direction } = chooseLayout(
+    live.map((card) => ({ id: card.id, width: CARD_WIDTH, height: cardHeight, group: card.external ? "~external" : card.kind && card.kind !== "default" ? card.kind : void 0 })),
+    [...drawn.values()].map((edge) => ({ from: edge.from, to: edge.to })),
+    options.direction
+  );
+  const horizontal = direction === "LR";
+  const graphWidth = live.length ? layout.width : 0;
+  const graphHeight = live.length ? layout.height : 0;
+  const statusCounts = { up: 0, degraded: 0, down: 0, unknown: 0 };
+  for (const card of live) if (card.state) statusCounts[card.state] += 1;
+  const monitored = statusCounts.up + statusCounts.degraded + statusCounts.down + statusCounts.unknown;
+  const overall = overallStatus(statusCounts);
+  const showStatus = monitored > 0 || Boolean(input2.status);
+  const overallLabel = overall === "unknown" && monitored > 0 ? "No data" : OVERALL_LABEL[overall];
+  const componentsWithFindings = live.filter((card) => card.findings > 0).length;
+  const pills = [];
+  if (showStatus) {
+    const state = OVERALL_STATE[overall];
+    const line = state === "up" ? palette.ok : state === "degraded" ? palette.warn : state === "down" ? palette.error : palette.muted;
+    pills.push(pill(overallLabel, { line, text: stateTextColor(state, palette) }, (cx, cy) => stateShape(state, cx, cy, palette).replace(/ data-state="[a-z]+"/, "")));
+  }
+  if (input2.findings) {
+    const clean = input2.findings.errors + input2.findings.warnings <= 0;
+    const tone = clean ? { line: palette.ok, text: palette.okText } : input2.findings.errors > 0 ? { line: palette.error, text: palette.errorText } : { line: palette.warn, text: palette.warnText };
+    pills.push(pill(violationText(input2.findings), tone, clean ? (cx, cy) => checkMark(cx - 5, cy + 0.6, palette.ok) : null));
+  }
+  const pillsWidth = pills.reduce((sum, item) => sum + item.width, 0) + Math.max(0, pills.length - 1) * 8;
+  const meta3 = [input2.commit ? input2.commit.trim().slice(0, 7) : "", input2.generatedAt ? formatTime(input2.generatedAt) : ""].filter(Boolean).join(" · ");
+  const removedPerRow = (contentWidth2) => Math.max(1, Math.floor((contentWidth2 + 24) / (CARD_WIDTH + 24)));
+  const contentWidth = Math.max(MIN_CONTENT_WIDTH, graphWidth);
+  const width = Math.ceil(contentWidth + OUTER * 2);
+  const body = [];
+  let cursor = OUTER;
+  if (showHeader) {
+    const titleRoom = contentWidth - (pillsWidth ? pillsWidth + 20 : 0);
+    body.push(text(OUTER, cursor + 20, truncateText(input2.title, titleRoom, 20, 600), { size: 20, weight: 600, fill: palette.text }));
+    let pillX = width - OUTER - pillsWidth;
+    for (const item of pills) {
+      body.push(item.svg(pillX, cursor));
+      pillX += item.width + 8;
+    }
+    cursor += 30;
+    if (input2.subtitle || meta3) {
+      const metaText = truncateText(meta3, contentWidth * 0.6, 11);
+      const metaWidth = metaText ? estimateTextWidth(metaText, 11) + 16 : 0;
+      if (input2.subtitle) body.push(text(OUTER, cursor + 13, truncateText(input2.subtitle, contentWidth - metaWidth, 13), { size: 13, fill: palette.muted }));
+      if (metaText) body.push(text(width - OUTER, cursor + 13, metaText, { size: 11, fill: palette.muted, anchor: "end" }));
+      cursor += 22;
+    }
+    if (diff) {
+      const lead = "Changed in this commit:";
+      const summary = truncateText(diff.summary, contentWidth - estimateTextWidth(`${lead} `, 12, 600), 12);
+      body.push(
+        `<text x="${OUTER}" y="${n(cursor + 13)}" font-size="12" fill="${palette.muted}" data-diff="summary"><tspan font-weight="600" fill="${palette.text}">${lead}</tspan> ${escapeXml(summary)}</text>`
+      );
+      cursor += 22;
+    }
+    cursor += 10;
+    body.push(`<path d="M${OUTER} ${n(cursor + 0.5)}H${width - OUTER}" stroke="${palette.border}"/>`);
+    cursor += 30;
+  } else cursor += 10;
+  const originX = OUTER + (contentWidth - graphWidth) / 2;
+  const originY = cursor;
+  const boxes = /* @__PURE__ */ new Map();
+  for (const [id, placed] of layout.nodes) boxes.set(id, { x: originX + placed.x, y: originY + placed.y, width: placed.width, height: placed.height });
+  cursor += graphHeight;
+  if (removedCards.length) {
+    if (live.length) cursor += 44;
+    const perRow = removedPerRow(contentWidth);
+    removedCards.forEach((card, index) => {
+      boxes.set(card.id, { x: OUTER + index % perRow * (CARD_WIDTH + 24), y: cursor + Math.floor(index / perRow) * (cardHeight + 30), width: CARD_WIDTH, height: cardHeight });
+    });
+    const rows = Math.ceil(removedCards.length / perRow);
+    cursor += rows * cardHeight + (rows - 1) * 30;
+  }
+  if (!live.length && !removedCards.length) {
+    body.push(text(width / 2, cursor + 24, "No components yet", { size: 13, fill: palette.muted, anchor: "middle" }));
+    cursor += 48;
+  }
+  const routes = [];
+  for (const route of layout.edges) {
+    const edge = drawn.get(edgeKey2(route));
+    if (!edge) continue;
+    routes.push({ edge, points: route.points.map((point) => ({ x: point.x + originX, y: point.y + originY })), vertical: !horizontal });
+  }
+  const ports = /* @__PURE__ */ new Map();
+  const cross = (point) => horizontal ? point.y : point.x;
+  const main2 = (point) => horizontal ? point.x : point.y;
+  for (const route of routes) {
+    const last = route.points.length - 1;
+    for (const end of ["first", "last"]) {
+      const point = route.points[end === "first" ? 0 : last];
+      const next = route.points[end === "first" ? 1 : last - 1];
+      const id = end === "first" ? route.edge.from : route.edge.to;
+      const key = `${id}\0${main2(next) > main2(point) ? "out" : "in"}`;
+      const list2 = ports.get(key);
+      const entry = { route, end, other: cross(next) };
+      if (list2) list2.push(entry);
+      else ports.set(key, [entry]);
+    }
+  }
+  for (const [key, list2] of ports) {
+    if (list2.length < 2) continue;
+    const box = boxes.get(key.split("\0")[0]);
+    const side = horizontal ? box.height : box.width;
+    const spacing = Math.max(0, Math.min(14, (side - 28) / list2.length));
+    list2.sort((a, b) => a.other - b.other || (edgeKey2(a.route.edge) < edgeKey2(b.route.edge) ? -1 : 1));
+    list2.forEach((entry, index) => {
+      const point = entry.route.points[entry.end === "first" ? 0 : entry.route.points.length - 1];
+      const offset = (index - (list2.length - 1) / 2) * spacing;
+      if (horizontal) point.y += offset;
+      else point.x += offset;
+    });
+  }
+  const center = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+  for (const edge of ghostEdges) {
+    const from = boxes.get(edge.from);
+    const to = boxes.get(edge.to);
+    if (!from || !to) continue;
+    const a = center(from);
+    const b = center(to);
+    const stacked = Math.abs(b.y - a.y) >= (from.height + to.height) / 2;
+    const points = stacked ? [{ x: a.x, y: b.y > a.y ? from.y + from.height : from.y }, { x: b.x, y: b.y > a.y ? to.y : to.y + to.height }] : [{ x: b.x > a.x ? from.x + from.width : from.x, y: a.y }, { x: b.x > a.x ? to.x : to.x + to.width, y: b.y }];
+    routes.push({ edge, points, vertical: stacked });
+  }
+  routes.sort(
+    (a, b) => Number(b.edge.change === "removed") - Number(a.edge.change === "removed") || EDGE_RANK[a.edge.status] - EDGE_RANK[b.edge.status] || (edgeKey2(a.edge) < edgeKey2(b.edge) ? -1 : edgeKey2(a.edge) > edgeKey2(b.edge) ? 1 : 0)
+  );
+  const usedEdgeStatuses = /* @__PURE__ */ new Set();
+  const usedMarkers = /* @__PURE__ */ new Set();
+  const edgeSvg = [];
+  const labelSvg = [];
+  const labelBoxes = [];
+  const cardBoxes = [...boxes.values()];
+  let anyAdded = live.some((card) => card.change === "added");
+  let anyRemoved = removedCards.length > 0;
+  for (const route of routes) {
+    const { edge } = route;
+    const removed = edge.change === "removed";
+    const style = removed ? { color: palette.error, label: palette.errorText, attrs: ' stroke-width="1.5" stroke-dasharray="4 4" opacity="0.55"' } : edgeStroke(edge.status, palette);
+    const marker = removed ? "removed" : edge.status;
+    usedMarkers.add(marker);
+    if (removed) anyRemoved = true;
+    else usedEdgeStatuses.add(edge.status);
+    if (edge.change === "added") anyAdded = true;
+    const d = routePath(route.points, !route.vertical);
+    if (edge.change === "added") edgeSvg.push(`<path d="${d}" fill="none" stroke="${palette.ok}" stroke-width="7" stroke-opacity="0.28" stroke-linecap="round"/>`);
+    edgeSvg.push(
+      `<path data-edge="${removed ? "removed" : edge.status}" d="${d}" fill="none" stroke="${style.color}"${style.attrs} marker-end="url(#${uid}-arrow-${marker})"/>`
+    );
+    const label = removed ? "removed" : [edge.change === "added" ? "+ new" : "", EDGE_LABEL[edge.status]].filter(Boolean).join(" · ");
+    if (!label) continue;
+    const labelWidth = Math.ceil(estimateTextWidth(label, 10, 600) + 14);
+    const gaps = [];
+    for (let index = 0; index + 1 < route.points.length; index += 2) gaps.push(index);
+    const middle = (gaps.length - 1) / 2;
+    gaps.sort((a, b) => Math.abs(a / 2 - middle) - Math.abs(b / 2 - middle) || a - b);
+    for (const fraction of [0.5, 0.3, 0.7]) {
+      let placed = false;
+      for (const index of gaps) {
+        const a = route.points[index];
+        const b = route.points[index + 1];
+        const along = 1.5 * fraction - 1.5 * fraction * fraction + fraction ** 3;
+        const across = fraction * fraction * (3 - 2 * fraction);
+        const point = route.vertical ? { x: a.x + (b.x - a.x) * across, y: a.y + (b.y - a.y) * along } : { x: a.x + (b.x - a.x) * along, y: a.y + (b.y - a.y) * across };
+        const box = { x: point.x - labelWidth / 2, y: point.y - 8, width: labelWidth, height: 16 };
+        const padded = { x: box.x - 3, y: box.y - 3, width: box.width + 6, height: box.height + 6 };
+        if (box.x < OUTER || box.x + box.width > width - OUTER) continue;
+        if (labelBoxes.some((other) => intersects(padded, other)) || cardBoxes.some((other) => intersects(padded, other))) continue;
+        labelBoxes.push(box);
+        labelSvg.push(
+          `<rect x="${n(box.x)}" y="${n(box.y)}" width="${labelWidth}" height="16" rx="8" fill="${palette.surface}" stroke="${edge.change === "added" ? palette.ok : style.color}" stroke-opacity="0.45"/>` + text(point.x, point.y + 3.5, label, { size: 10, weight: 600, fill: edge.change === "added" && edge.status === "declared" ? palette.okText : style.label, anchor: "middle", extra: ` data-edge-label="${removed ? "removed" : edge.status}"` })
+        );
+        placed = true;
+        break;
+      }
+      if (placed) break;
+    }
+  }
+  body.push(`<g fill="none">${edgeSvg.join("")}</g>`);
+  for (const card of live) body.push(renderCard(card, boxes.get(card.id), palette));
+  for (const card of removedCards) body.push(renderCard(card, boxes.get(card.id), palette));
+  body.push(labelSvg.join(""));
+  if (showLegend) {
+    const entries2 = [];
+    for (const status of ["declared", "undeclared", "forbidden", "missing"]) {
+      if (!usedEdgeStatuses.has(status)) continue;
+      const style = edgeStroke(status, palette);
+      entries2.push({ key: status, label: EDGE_LEGEND[status], icon: (x, y) => `<path d="M${n(x)} ${n(y)}H${n(x + 24)}" fill="none" stroke="${style.color}"${style.attrs}/>` });
+    }
+    for (const state of ["up", "degraded", "down", "unknown"]) {
+      if (!statusCounts[state]) continue;
+      entries2.push({ key: state, label: STATE_LABEL[state], icon: (x, y) => stateShape(state, x + 12, y, palette).replace(/ data-state="[a-z]+"/, "") });
+    }
+    const box = (stroke, extra) => (x, y) => `<rect x="${n(x + 2)}" y="${n(y - 6)}" width="20" height="12" rx="3.5" fill="${palette.card}" stroke="${stroke}"${extra}/>`;
+    if (live.some((card) => card.external)) entries2.push({ key: "external", label: "External system", icon: box(palette.muted, ' stroke-dasharray="3 2.5"') });
+    if (live.some((card) => card.mark === "verified")) entries2.push({ key: "verified", label: "Verified by a human", icon: (x, y) => checkMark(x + 7, y + 0.4, palette.ok) });
+    if (componentsWithFindings) entries2.push({ key: "violations", label: "Violations", icon: (x, y) => `<rect x="${n(x + 3)}" y="${n(y - 6.5)}" width="18" height="13" rx="6.5" fill="${palette.error}"/>` });
+    if (anyAdded) entries2.push({ key: "added", label: "Added", icon: box(palette.ok, ' stroke-width="1.8"') });
+    if (anyRemoved) entries2.push({ key: "removed", label: "Removed", icon: box(palette.error, ' stroke-dasharray="3 2.5" opacity="0.7"') });
+    if (entries2.length) {
+      cursor += 28;
+      body.push(`<path d="M${OUTER} ${n(cursor + 0.5)}H${width - OUTER}" stroke="${palette.border}"/>`);
+      cursor += 26;
+      let x = OUTER;
+      for (const entry of entries2) {
+        const label = truncateText(entry.label, contentWidth - 32, 11);
+        const entryWidth = 32 + estimateTextWidth(label, 11);
+        if (x > OUTER && x + entryWidth > width - OUTER) {
+          x = OUTER;
+          cursor += 22;
+        }
+        body.push(`<g data-legend="${entry.key}">${entry.icon(x, cursor)}${text(x + 32, cursor + 3.8, label, { size: 11, fill: palette.muted })}</g>`);
+        x += entryWidth + 22;
+      }
+      cursor += 8;
+    }
+  }
+  if (footnote) {
+    cursor += 24;
+    body.push(text(OUTER, cursor, truncateText(footnote, contentWidth, 11), { size: 11, fill: palette.muted, extra: ' data-note="simplified"' }));
+  }
+  const height = Math.ceil(cursor + OUTER);
+  const edgeCounts = { declared: 0, undeclared: 0, forbidden: 0, missing: 0 };
+  for (const edge of drawn.values()) if (edge.change !== "removed") edgeCounts[edge.status] += 1;
+  const liveEdges = edgeCounts.declared + edgeCounts.undeclared + edgeCounts.forbidden + edgeCounts.missing;
+  const externals = live.filter((card) => card.external).length;
+  const sentences = [];
+  sentences.push(
+    `${plural2(live.length, "component")}${externals ? ` (${externals} external)` : ""} and ${plural2(liveEdges, "dependency", "dependencies")}` + (liveEdges ? ` (${[`${edgeCounts.declared} declared`, edgeCounts.undeclared ? `${edgeCounts.undeclared} undeclared` : "", edgeCounts.forbidden ? `${edgeCounts.forbidden} forbidden` : "", edgeCounts.missing ? `${edgeCounts.missing} declared but not observed` : ""].filter(Boolean).join(", ")})` : "")
+  );
+  if (showStatus) {
+    sentences.push(
+      monitored ? `Status: ${overallLabel.toLowerCase()}; ${statusCounts.up} up, ${statusCounts.degraded} degraded, ${statusCounts.down} down, ${statusCounts.unknown} without data` : "Status: not monitored"
+    );
+  }
+  if (input2.findings) sentences.push(`Violations: ${violationText(input2.findings).replace(" · ", ", ")}`);
+  else if (componentsWithFindings) sentences.push(`${plural2(componentsWithFindings, "component")} with violations`);
+  if (diff) sentences.push(`Changed: ${diff.summary}`);
+  if (footnote) sentences.push(footnote);
+  const listed = live.slice(0, 40).map((card) => {
+    const notes = [card.state ? STATE_LABEL[card.state].toLowerCase() : "", card.findings ? plural2(card.findings, "violation") : "", card.change === "added" ? "new" : ""].filter(Boolean);
+    return notes.length ? `${card.name} (${notes.join(", ")})` : card.name;
+  });
+  if (listed.length) sentences.push(`Components: ${listed.join(", ")}${live.length > listed.length ? `, and ${live.length - listed.length} more` : ""}`);
+  if (removedCards.length) sentences.push(`Removed: ${removedCards.map((card) => card.name).join(", ")}`);
+  if (input2.commit) sentences.push(`Commit ${input2.commit.trim().slice(0, 7)}`);
+  const description = `${sentences.join(". ")}.`;
+  const markerColor = (marker) => marker === "removed" ? palette.error : edgeStroke(marker, palette).color;
+  const defs = ["declared", "missing", "undeclared", "forbidden", "removed"].filter((marker) => usedMarkers.has(marker)).map(
+    (marker) => `<marker id="${uid}-arrow-${marker}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="${marker === "forbidden" ? 10 : 8.5}" markerHeight="${marker === "forbidden" ? 10 : 8.5}" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1.2L9 5L1 8.8Z" fill="${markerColor(marker)}"/></marker>`
+  ).join("");
+  const cap = typeof options.maxWidth === "number" && Number.isFinite(options.maxWidth) && options.maxWidth > 0 ? options.maxWidth : Infinity;
+  const scale = Math.min(1, cap / width);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${n(width * scale)}" height="${n(height * scale)}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${uid}-title ${uid}-desc" font-family="${FONT_FAMILY}"><title id="${uid}-title">${escapeXml(input2.title)}</title><desc id="${uid}-desc">${escapeXml(description)}</desc>` + (defs ? `<defs>${defs}</defs>` : "") + `<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" rx="16" fill="${palette.surface}" stroke="${palette.border}"/>` + body.filter(Boolean).join("") + `</svg>
+`;
+}
+function renderStatusBadge(input2, options = {}) {
+  const theme = options.theme === "dark" ? "dark" : "light";
+  const size = 11;
+  const label = truncateText(input2.label, 200, size, 600);
+  const message = truncateText(input2.message, 280, size, 600);
+  const labelWidth = label ? Math.ceil(estimateTextWidth(label, size, 600) + 14) : 0;
+  const messageWidth = Math.ceil(estimateTextWidth(message, size, 600) + 14);
+  const width = labelWidth + messageWidth;
+  const tone = BADGE_TONES[theme][input2.tone] ?? BADGE_TONES[theme].neutral;
+  const uid = `rb${hash53(`${input2.label}\0${input2.message}\0${input2.tone}\0${theme}`).toString(36).slice(0, 7)}`;
+  const name = [label, message].filter(Boolean).join(": ");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" viewBox="0 0 ${width} 20" role="img" aria-labelledby="${uid}-title" font-family="${FONT_FAMILY}"><title id="${uid}-title">${escapeXml(name)}</title><clipPath id="${uid}-clip"><rect width="${width}" height="20" rx="4"/></clipPath><g clip-path="url(#${uid}-clip)">` + (labelWidth ? `<rect width="${labelWidth}" height="20" fill="${BADGE_LABEL[theme]}"/>` : "") + `<rect x="${labelWidth}" width="${messageWidth}" height="20" fill="${tone}"/></g>` + (labelWidth ? text(labelWidth / 2, 14, label, { size, weight: 600, fill: "#ffffff", anchor: "middle" }) : "") + text(labelWidth + messageWidth / 2, 14, message, { size, weight: 600, fill: "#ffffff", anchor: "middle" }) + `</svg>
+`;
+}
+var DIAGRAM_PALETTES, FONT_FAMILY, NARROW, SLIM, WIDE, STATE_LABEL, PILL_HEIGHT, EDGE_LABEL, EDGE_RANK, EDGE_LEGEND, intersects, CARD_WIDTH, CARD_PAD, OVERALL_LABEL, OVERALL_STATE, OUTER, MIN_CONTENT_WIDTH, BADGE_TONES, BADGE_LABEL;
+var init_diagram = __esm({
+  "src/blueprint/diagram.ts"() {
+    "use strict";
+    init_layout();
+    init_status();
+    init_util3();
+    DIAGRAM_PALETTES = {
+      light: {
+        surface: "#ffffff",
+        card: "#f7f8fa",
+        border: "#d8dde4",
+        text: "#0b0f19",
+        muted: "#57606e",
+        edge: "#7b8594",
+        ok: "#1a7f37",
+        warn: "#a87400",
+        error: "#cf222e",
+        okText: "#116329",
+        warnText: "#7d4e00",
+        errorText: "#a40e26",
+        onError: "#ffffff"
+      },
+      dark: {
+        surface: "#0b0f19",
+        card: "#131a29",
+        border: "#2a3447",
+        text: "#e8ebf1",
+        muted: "#9aa5b5",
+        edge: "#657186",
+        ok: "#3fb950",
+        warn: "#d29922",
+        error: "#f85149",
+        okText: "#56d364",
+        warnText: "#e3b341",
+        errorText: "#ff7b72",
+        onError: "#0b0f19"
+      }
+    };
+    FONT_FAMILY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif";
+    NARROW = /* @__PURE__ */ new Set([..." iIl.,:;|!'`j·"]);
+    SLIM = /* @__PURE__ */ new Set([...'ftr()[]{}-/\\"*']);
+    WIDE = /* @__PURE__ */ new Set([..."mMW@%"]);
+    STATE_LABEL = { up: "Up", degraded: "Degraded", down: "Down", unknown: "No data" };
+    PILL_HEIGHT = 26;
+    EDGE_LABEL = { declared: "", undeclared: "undeclared", forbidden: "forbidden", missing: "not observed" };
+    EDGE_RANK = { declared: 0, missing: 1, undeclared: 2, forbidden: 3 };
+    EDGE_LEGEND = {
+      declared: "Declared dependency",
+      undeclared: "Undeclared dependency",
+      forbidden: "Forbidden dependency",
+      missing: "Declared, not observed"
+    };
+    intersects = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    CARD_WIDTH = 216;
+    CARD_PAD = 14;
+    OVERALL_LABEL = { operational: "Operational", degraded: "Degraded", outage: "Outage", unknown: "Not monitored" };
+    OVERALL_STATE = { operational: "up", degraded: "degraded", outage: "down", unknown: "unknown" };
+    OUTER = 28;
+    MIN_CONTENT_WIDTH = 584;
+    BADGE_TONES = {
+      light: { ok: "#1a7f37", warn: "#8a5a00", error: "#c21f2b", neutral: "#57606e" },
+      dark: { ok: "#1f7a36", warn: "#845306", error: "#b62324", neutral: "#4b5565" }
+    };
+    BADGE_LABEL = { light: "#30363f", dark: "#1c2330" };
+  }
+});
+
+// src/blueprint/arch-diff.ts
+function edgeMap(view) {
+  const map2 = /* @__PURE__ */ new Map();
+  for (const edge of view.edges) if (!map2.has(edgeKey(edge))) map2.set(edgeKey(edge), edge);
+  return map2;
+}
+function diffArchitecture(before, after) {
+  if (!before) {
+    return {
+      components: { added: [], removed: [] },
+      edges: { added: [], removed: [], statusChanged: [] },
+      summary: "No previous architecture to compare",
+      changed: false
+    };
+  }
+  const beforeIds = new Set(before.components.map((component2) => component2.id));
+  const afterIds = new Set(after.components.map((component2) => component2.id));
+  const added = [...afterIds].filter((id) => !beforeIds.has(id)).sort(compare4);
+  const removed = [...beforeIds].filter((id) => !afterIds.has(id)).sort(compare4);
+  const beforeEdges = edgeMap(before);
+  const afterEdges = edgeMap(after);
+  const edgesAdded = [];
+  const edgesRemoved = [];
+  const statusChanged = [];
+  for (const [key, edge] of afterEdges) {
+    const old = beforeEdges.get(key);
+    if (!old) edgesAdded.push(edge);
+    else if (old.status !== edge.status) statusChanged.push({ from: edge.from, to: edge.to, before: old.status, after: edge.status });
+  }
+  for (const [key, edge] of beforeEdges) if (!afterEdges.has(key)) edgesRemoved.push(edge);
+  edgesAdded.sort(byEdge);
+  edgesRemoved.sort(byEdge);
+  statusChanged.sort(byEdge);
+  const parts = [];
+  if (added.length) parts.push(`${plural2(added.length, "component")} added`);
+  if (removed.length) parts.push(`${plural2(removed.length, "component")} removed`);
+  if (edgesAdded.length) parts.push(`${dependencies(edgesAdded.length)} added`);
+  if (edgesRemoved.length) parts.push(`${dependencies(edgesRemoved.length)} removed`);
+  for (const status of STATUS_ORDER) {
+    const count = statusChanged.filter((change) => change.after === status).length;
+    if (count) parts.push(STATUS_PHRASE[status](count));
+  }
+  return {
+    components: { added, removed },
+    edges: { added: edgesAdded, removed: edgesRemoved, statusChanged },
+    summary: parts.length ? parts.join(", ") : "No architecture changes",
+    changed: parts.length > 0
+  };
+}
+var compare4, edgeKey, byEdge, dependencies, STATUS_PHRASE, STATUS_ORDER;
+var init_arch_diff = __esm({
+  "src/blueprint/arch-diff.ts"() {
+    "use strict";
+    init_util3();
+    compare4 = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    edgeKey = (edge) => `${edge.from}\0${edge.to}`;
+    byEdge = (a, b) => compare4(a.from, b.from) || compare4(a.to, b.to);
+    dependencies = (count) => plural2(count, "dependency", "dependencies");
+    STATUS_PHRASE = {
+      forbidden: (count) => `${dependencies(count)} became forbidden`,
+      undeclared: (count) => `${dependencies(count)} became undeclared`,
+      missing: (count) => `${plural2(count, "declared dependency", "declared dependencies")} no longer observed`,
+      declared: (count) => `${dependencies(count)} became declared`
+    };
+    STATUS_ORDER = ["forbidden", "undeclared", "missing", "declared"];
+  }
+});
+
+// src/cli/live.ts
+import { readFile as readFile3 } from "node:fs/promises";
+import { join as join6 } from "node:path";
+async function compareArchitecture(context, base, head) {
+  const snapshot = await loadBaseSnapshot(context, base);
+  if (!snapshot.blueprint) return { sha: snapshot.sha, baseBlueprint: snapshot.blueprintState, diff: null };
+  const before = createWorkspace(snapshot.files, snapshot.blueprint).graphView();
+  return { sha: snapshot.sha, baseBlueprint: "ok", diff: diffArchitecture(before, head) };
+}
+async function readStatusFile(root, absolutePath) {
+  let text4;
+  try {
+    text4 = await readFile3(absolutePath ?? join6(root, STATUS_PATH), "utf8");
+  } catch (error62) {
+    if (error62.code === "ENOENT") return { state: "missing" };
+    return { state: "invalid", message: errorMessage(error62) };
+  }
+  const parsed = parseSystemStatus(text4);
+  if (!parsed.ok || !parsed.status) {
+    return { state: "invalid", message: parsed.issues.slice(0, 5).map((issue2) => `${issue2.path}: ${issue2.message}`).join("; ") };
+  }
+  return { state: "ok", status: parsed.status };
+}
+function parseRepoUrl(url2) {
+  if (!url2) return null;
+  const trimmed = url2.trim();
+  const scp = /^[\w.-]+@([\w.-]+):([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(trimmed);
+  const web = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([\w.-]+)(?::\d+)?\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(trimmed);
+  const match = scp ?? web;
+  if (!match || !NAME.test(match[2]) || !NAME.test(match[3])) return null;
+  return { host: match[1].toLowerCase(), owner: match[2], repo: match[3] };
+}
+async function repoLocation(root, isGit, env) {
+  const [owner, repo, ...rest] = (env.GITHUB_REPOSITORY ?? "").split("/");
+  if (owner && repo && rest.length === 0 && NAME.test(owner) && NAME.test(repo)) {
+    let host = "github.com";
+    try {
+      if (env.GITHUB_SERVER_URL) host = new URL(env.GITHUB_SERVER_URL).host.toLowerCase();
+    } catch {
+    }
+    return { host, owner, repo };
+  }
+  return isGit ? parseRepoUrl(await originUrl(root).catch(() => null)) : null;
+}
+var NAME;
+var init_live = __esm({
+  "src/cli/live.ts"() {
+    "use strict";
+    init_arch_diff();
+    init_status();
+    init_workspace();
+    init_gate();
+    init_git();
+    init_util();
+    NAME = /^[A-Za-z0-9._-]+$/;
+  }
+});
+
+// src/cli/readme.ts
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function cell(value, limit = 160) {
+  const line = value.replace(/\s+/g, " ").trim();
+  const cut = line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
+  return escapeHtml(cut).replace(/([\\|*_`[\]])/g, "\\$1");
+}
+function firstLine2(value) {
+  return (value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+function captionTime(iso) {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso);
+  return match ? `${match[1]} ${match[2]} UTC` : iso;
+}
+function imageUrl(base, file2) {
+  return `${base.replace(/\/+$/, "")}/${file2}`;
+}
+function renderReadmeBlock(input2) {
+  const { blueprint, status } = input2;
+  const src = (file2) => escapeHtml(imageUrl(input2.imageBase, file2));
+  const picture = [
+    "  <picture>",
+    `    <source media="(prefers-color-scheme: dark)" srcset="${src("system-dark.svg")}">`,
+    `    <img alt="${escapeHtml(input2.alt)}" src="${src("system-light.svg")}">`,
+    "  </picture>"
+  ];
+  const linked = input2.link ? [`  <a href="${escapeHtml(input2.link)}">`, ...picture.map((line) => `  ${line}`), "  </a>"] : picture;
+  const rows = blueprint.components.map((component2) => {
+    const state = component2.runtime ? STATE_LABEL2[status?.components[component2.id]?.state ?? "unknown"] : "—";
+    const kind = component2.external ? `external ${component2.kind === "default" ? "" : component2.kind}`.trim() : component2.kind;
+    return `| ${cell(component2.name)} | ${cell(kind)} | ${state} | ${cell(firstLine2(component2.intent) || firstLine2(component2.description))} |`;
+  });
+  return [
+    README_START,
+    "<!-- Written by `rassam render --readme`. Edit the blueprint, not this block: it is overwritten. -->",
+    '<p align="center">',
+    ...linked,
+    "</p>",
+    '<p align="center">',
+    `  <img alt="Blueprint check" src="${src("badge-blueprint.svg")}">`,
+    `  <img alt="System status" src="${src("badge-system.svg")}">`,
+    "</p>",
+    `<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of ${escapeHtml(captionTime(input2.generatedAt))}</sub></p>`,
+    "",
+    "<details>",
+    `<summary>Components (${blueprint.components.length})</summary>`,
+    "",
+    "| Component | Kind | Status | Intent |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+    "",
+    "</details>",
+    README_END
+  ].join("\n");
+}
+function withoutTime(block) {
+  return block.replace(/status as of [^<]*/g, "status as of").replace(/\r\n/g, "\n");
+}
+function updateReadme(text4, block) {
+  const start = text4.indexOf(README_START);
+  const end = start < 0 ? -1 : text4.indexOf(README_END, start + README_START.length);
+  if (start < 0 || end < 0) return { state: "no-markers" };
+  const current = text4.slice(start, end + README_END.length);
+  if (withoutTime(current) === withoutTime(block)) return { state: "unchanged" };
+  const eol = text4.includes("\r\n") ? "\r\n" : "\n";
+  return { state: "updated", text: `${text4.slice(0, start)}${block.split("\n").join(eol)}${text4.slice(end + README_END.length)}` };
+}
+var README_START, README_END, STATE_LABEL2;
+var init_readme = __esm({
+  "src/cli/readme.ts"() {
+    "use strict";
+    README_START = "<!-- rassam:system:start -->";
+    README_END = "<!-- rassam:system:end -->";
+    STATE_LABEL2 = { up: "Up", degraded: "Degraded", down: "Down", unknown: "No data" };
+  }
+});
+
+// src/cli/commands/render.ts
+var render_exports = {};
+__export(render_exports, {
+  LIVE_BRANCH: () => LIVE_BRANCH,
+  renderCommand: () => renderCommand
+});
+import { mkdir as mkdir3, readFile as readFile4, writeFile as writeFile5 } from "node:fs/promises";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve5 } from "node:path";
+function blueprintBadge(outcome, summary) {
+  if (outcome === "fail") return { message: "failing", tone: "error" };
+  if (summary.warnings > 0) return { message: plural2(summary.warnings, "warning"), tone: "warn" };
+  return { message: "passing", tone: "ok" };
+}
+function systemBadge(summary) {
+  if (!summary.monitored) return { message: "not monitored", tone: "neutral" };
+  switch (summary.overall) {
+    case "operational":
+      return { message: summary.unknown ? `operational · ${summary.up}/${summary.monitored} up` : "operational", tone: "ok" };
+    case "degraded":
+      return { message: "degraded", tone: "warn" };
+    case "outage":
+      return { message: `outage · ${summary.down} down`, tone: "error" };
+    default:
+      return { message: "no data", tone: "neutral" };
+  }
+}
+function withoutGeneratedAt(text4) {
+  return text4.replace(/"generatedAt": "[^"]*"/, '"generatedAt": ""');
+}
+async function writeIfChanged(path, content, same2 = (a, b) => a === b) {
+  const existing = await readFile4(path, "utf8").catch(() => null);
+  if (existing !== null && same2(existing, content)) return false;
+  await mkdir3(dirname4(path), { recursive: true });
+  await writeFile5(path, content, "utf8");
+  return true;
+}
+function posix(path) {
+  return path.split("\\").join("/");
+}
+function imageBaseFor(flag, location, readmeFile, outDir) {
+  if (flag?.trim()) return flag.trim().replace(/\/+$/, "") || ".";
+  if (location?.host === "github.com") return `https://raw.githubusercontent.com/${location.owner}/${location.repo}/${LIVE_BRANCH}`;
+  const rel2 = posix(relative2(dirname4(readmeFile), outDir));
+  return rel2 && !isAbsolute2(rel2) ? rel2 : ".";
+}
+function altText(blueprint) {
+  return `System design of ${blueprint.system.name}: its components, their dependencies and the state of the blueprint check`;
+}
+async function loadStatus(context, args, io, now) {
+  const flag = stringFlag(args, "status");
+  const maxAge = numberFlag(args, "statusMaxAge") ?? 60;
+  if (!(maxAge > 0)) throw new CliError("--status-max-age expects a positive number of minutes");
+  const file2 = await readStatusFile(context.root, flag ? resolve5(io.cwd, flag) : void 0);
+  if (file2.state === "missing") {
+    if (flag) throw new CliError(`Status file ${flag} does not exist`, { hint: "Create it with: rassam status --write" });
+    return { status: null, stale: false };
+  }
+  if (file2.state === "invalid") {
+    if (flag) throw new CliError(`Status file ${flag} is invalid: ${file2.message}`);
+    io.stderr(`rassam: ignoring ${STATUS_PATH}: ${file2.message}
+`);
+    return { status: null, stale: false };
+  }
+  const stale = isStale(file2.status, now, maxAge);
+  if (stale) io.stderr(`rassam: the status from ${file2.status.checkedAt} is older than ${maxAge} minutes; components are drawn as "No data". Refresh it with: rassam status --write
+`);
+  return { status: file2.status, stale };
+}
+async function renderCommand(args, io) {
+  const context = await loadContextFor(io, stringFlag(args, "root"));
+  const blueprint = requireBlueprint(context);
+  const now = io.now?.() ?? /* @__PURE__ */ new Date();
+  const generatedAt = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const format = stringFlag(args, "format") ?? "svg";
+  const theme = stringFlag(args, "theme") ?? "both";
+  const detail = stringFlag(args, "detail") ?? "calm";
+  const { report } = await runGate({ context });
+  const view = createWorkspace(context.files, blueprint).graphView();
+  const commit = context.isGit ? await headSha(context.root) : null;
+  const baseRef = stringFlag(args, "base");
+  let base = null;
+  let diff = null;
+  if (baseRef) {
+    const comparison = await compareArchitecture(context, baseRef, view);
+    base = { ref: baseRef, sha: comparison.sha };
+    diff = comparison.diff;
+    if (!diff) io.stderr(`rassam: the blueprint at ${comparison.sha.slice(0, 12)} is ${comparison.baseBlueprint}; nothing to compare the architecture with.
+`);
+  }
+  const loaded = await loadStatus(context, args, io, now);
+  const shownStatus = loaded.status && loaded.stale ? { ...loaded.status, components: {} } : loaded.status;
+  const statusSummary = summarizeStatus(shownStatus, blueprint);
+  const outcome = verdict(report, "error");
+  const document = {
+    schemaVersion: 1,
+    system: blueprint.system.name,
+    commit,
+    generatedAt,
+    verdict: outcome,
+    summary: report.summary,
+    graph: view,
+    status: loaded.status ? { checkedAt: loaded.status.checkedAt, stale: loaded.stale, summary: statusSummary, components: loaded.status.components } : null,
+    base,
+    diff
+  };
+  const documentText = `${JSON.stringify(document, null, 2)}
+`;
+  const readmeFlag = args.flags.readme;
+  const outDir = resolve5(io.cwd, stringFlag(args, "out") ?? ".rassam/live");
+  if (format === "mermaid") io.stdout(ensureTrailingNewline(renderMermaid(view)));
+  else if (format === "json") io.stdout(documentText);
+  else {
+    const input2 = {
+      title: blueprint.system.name,
+      subtitle: blueprint.system.description?.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? DEFAULT_SUBTITLE,
+      view,
+      blueprint,
+      status: shownStatus,
+      diff,
+      findings: { errors: report.summary.errors, warnings: report.summary.warnings },
+      commit: commit ?? void 0,
+      generatedAt: booleanFlag(args, "stamp") ? loaded.status?.checkedAt ?? generatedAt : void 0
+    };
+    const files = [];
+    for (const name of ["light", "dark"]) {
+      if (theme === "both" || theme === name) files.push([`system-${name}.svg`, renderSystemDiagram(input2, { theme: name, detail })]);
+    }
+    files.push(["badge-blueprint.svg", renderStatusBadge({ label: "blueprint", ...blueprintBadge(outcome, report.summary) })]);
+    files.push(["badge-system.svg", renderStatusBadge({ label: "system", ...systemBadge(statusSummary) })]);
+    files.push(["system.json", documentText, (a, b) => withoutGeneratedAt(a) === withoutGeneratedAt(b)]);
+    const shownDir = posix(relative2(io.cwd, outDir)) || ".";
+    const lines = [];
+    for (const [name, content, same2] of files) {
+      const written = await writeIfChanged(join7(outDir, name), content, same2);
+      lines.push(`  ${written ? "wrote    " : "unchanged"}  ${shownDir}/${name}`);
+    }
+    const blueprintState = blueprintBadge(outcome, report.summary).message;
+    io.stdout(
+      [
+        `${blueprint.system.name}: ${plural2(view.components.length, "component")}, ${plural2(view.edges.length, "dependency", "dependencies")} · blueprint ${blueprintState} · system ${systemBadge(statusSummary).message}`,
+        ...diff ? [`Since ${baseRef}: ${diff.summary}`] : [],
+        ...lines,
+        ""
+      ].join("\n")
+    );
+  }
+  if (readmeFlag !== void 0 && readmeFlag !== false) {
+    const readmeFile = resolve5(context.root, typeof readmeFlag === "string" ? resolve5(io.cwd, readmeFlag) : "README.md");
+    const shown = posix(relative2(io.cwd, readmeFile)) || "README.md";
+    const text4 = await readFile4(readmeFile, "utf8").catch(() => null);
+    if (text4 === null) throw new CliError(`${shown} does not exist`, { hint: "Pass the file to update: rassam render --readme <file>" });
+    const location = await repoLocation(context.root, context.isGit, io.env);
+    const block = renderReadmeBlock({
+      blueprint,
+      status: shownStatus,
+      imageBase: imageBaseFor(stringFlag(args, "imageBase"), location, readmeFile, outDir),
+      link: stringFlag(args, "link")?.trim() || (location ? `https://${location.host}/${location.owner}/${location.repo}` : void 0),
+      generatedAt: loaded.status?.checkedAt ?? generatedAt,
+      alt: altText(blueprint)
+    });
+    const update = updateReadme(text4, block);
+    const say = format === "svg" ? io.stdout : io.stderr;
+    if (update.state === "no-markers") {
+      say(
+        [
+          `${shown} has no Rassam block yet. Put these two lines where the system design should appear, then run this command again:`,
+          "",
+          `  ${README_START}`,
+          `  ${README_END}`,
+          ""
+        ].join("\n")
+      );
+    } else if (update.state === "unchanged") say(`  unchanged  ${shown}
+`);
+    else {
+      await writeFile5(readmeFile, update.text, "utf8");
+      say(`  updated    ${shown}
+`);
+    }
+  }
+  return EXIT_OK;
+}
+var LIVE_BRANCH, DEFAULT_SUBTITLE;
+var init_render = __esm({
+  "src/cli/commands/render.ts"() {
+    "use strict";
+    init_diagram();
+    init_report();
+    init_status();
+    init_util3();
+    init_workspace();
+    init_args();
+    init_context();
+    init_gate();
+    init_git();
+    init_io();
+    init_live();
+    init_readme();
+    LIVE_BRANCH = "rassam-live";
+    DEFAULT_SUBTITLE = "System design, checked against the blueprint on every commit";
+  }
+});
+
+// src/cli/probe.ts
+function safeHealthUrl(raw) {
+  let url2;
+  try {
+    url2 = new URL(raw.trim());
+  } catch {
+    return { ok: false, reason: "the health URL is not a valid URL" };
+  }
+  if (url2.protocol !== "http:" && url2.protocol !== "https:") return { ok: false, reason: "only http and https health URLs are fetched" };
+  if (url2.username || url2.password) return { ok: false, reason: "the health URL contains credentials; remove them (never put secrets in the blueprint)" };
+  return { ok: true, url: url2, shown: `${url2.origin}${url2.pathname}` };
+}
+async function timedFetch(options, url2, init, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return { response: await options.fetch(url2, { ...init, signal: controller.signal }), timedOut: false };
+  } catch (error62) {
+    return { timedOut: controller.signal.aborted, error: error62 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function failureCode(error62) {
+  const cause = asObject2(asObject2(error62)?.cause);
+  const code = asString2(cause?.code) || asString2(asObject2(error62)?.code);
+  return /^[A-Z][A-Z0-9_]{2,40}$/.test(code) ? code : "";
+}
+async function probeHealth(health, options) {
+  const safe = safeHealthUrl(health.url);
+  if (!safe.ok) return { state: "unknown", source: "health-check", detail: `not checked: ${safe.reason}` };
+  const timeoutMs = health.timeoutMs ?? options.timeoutMs;
+  const clock = options.clock ?? (() => performance.now());
+  const started = clock();
+  const result = await timedFetch(options, safe.url.href, { method: health.method ?? "GET", redirect: "follow", headers: { "User-Agent": "rassam-status", Accept: "*/*" } }, timeoutMs);
+  const latencyMs = Math.max(0, Math.round(clock() - started));
+  if (!result.response) {
+    const code = failureCode(result.error);
+    const detail = result.timedOut ? `no answer within ${timeoutMs} ms` : `request failed${code ? ` (${code})` : ""}`;
+    return { state: "down", source: "health-check", detail, latencyMs, url: safe.shown };
+  }
+  const { status } = result.response;
+  void result.response.body?.cancel().catch(() => void 0);
+  const healthy = health.expectStatus !== void 0 ? status === health.expectStatus : status >= 200 && status < 300;
+  const state = healthy ? "up" : status >= 500 ? "down" : "degraded";
+  const expectation = !healthy && health.expectStatus !== void 0 ? `, expected ${health.expectStatus}` : "";
+  return { state, source: "health-check", detail: `HTTP ${status}${expectation} in ${latencyMs} ms`, latencyMs, url: safe.shown };
+}
+async function githubGet(options, github, path) {
+  const result = await timedFetch(
+    options,
+    `${github.apiUrl}${path}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "rassam-status",
+        ...github.token ? { Authorization: `Bearer ${github.token}` } : {}
+      }
+    },
+    Math.max(options.timeoutMs, 1e4)
+  );
+  if (!result.response) return { ok: false, reason: result.timedOut ? "the GitHub API did not answer in time" : "the GitHub API could not be reached" };
+  if (!result.response.ok) {
+    void result.response.body?.cancel().catch(() => void 0);
+    return { ok: false, reason: `the GitHub API answered ${result.response.status}` };
+  }
+  try {
+    return { ok: true, data: await result.response.json() };
+  } catch {
+    return { ok: false, reason: "the GitHub API sent an unreadable answer" };
+  }
+}
+function withoutGithub(source, options) {
+  return { state: "unknown", source, detail: `not checked: ${options.githubOff ?? "GitHub lookups are off (pass --github or set GITHUB_TOKEN)"}` };
+}
+async function probeDeployment(environment, options) {
+  const { github } = options;
+  if (!github) return withoutGithub("deployment", options);
+  const list2 = await githubGet(options, github, `/repos/${github.repository}/deployments?environment=${encodeURIComponent(environment)}&per_page=1`);
+  if (!list2.ok) return { state: "unknown", source: "deployment", detail: `${environment}: ${list2.reason}` };
+  const deployment = asObject2(Array.isArray(list2.data) ? list2.data[0] : null);
+  if (!deployment || typeof deployment.id !== "number") return { state: "unknown", source: "deployment", detail: `${environment}: no deployments yet` };
+  const sha = asString2(deployment.sha).slice(0, 7);
+  const statuses = await githubGet(options, github, `/repos/${github.repository}/deployments/${deployment.id}/statuses?per_page=1`);
+  if (!statuses.ok) return { state: "unknown", source: "deployment", detail: `${environment}: ${statuses.reason}` };
+  const latest = asString2(asObject2(Array.isArray(statuses.data) ? statuses.data[0] : null)?.state) || "pending";
+  const state = DEPLOYMENT_STATE[latest] ?? "unknown";
+  return { state, source: "deployment", detail: `${environment}: ${latest.replace(/_/g, " ")}${sha ? ` at ${sha}` : ""}` };
+}
+function createDefaultBranch(options) {
+  let cached2;
+  return () => {
+    cached2 ??= (async () => {
+      if (!options.github) return "";
+      const repo = await githubGet(options, options.github, `/repos/${options.github.repository}`);
+      return repo.ok ? asString2(asObject2(repo.data)?.default_branch) : "";
+    })();
+    return cached2;
+  };
+}
+async function probeWorkflow(file2, options, defaultBranch) {
+  const { github } = options;
+  if (!github) return withoutGithub("workflow", options);
+  const name = file2.trim().split(/[\\/]/).pop() ?? "";
+  if (!/^[\w.-]+\.ya?ml$/i.test(name)) return { state: "unknown", source: "workflow", detail: "not checked: workflow.file must be a .yml or .yaml file name" };
+  const branch = await defaultBranch();
+  const query = `per_page=1&exclude_pull_requests=true${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`;
+  const runs = await githubGet(options, github, `/repos/${github.repository}/actions/workflows/${encodeURIComponent(name)}/runs?${query}`);
+  if (!runs.ok) return { state: "unknown", source: "workflow", detail: `${name}: ${runs.reason}` };
+  const list2 = asObject2(runs.data)?.workflow_runs;
+  const run = asObject2(Array.isArray(list2) ? list2[0] : null);
+  if (!run) return { state: "unknown", source: "workflow", detail: `${name}: no runs${branch ? ` on ${branch}` : ""} yet` };
+  if (asString2(run.status) !== "completed") return { state: "degraded", source: "workflow", detail: `${name}: ${(asString2(run.status) || "in progress").replace(/_/g, " ")}` };
+  const conclusion = asString2(run.conclusion) || "unknown";
+  return { state: RUN_CONCLUSION[conclusion] ?? "unknown", source: "workflow", detail: `${name}: ${conclusion.replace(/_/g, " ")}` };
+}
+function combineSignals(signals, checkedAt) {
+  let worst = signals[0];
+  for (const signal of signals) if (RANK[signal.state] > RANK[worst.state]) worst = signal;
+  const detail = signals.map((signal) => signal.detail).filter(Boolean).join("; ");
+  const health = signals.find((signal) => signal.source === "health-check");
+  return {
+    state: worst.state,
+    source: worst.source,
+    ...detail ? { detail: detail.length > DETAIL_LIMIT ? `${detail.slice(0, DETAIL_LIMIT - 1)}…` : detail } : {},
+    ...health?.latencyMs !== void 0 ? { latencyMs: health.latencyMs } : {},
+    ...health?.url ? { url: health.url.slice(0, 500) } : {},
+    checkedAt
+  };
+}
+async function probeSystem(blueprint, options) {
+  const monitored = blueprint.components.filter((component2) => component2.runtime);
+  const defaultBranch = createDefaultBranch(options);
+  const results = await mapLimit(monitored, PROBE_CONCURRENCY, async (component2) => {
+    const runtime = component2.runtime;
+    const signals = [];
+    if (runtime.health) signals.push(await probeHealth(runtime.health, options));
+    if (runtime.deployment) signals.push(await probeDeployment(runtime.deployment.environment, options));
+    if (runtime.workflow) signals.push(await probeWorkflow(runtime.workflow.file, options, defaultBranch));
+    const checkedAt = options.now().toISOString().replace(/\.\d{3}Z$/, "Z");
+    if (!signals.length) return [component2.id, { state: "unknown", source: "manual", detail: "runtime declares no health URL, deployment or workflow", checkedAt }];
+    return [component2.id, combineSignals(signals, checkedAt)];
+  });
+  return Object.fromEntries(results);
+}
+var asObject2, asString2, DEPLOYMENT_STATE, RUN_CONCLUSION, RANK, DETAIL_LIMIT, PROBE_CONCURRENCY;
+var init_probe = __esm({
+  "src/cli/probe.ts"() {
+    "use strict";
+    init_util();
+    asObject2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    asString2 = (value) => typeof value === "string" ? value : "";
+    DEPLOYMENT_STATE = {
+      success: "up",
+      failure: "down",
+      error: "down",
+      in_progress: "degraded",
+      queued: "degraded",
+      pending: "degraded",
+      waiting: "degraded"
+    };
+    RUN_CONCLUSION = { success: "up", failure: "down", timed_out: "down", startup_failure: "down" };
+    RANK = { unknown: 0, up: 1, degraded: 2, down: 3 };
+    DETAIL_LIMIT = 300;
+    PROBE_CONCURRENCY = 8;
+  }
+});
+
+// src/cli/commands/status.ts
+var status_exports = {};
+__export(status_exports, {
+  overallLine: () => overallLine,
+  renderStatusText: () => renderStatusText,
+  statusCommand: () => statusCommand
+});
+import { appendFile as appendFile2, mkdir as mkdir4, writeFile as writeFile6 } from "node:fs/promises";
+import { dirname as dirname5, join as join8 } from "node:path";
+function overallLine(summary) {
+  if (!summary.monitored) return "Overall: not monitored (no component declares runtime)";
+  const label = summary.overall === "unknown" ? "no data" : summary.overall;
+  return `Overall: ${label} (${summary.up} up, ${summary.degraded} degraded, ${summary.down} down, ${summary.unknown} unknown of ${summary.monitored} monitored)`;
+}
+function renderStatusText(status, blueprint) {
+  const names = new Map(blueprint.components.map((component2) => [component2.id, component2.name]));
+  const rows = Object.keys(status.components).sort().map((id) => {
+    const entry = status.components[id];
+    const latency = entry.latencyMs !== void 0 && !entry.detail?.includes(" ms") ? ` (${entry.latencyMs} ms)` : "";
+    return [names.get(id) ?? id, STATE_LABEL3[entry.state], SOURCE_LABEL[entry.source], `${entry.detail ?? ""}${latency}`];
+  });
+  const header = ["Component", "State", "Signal", "Detail"];
+  const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column].length)));
+  const line = (cells) => cells.map((cell2, column) => column === cells.length - 1 ? cell2 : cell2.padEnd(widths[column])).join("  ").trimEnd();
+  return [line(header), line(widths.map((width) => "-".repeat(width))), ...rows.map(line), "", overallLine(summarizeStatus(status, blueprint)), ""].join("\n");
+}
+async function githubTarget(io, root, isGit, enabled) {
+  if (!enabled) return { github: null };
+  const location = await repoLocation(root, isGit, io.env);
+  if (!location) return { github: null, off: "this repository has no GitHub origin" };
+  const fromEnv = io.env.GITHUB_API_URL?.replace(/\/+$/, "");
+  if (!fromEnv && location.host !== "github.com") return { github: null, off: `the origin is ${location.host}, not GitHub (set GITHUB_API_URL for GitHub Enterprise)` };
+  return { github: { apiUrl: fromEnv || "https://api.github.com", repository: `${location.owner}/${location.repo}`, token: io.env.GITHUB_TOKEN || void 0 } };
+}
+async function writeStepOutputs(io, summary) {
+  if (!io.env.GITHUB_OUTPUT) return;
+  try {
+    await appendFile2(io.env.GITHUB_OUTPUT, `monitored=${summary.monitored}
+overall=${summary.overall}
+`, "utf8");
+  } catch (error62) {
+    io.stderr(`rassam: could not write step outputs: ${errorMessage(error62)}
+`);
+  }
+}
+async function statusCommand(args, io) {
+  const timeoutMs = numberFlag(args, "timeout") ?? 5e3;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 6e4) throw new CliError("--timeout expects milliseconds between 100 and 60000");
+  const context = await loadContextFor(io, stringFlag(args, "root"));
+  const blueprint = requireBlueprint(context);
+  const json2 = stringFlag(args, "format") === "json";
+  const now = io.now ?? (() => /* @__PURE__ */ new Date());
+  const monitored = blueprint.components.filter((component2) => component2.runtime);
+  const status = { version: STATUS_VERSION, checkedAt: now().toISOString().replace(/\.\d{3}Z$/, "Z"), components: {} };
+  const commit = context.isGit ? await headSha(context.root) : null;
+  if (commit) status.commit = commit;
+  if (!monitored.length) {
+    await writeStepOutputs(io, summarizeStatus(status, blueprint));
+    if (json2) io.stdout(serializeSystemStatus(status));
+    else {
+      io.stdout(
+        [
+          "No component declares runtime, so there is nothing to probe.",
+          'Add "runtime" to a component in .rassam/blueprint.json: a health URL, a deployment environment or a workflow file.',
+          ...booleanFlag(args, "write") ? [`${STATUS_PATH} was not written.`] : [],
+          ""
+        ].join("\n")
+      );
+    }
+    return EXIT_OK;
+  }
+  if (!io.fetch) throw new CliError("fetch is unavailable in this Node.js; rassam status needs Node 18 or newer");
+  const target = await githubTarget(io, context.root, context.isGit, booleanFlag(args, "github") || Boolean(io.env.GITHUB_TOKEN));
+  status.components = await probeSystem(blueprint, { fetch: io.fetch, timeoutMs, now, github: target.github, githubOff: target.off });
+  const summary = summarizeStatus(status, blueprint);
+  if (json2) io.stdout(serializeSystemStatus(status));
+  else io.stdout(renderStatusText(status, blueprint));
+  if (booleanFlag(args, "write")) {
+    const file2 = join8(context.root, STATUS_PATH);
+    await mkdir4(dirname5(file2), { recursive: true });
+    await writeFile6(file2, serializeSystemStatus(status), "utf8");
+    (json2 ? io.stderr : io.stdout)(`Wrote ${STATUS_PATH}
+`);
+  }
+  await writeStepOutputs(io, summary);
+  return booleanFlag(args, "failOnDown") && summary.down > 0 ? EXIT_FAILED : EXIT_OK;
+}
+var STATE_LABEL3, SOURCE_LABEL;
+var init_status2 = __esm({
+  "src/cli/commands/status.ts"() {
+    "use strict";
+    init_status();
+    init_args();
+    init_context();
+    init_git();
+    init_io();
+    init_live();
+    init_probe();
+    init_util();
+    STATE_LABEL3 = { up: "up", degraded: "degraded", down: "DOWN", unknown: "unknown" };
+    SOURCE_LABEL = { "health-check": "health check", deployment: "deployment", workflow: "workflow", manual: "manual" };
+  }
+});
+
+// src/blueprint/edits.ts
+function editDistance2(left, right) {
+  if (left === right) return 0;
+  if (!left.length) return right.length;
+  if (!right.length) return left.length;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    for (let column = 1; column <= right.length; column += 1) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      current[column] = Math.min(previous[column] + 1, current[column - 1] + 1, previous[column - 1] + cost);
+    }
+    previous = current;
+  }
+  return previous[right.length];
+}
+function nearestIds(text4, pool, limit = 3) {
+  const needle = text4.toLowerCase();
+  const scored = pool.map((candidate) => {
+    const lower = candidate.toLowerCase();
+    const contains = needle.length >= 2 && (lower.includes(needle) || needle.includes(lower));
+    return { candidate, score: contains ? 0 : editDistance2(needle, lower) };
+  });
+  const cutoff = Math.max(2, Math.floor(needle.length / 3));
+  return scored.filter((item) => item.score <= cutoff).sort((left, right) => left.score - right.score || left.candidate.localeCompare(right.candidate)).slice(0, limit).map((item) => item.candidate);
+}
+function list(items) {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+function same(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function clone2(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+function uniqueId3(base, used) {
+  const trimmed = base.slice(0, 74).replace(/[-._:]+$/, "") || "item";
+  let candidate = trimmed;
+  let counter = 2;
+  while (used.has(candidate)) candidate = `${trimmed}-${counter++}`;
+  return candidate;
+}
+function entriesOf(selector2) {
+  if (selector2 === void 0) return [];
+  return Array.isArray(selector2) ? [...selector2] : [selector2];
+}
+function entryComponent(entry) {
+  const body = entry.startsWith("!") ? entry.slice(1) : entry;
+  if (body === "*") return null;
+  if (body.startsWith("component:")) return body.slice("component:".length);
+  if (/^(tag|path|package):/.test(body)) return null;
+  return body;
+}
+function canonicalEntry(entry) {
+  const negated = entry.startsWith("!");
+  const body = negated ? entry.slice(1) : entry;
+  return `${negated ? "!" : ""}${body.startsWith("component:") ? body.slice("component:".length) : body}`;
+}
+function positives(selector2) {
+  return new Set(entriesOf(selector2).map(canonicalEntry).filter((entry) => !entry.startsWith("!")));
+}
+function negatives(selector2) {
+  return new Set(entriesOf(selector2).map(canonicalEntry).filter((entry) => entry.startsWith("!")));
+}
+function narrowed(before, after) {
+  const afterPositives = positives(after);
+  if (afterPositives.has("*") && [...negatives(after)].every((entry) => negatives(before).has(entry))) return false;
+  const beforeNegatives = negatives(before);
+  return [...positives(before)].some((entry) => !afterPositives.has(entry)) || [...negatives(after)].some((entry) => !beforeNegatives.has(entry));
+}
+function widened(before, after) {
+  return narrowed(after, before);
+}
+function rewriteSelector(selector2, map2) {
+  const next = [];
+  for (const entry of entriesOf(selector2)) {
+    const id = entryComponent(entry);
+    if (id === null) {
+      next.push(entry);
+      continue;
+    }
+    const mapped = map2(id);
+    if (mapped === null) continue;
+    if (mapped === id) {
+      next.push(entry);
+      continue;
+    }
+    const negated = entry.startsWith("!");
+    const prefixed = (negated ? entry.slice(1) : entry).startsWith("component:");
+    next.push(`${negated ? "!" : ""}${prefixed ? "component:" : ""}${mapped}`);
+  }
+  if (!next.some((entry) => !entry.startsWith("!"))) return null;
+  return Array.isArray(selector2) ? next : next[0];
+}
+function ruleReferences2(rule, id) {
+  const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "no-cycles" ? [rule.scope] : rule.kind === "secret-access" ? [rule.allow] : [];
+  return selectors.some((selector2) => selectorComponentRefs(selector2).includes(id));
+}
+function rewriteRule(rule, map2) {
+  switch (rule.kind) {
+    case "forbid":
+    case "allow-only": {
+      const from = rewriteSelector(rule.from, map2);
+      const to = rewriteSelector(rule.to, map2);
+      if (from === null || to === null) return false;
+      rule.from = from;
+      rule.to = to;
+      return true;
+    }
+    case "layers": {
+      const layers = rule.layers.map((layer) => rewriteSelector(layer, map2)).filter((layer) => layer !== null);
+      if (layers.length < 2) return false;
+      rule.layers = layers;
+      return true;
+    }
+    case "no-cycles": {
+      if (rule.scope === void 0) return true;
+      const scope = rewriteSelector(rule.scope, map2);
+      if (scope === null) return false;
+      rule.scope = scope;
+      return true;
+    }
+    case "secret-access": {
+      const allow = rewriteSelector(rule.allow, map2);
+      if (allow === null) return false;
+      rule.allow = allow;
+      return true;
+    }
+    case "protect":
+      return true;
+  }
+}
+function selectorSlug(selector2) {
+  const parts = entriesOf(selector2).filter((entry) => !entry.startsWith("!")).map((entry) => entry === "*" ? "any" : entry.replace(/^(component|path|package|tag):/, ""));
+  return slugify3(parts.join(" ") || "any", 30);
+}
+function componentLabel(blueprint, id) {
+  const component2 = blueprint.components.find((item) => item.id === id);
+  return component2 ? `"${component2.name}"` : `"${id}"`;
+}
+function selectorText(blueprint, selector2) {
+  const parts = entriesOf(selector2).map((entry) => {
+    const negated = entry.startsWith("!");
+    const body = negated ? entry.slice(1) : entry;
+    let text4;
+    if (body === "*") text4 = "everything";
+    else if (body.startsWith("package:")) text4 = `package ${body.slice(8)}`;
+    else if (body.startsWith("path:")) text4 = `files matching ${body.slice(5)}`;
+    else if (body.startsWith("tag:")) text4 = `components tagged ${body.slice(4)}`;
+    else text4 = componentLabel(blueprint, body.startsWith("component:") ? body.slice(10) : body);
+    return negated ? `except ${text4}` : text4;
+  });
+  if (!parts.length) return "nothing";
+  const kept = parts.filter((part) => !part.startsWith("except "));
+  const excluded = parts.filter((part) => part.startsWith("except ")).map((part) => part.slice(7));
+  return `${list(kept)}${excluded.length ? ` except ${list(excluded)}` : ""}`;
+}
+function cleanReference(text4) {
+  return text4.trim().replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, "").replace(/^(?:the|our|my)\s+/i, "").replace(/^component\s+/i, "").replace(/\s+(?:component|layer|module|code)$/i, "").trim();
+}
+function resolveComponentRef(blueprint, text4) {
+  const reference = cleanReference(text4);
+  const lower = reference.toLowerCase();
+  if (!lower) return { candidates: [] };
+  const components = blueprint.components;
+  const pick2 = (ids) => ids.length === 1 ? { id: ids[0] } : ids.length > 1 ? { candidates: ids } : null;
+  const exactId = components.find((component2) => component2.id === reference) ?? components.find((component2) => component2.id.toLowerCase() === lower);
+  if (exactId) return { id: exactId.id };
+  const slug = slugify3(reference, 80);
+  const byName = pick2(components.filter((component2) => component2.name.toLowerCase() === lower).map((component2) => component2.id));
+  if (byName) return byName;
+  const bySlug = pick2(components.filter((component2) => component2.id.toLowerCase() === slug || slugify3(component2.name, 80) === slug).map((component2) => component2.id));
+  if (bySlug) return bySlug;
+  const group = KIND_WORDS.find((item) => item.words.includes(lower));
+  const kinds = group ? group.kinds : [lower, lower.replace(/s$/, "")];
+  const byKind = pick2(components.filter((component2) => kinds.includes(component2.kind)).map((component2) => component2.id));
+  if (byKind) return byKind;
+  const haystacks = components.map((component2) => ({ id: component2.id, values: [component2.id.toLowerCase(), component2.name.toLowerCase()] }));
+  const byPrefix = pick2(haystacks.filter((item) => item.values.some((value) => value.startsWith(lower))).map((item) => item.id));
+  if (byPrefix) return byPrefix;
+  if (lower.length >= 2) {
+    const bySubstring = pick2(haystacks.filter((item) => item.values.some((value) => value.includes(lower))).map((item) => item.id));
+    if (bySubstring) return bySubstring;
+  }
+  const budget = Math.min(2, Math.floor(lower.length / 3));
+  if (budget > 0) {
+    const scored = haystacks.map((item) => ({ id: item.id, distance: Math.min(...item.values.map((value) => editDistance2(lower, value))) })).filter((item) => item.distance <= budget);
+    if (scored.length) {
+      const best = Math.min(...scored.map((item) => item.distance));
+      const closest = pick2(scored.filter((item) => item.distance === best).map((item) => item.id));
+      if (closest) return closest;
+    }
+  }
+  return { candidates: [] };
+}
+function componentOrFail(blueprint, id) {
+  const component2 = blueprint.components.find((item) => item.id === id);
+  if (component2) return component2;
+  const suggestions = nearestIds(id, blueprint.components.map((item) => item.id));
+  throw new EditFailure(
+    `There is no component "${id}".${suggestions.length ? ` Did you mean ${list(suggestions.map((item) => `"${item}"`))}?` : ""}`,
+    suggestions
+  );
+}
+function ruleOrFail(blueprint, id) {
+  const rule = blueprint.rules.find((item) => item.id === id);
+  if (rule) return rule;
+  const suggestions = nearestIds(id, blueprint.rules.map((item) => item.id));
+  throw new EditFailure(
+    `There is no rule "${id}".${suggestions.length ? ` Did you mean ${list(suggestions.map((item) => `"${item}"`))}?` : ""}`,
+    suggestions
+  );
+}
+function checkSelector(blueprint, selector2, label) {
+  for (const ref of selectorComponentRefs(selector2)) {
+    if (blueprint.components.some((component2) => component2.id === ref)) continue;
+    const suggestions = nearestIds(ref, blueprint.components.map((item) => item.id));
+    throw new EditFailure(
+      `"${ref}" in ${label} is not a component. Use a component id, or a path:, package: or tag: selector.${suggestions.length ? ` Did you mean ${list(suggestions.map((item) => `"${item}"`))}?` : ""}`,
+      suggestions
+    );
+  }
+}
+function checkComponentList(blueprint, ids) {
+  for (const id of ids ?? []) componentOrFail(blueprint, id);
+}
+function newRuleId(blueprint, requested, fallback) {
+  const used = new Set(blueprint.rules.map((rule) => rule.id));
+  if (requested !== void 0) {
+    if (used.has(requested)) throw new EditFailure(`A rule with id "${requested}" already exists. Use update_rule to change it, or pick another id.`);
+    return requested;
+  }
+  return uniqueId3(fallback, used);
+}
+function unverify(fact, why) {
+  if (!fact.verified) return "";
+  const by = fact.verified.by;
+  delete fact.verified;
+  return ` Removed the verified stamp by ${by} because ${why}; it needs a new sign-off.`;
+}
+function addComponent(context, edit) {
+  const { blueprint } = context;
+  const used = new Set(blueprint.components.map((component3) => component3.id));
+  if (edit.id !== void 0 && used.has(edit.id)) {
+    throw new EditFailure(`A component with id "${edit.id}" already exists. Use update_component to change it, or pick another id.`);
+  }
+  if (!edit.external && edit.paths.length === 0) {
+    throw new EditFailure(`Component "${edit.name}" needs at least one path glob, or mark it external if it lives outside the repository.`);
+  }
+  const id = edit.id ?? uniqueId3(slugify3(edit.name), used);
+  const component2 = {
+    id,
+    name: edit.name,
+    kind: edit.kind ?? (edit.external ? "external" : "default"),
+    ...edit.description !== void 0 ? { description: edit.description } : {},
+    ...edit.intent !== void 0 ? { intent: edit.intent } : {},
+    paths: [...edit.paths],
+    ...edit.external ? { external: true } : {},
+    ...edit.tags?.length ? { tags: [...edit.tags] } : {},
+    ...edit.owners?.length ? { owners: [...edit.owners] } : {},
+    provenance: context.provenance
+  };
+  blueprint.components.push(component2);
+  const owning = edit.paths.length ? ` owning ${list(edit.paths)}` : "";
+  return {
+    summary: `Added ${edit.external ? "external " : ""}component "${edit.name}" (${id})${owning}.`,
+    targets: [id],
+    weakens: false
+  };
+}
+function updateComponent(context, edit) {
+  const component2 = componentOrFail(context.blueprint, edit.id);
+  const label = `"${component2.name}"`;
+  const target = component2;
+  const changes = [];
+  let weakens = false;
+  let structural = false;
+  for (const [key, value] of Object.entries(edit.set)) {
+    if (value === void 0) continue;
+    const before = target[key];
+    if (value === null) {
+      if (before === void 0) continue;
+      delete target[key];
+      changes.push(`${key} cleared`);
+      if (key === "exclude") structural = true;
+      continue;
+    }
+    if (same(before, value)) continue;
+    target[key] = clone2(value);
+    if (key === "paths" || key === "exclude") {
+      const old = new Set(before ?? []);
+      const next = new Set(value);
+      const added = [...next].filter((item) => !old.has(item));
+      const removed = [...old].filter((item) => !next.has(item));
+      changes.push(`${key} ${[...added.map((item) => `+${item}`), ...removed.map((item) => `−${item}`)].join(" ") || "reordered"}`);
+      if (key === "paths" ? removed.length > 0 : added.length > 0) weakens = true;
+      structural = true;
+    } else if (key === "intent" || key === "description") {
+      changes.push(`${key} ${before === void 0 ? "set" : "rewritten"}`);
+    } else if (Array.isArray(value)) {
+      changes.push(`${key} → ${value.join(", ") || "none"}`);
+    } else {
+      changes.push(`${key} ${before === void 0 ? "" : `${String(before)} `}→ ${String(value)}`);
+      if (key === "kind" || key === "external") structural = true;
+      if (key === "public" && value === true) weakens = true;
+    }
+  }
+  if (!changes.length) throw new EditFailure(`Nothing to change: component ${label} already has these values.`);
+  const note = structural ? unverify(component2, "what it covers changed") : "";
+  return { summary: `Updated component ${label}: ${changes.join("; ")}.${note}`, targets: [component2.id], weakens };
+}
+function removeComponent(context, edit) {
+  const { blueprint } = context;
+  const component2 = componentOrFail(blueprint, edit.id);
+  const id = component2.id;
+  const targets = [id];
+  const notes = [];
+  blueprint.components = blueprint.components.filter((item) => item.id !== id);
+  const droppedDependencies = blueprint.dependencies.filter((item) => item.from === id || item.to === id);
+  if (droppedDependencies.length) {
+    blueprint.dependencies = blueprint.dependencies.filter((item) => item.from !== id && item.to !== id);
+    notes.push(`removed ${droppedDependencies.length} declared ${droppedDependencies.length === 1 ? "dependency" : "dependencies"}`);
+  }
+  const removedRules = [];
+  const trimmedRules = [];
+  const unverified = [];
+  blueprint.rules = blueprint.rules.filter((rule) => {
+    if (!ruleReferences2(rule, id)) return true;
+    targets.push(rule.id);
+    if (!rewriteRule(rule, (ref) => ref === id ? null : ref)) {
+      removedRules.push(rule.id);
+      return false;
+    }
+    trimmedRules.push(rule.id);
+    if (rule.verified) {
+      delete rule.verified;
+      unverified.push(rule.id);
+    }
+    return true;
+  });
+  if (removedRules.length) notes.push(`removed ${removedRules.length === 1 ? "rule" : "rules"} ${list(removedRules)} (nothing left to constrain)`);
+  if (trimmedRules.length) notes.push(`stripped it from ${trimmedRules.length === 1 ? "rule" : "rules"} ${list(trimmedRules)}`);
+  if (unverified.length) notes.push(`cleared the verified stamp on ${list(unverified)}`);
+  let references = 0;
+  for (const item of [...blueprint.invariants, ...blueprint.decisions]) {
+    if (!item.components?.includes(id)) continue;
+    references += 1;
+    targets.push(item.id);
+    const rest = item.components.filter((ref) => ref !== id);
+    if (rest.length) item.components = rest;
+    else delete item.components;
+  }
+  if (references) notes.push(`unlinked it from ${references} ${references === 1 ? "invariant or decision" : "invariants and decisions"}`);
+  return {
+    summary: `Removed component "${component2.name}" (${id})${notes.length ? `; also ${notes.join(", ")}` : ""}.`,
+    targets,
+    weakens: component2.paths.length > 0 || removedRules.length > 0 || trimmedRules.length > 0
+  };
+}
+function renameComponent(context, edit) {
+  const { blueprint } = context;
+  const component2 = componentOrFail(blueprint, edit.id);
+  const oldId = component2.id;
+  const oldName = component2.name;
+  const newId = edit.newId ?? oldId;
+  const newName = edit.name ?? oldName;
+  if (edit.newId === void 0 && edit.name === void 0) throw new EditFailure("A rename needs a newId, a name, or both.");
+  if (newId === oldId && newName === oldName) throw new EditFailure(`Nothing to change: the component is already called "${oldName}" (${oldId}).`);
+  if (newId !== oldId && blueprint.components.some((item) => item.id === newId)) {
+    throw new EditFailure(`Cannot rename "${oldId}" to "${newId}": a component with that id already exists.`);
+  }
+  component2.name = newName;
+  const targets = [oldId];
+  let rewritten = 0;
+  if (newId !== oldId) {
+    component2.id = newId;
+    targets.push(newId);
+    for (const dependency of blueprint.dependencies) {
+      if (dependency.from === oldId) dependency.from = newId;
+      if (dependency.to === oldId) dependency.to = newId;
+    }
+    for (const rule of blueprint.rules) {
+      if (!ruleReferences2(rule, oldId)) continue;
+      rewriteRule(rule, (ref) => ref === oldId ? newId : ref);
+      targets.push(rule.id);
+      rewritten += 1;
+    }
+    for (const item of [...blueprint.invariants, ...blueprint.decisions]) {
+      if (!item.components?.includes(oldId)) continue;
+      item.components = item.components.map((ref) => ref === oldId ? newId : ref);
+      targets.push(item.id);
+    }
+  }
+  const idPart = newId !== oldId ? ` (${oldId} → ${newId})` : "";
+  const namePart = newName !== oldName ? ` to "${newName}"` : "";
+  const rulePart = rewritten ? `; updated ${rewritten} ${rewritten === 1 ? "rule" : "rules"} that reference it` : "";
+  return { summary: `Renamed component "${oldName}"${namePart}${idPart}${rulePart}.`, targets, weakens: false };
+}
+function declareDependency(context, edit) {
+  const { blueprint } = context;
+  const from = componentOrFail(blueprint, edit.from);
+  const to = componentOrFail(blueprint, edit.to);
+  if (from.id === to.id) throw new EditFailure(`A component cannot declare a dependency on itself ("${from.id}").`);
+  if (blueprint.dependencies.some((item) => item.from === from.id && item.to === to.id)) {
+    throw new EditFailure(`The dependency "${from.name}" → "${to.name}" is already declared.`);
+  }
+  blueprint.dependencies.push({
+    from: from.id,
+    to: to.id,
+    ...edit.kind ? { kind: edit.kind } : {},
+    ...edit.reason ? { reason: edit.reason } : {},
+    provenance: context.provenance
+  });
+  return {
+    summary: `Declared that "${from.name}" depends on "${to.name}"${edit.kind ? ` (${edit.kind})` : ""}.`,
+    targets: [from.id, to.id, `${from.id}->${to.id}`],
+    weakens: false
+  };
+}
+function removeDependency(context, edit) {
+  const { blueprint } = context;
+  const from = componentOrFail(blueprint, edit.from);
+  const to = componentOrFail(blueprint, edit.to);
+  const before = blueprint.dependencies.length;
+  blueprint.dependencies = blueprint.dependencies.filter((item) => !(item.from === from.id && item.to === to.id));
+  if (blueprint.dependencies.length === before) {
+    const outgoing = blueprint.dependencies.filter((item) => item.from === from.id).map((item) => `${item.from}->${item.to}`);
+    throw new EditFailure(`No dependency from "${from.name}" to "${to.name}" is declared.`, outgoing.slice(0, 5));
+  }
+  return {
+    summary: `Removed the declared dependency "${from.name}" → "${to.name}".`,
+    targets: [from.id, to.id, `${from.id}->${to.id}`],
+    weakens: false
+  };
+}
+function pushRule(context, rule, summary) {
+  context.blueprint.rules.push(rule);
+  const refs = /* @__PURE__ */ new Set();
+  for (const component2 of context.blueprint.components) if (ruleReferences2(rule, component2.id)) refs.add(component2.id);
+  return { summary: `${summary} (rule ${rule.id}).`, targets: [rule.id, ...refs], weakens: false };
+}
+function ruleExtras(context, edit) {
+  return {
+    ...edit.severity ? { severity: edit.severity } : {},
+    ...edit.reason ? { reason: edit.reason } : {},
+    provenance: context.provenance
+  };
+}
+function forbidDependency(context, edit) {
+  const { blueprint } = context;
+  checkSelector(blueprint, edit.from, "from");
+  checkSelector(blueprint, edit.to, "to");
+  const id = newRuleId(blueprint, edit.id, `forbid-${selectorSlug(edit.from)}-${selectorSlug(edit.to)}`);
+  const typeNote = edit.includeTypeOnly === false ? ", type-only imports excepted" : "";
+  return pushRule(
+    context,
+    {
+      id,
+      kind: "forbid",
+      from: clone2(edit.from),
+      to: clone2(edit.to),
+      ...edit.includeTypeOnly !== void 0 ? { includeTypeOnly: edit.includeTypeOnly } : {},
+      ...ruleExtras(context, edit)
+    },
+    `Forbade ${selectorText(blueprint, edit.from)} from depending on ${selectorText(blueprint, edit.to)}${typeNote}${edit.severity ? ` as ${edit.severity}` : ""}`
+  );
+}
+function allowOnly(context, edit) {
+  const { blueprint } = context;
+  checkSelector(blueprint, edit.from, "from");
+  checkSelector(blueprint, edit.to, "to");
+  const id = newRuleId(blueprint, edit.id, `allow-only-${selectorSlug(edit.from)}`);
+  return pushRule(
+    context,
+    { id, kind: "allow-only", from: clone2(edit.from), to: clone2(edit.to), ...ruleExtras(context, edit) },
+    `Restricted ${selectorText(blueprint, edit.from)} to depend only on ${selectorText(blueprint, edit.to)}${edit.severity ? ` as ${edit.severity}` : ""}`
+  );
+}
+function setLayers(context, edit) {
+  const { blueprint } = context;
+  edit.layers.forEach((layer, index) => checkSelector(blueprint, layer, `layer ${index + 1}`));
+  const id = newRuleId(blueprint, edit.id, "layers");
+  return pushRule(
+    context,
+    { id, kind: "layers", layers: clone2(edit.layers), ...ruleExtras(context, edit) },
+    `Set layers, top to bottom: ${edit.layers.map((layer) => selectorText(blueprint, layer)).join(" → ")}`
+  );
+}
+function forbidCycles(context, edit) {
+  const { blueprint } = context;
+  checkSelector(blueprint, edit.scope, "scope");
+  const duplicate = blueprint.rules.find((rule) => rule.kind === "no-cycles" && same(rule.scope, edit.scope));
+  if (duplicate) throw new EditFailure(`Rule "${duplicate.id}" already forbids dependency cycles${edit.scope ? " in that scope" : ""}.`, [duplicate.id]);
+  const id = newRuleId(blueprint, edit.id, edit.scope ? `no-cycles-${selectorSlug(edit.scope)}` : "no-cycles");
+  return pushRule(
+    context,
+    { id, kind: "no-cycles", ...edit.scope ? { scope: clone2(edit.scope) } : {}, ...ruleExtras(context, edit) },
+    `Forbade dependency cycles${edit.scope ? ` within ${selectorText(blueprint, edit.scope)}` : " between components"}`
+  );
+}
+function protectPaths(context, edit) {
+  const id = newRuleId(context.blueprint, edit.id, `protect-${slugify3(edit.paths[0], 40)}`);
+  return pushRule(
+    context,
+    { id, kind: "protect", paths: [...edit.paths], ...ruleExtras(context, edit) },
+    `Protected ${list(edit.paths)}: changes there require human review`
+  );
+}
+function restrictSecret(context, edit) {
+  const { blueprint } = context;
+  checkSelector(blueprint, edit.allow, "allow");
+  const id = newRuleId(blueprint, edit.id, `secret-${slugify3(edit.secrets[0], 30)}-${selectorSlug(edit.allow)}`);
+  return pushRule(
+    context,
+    { id, kind: "secret-access", secrets: [...edit.secrets], allow: clone2(edit.allow), ...ruleExtras(context, edit) },
+    `Restricted ${list(edit.secrets)} so that only ${selectorText(blueprint, edit.allow)} may read ${edit.secrets.length === 1 && !edit.secrets[0].includes("*") ? "it" : "them"}`
+  );
+}
+function isSubsequence(short, long) {
+  let cursor = 0;
+  for (const item of long) if (cursor < short.length && same(item, short[cursor])) cursor += 1;
+  return cursor === short.length;
+}
+function updateRule(context, edit) {
+  const { blueprint } = context;
+  const rule = ruleOrFail(blueprint, edit.id);
+  const before = clone2(rule);
+  const target = rule;
+  const allowed = RULE_FIELDS[rule.kind];
+  const changes = [];
+  let weakens = false;
+  let semantic = false;
+  for (const [key, value] of Object.entries(edit.set)) {
+    if (value === void 0) continue;
+    if (!allowed.includes(key)) {
+      throw new EditFailure(`Rule "${rule.id}" is a ${rule.kind} rule and has no "${key}" field. It accepts ${list(allowed)}.`, allowed);
+    }
+    if (value === null) {
+      if (target[key] === void 0) continue;
+      delete target[key];
+      changes.push(`${key} cleared`);
+      if (key !== "reason") semantic = true;
+      continue;
+    }
+    if (same(target[key], value)) continue;
+    if (key === "layers") value.forEach((layer, index) => checkSelector(blueprint, layer, `layer ${index + 1}`));
+    else if (key === "from" || key === "to" || key === "allow" || key === "scope") checkSelector(blueprint, value, key);
+    target[key] = clone2(value);
+    if (key !== "reason") semantic = true;
+    const old = before[key];
+    switch (key) {
+      case "severity": {
+        const previous = old ?? DEFAULT_SEVERITY[rule.kind];
+        changes.push(`severity ${previous} → ${String(value)}`);
+        if (SEVERITY_RANK3[String(value)] < SEVERITY_RANK3[previous]) weakens = true;
+        break;
+      }
+      case "reason":
+        changes.push(`reason ${old === void 0 ? "set" : "rewritten"}`);
+        break;
+      case "includeTypeOnly": {
+        changes.push(`type-only imports ${value ? "counted" : "ignored"}`);
+        if (value === false && (old ?? blueprint.policy.includeTypeOnly)) weakens = true;
+        break;
+      }
+      case "layers": {
+        changes.push(`layers → ${value.map((layer) => selectorText(blueprint, layer)).join(" → ")}`);
+        if (!isSubsequence(old, value)) weakens = true;
+        break;
+      }
+      case "paths":
+      case "secrets": {
+        const next = new Set(value);
+        changes.push(`${key} → ${value.join(", ")}`);
+        if (old.some((item) => !next.has(item))) weakens = true;
+        break;
+      }
+      default: {
+        changes.push(`${key} → ${selectorText(blueprint, value)}`);
+        const oldSelector = old;
+        const nextSelector = value;
+        if (key === "scope") {
+          if (oldSelector === void 0 || narrowed(oldSelector, nextSelector)) weakens = true;
+        } else if (key === "allow" || key === "to" && rule.kind === "allow-only") {
+          if (widened(oldSelector, nextSelector)) weakens = true;
+        } else if (narrowed(oldSelector, nextSelector)) {
+          weakens = true;
+        }
+      }
+    }
+  }
+  if (!changes.length) throw new EditFailure(`Nothing to change: rule "${rule.id}" already has these values.`);
+  const note = semantic ? unverify(rule, "what it enforces changed") : "";
+  return { summary: `Updated rule ${rule.id}: ${changes.join("; ")}.${note}`, targets: [rule.id], weakens };
+}
+function removeRule(context, edit) {
+  const rule = ruleOrFail(context.blueprint, edit.id);
+  context.blueprint.rules = context.blueprint.rules.filter((item) => item.id !== rule.id);
+  return { summary: `Removed the ${rule.kind} rule ${rule.id}.`, targets: [rule.id], weakens: true };
+}
+function addInvariant(context, edit) {
+  const { blueprint } = context;
+  const used = new Set(blueprint.invariants.map((item) => item.id));
+  if (edit.id !== void 0 && used.has(edit.id)) throw new EditFailure(`An invariant with id "${edit.id}" already exists.`);
+  checkComponentList(blueprint, edit.components);
+  const id = edit.id ?? uniqueId3(slugify3(edit.statement, 48), used);
+  blueprint.invariants.push({
+    id,
+    statement: edit.statement,
+    ...edit.components?.length ? { components: [...edit.components] } : {},
+    ...edit.run !== void 0 || edit.tests?.length ? { check: { ...edit.run !== void 0 ? { run: edit.run } : {}, ...edit.tests?.length ? { tests: [...edit.tests] } : {} } } : {},
+    ...edit.severity ? { severity: edit.severity } : {},
+    provenance: context.provenance
+  });
+  const check2 = edit.run !== void 0 ? `, checked by \`${edit.run}\`` : edit.tests?.length ? `, covered by ${list(edit.tests)}` : "";
+  return { summary: `Added invariant ${id}: "${edit.statement}"${check2}.`, targets: [id, ...edit.components ?? []], weakens: false };
+}
+function removeInvariant(context, edit) {
+  const { blueprint } = context;
+  const invariant = blueprint.invariants.find((item) => item.id === edit.id);
+  if (!invariant) {
+    const suggestions = nearestIds(edit.id, blueprint.invariants.map((item) => item.id));
+    throw new EditFailure(`There is no invariant "${edit.id}".`, suggestions);
+  }
+  blueprint.invariants = blueprint.invariants.filter((item) => item.id !== edit.id);
+  return { summary: `Removed invariant ${invariant.id}: "${invariant.statement}".`, targets: [invariant.id], weakens: true };
+}
+function addDecision(context, edit) {
+  const { blueprint } = context;
+  const used = new Set(blueprint.decisions.map((item) => item.id));
+  if (edit.id !== void 0 && used.has(edit.id)) throw new EditFailure(`A decision with id "${edit.id}" already exists.`);
+  checkComponentList(blueprint, edit.components);
+  let id = edit.id;
+  if (id === void 0) {
+    let next = 1;
+    for (const existing of used) {
+      const match = /^ADR-(\d+)$/i.exec(existing);
+      if (match) next = Math.max(next, Number(match[1]) + 1);
+    }
+    id = `ADR-${String(next).padStart(3, "0")}`;
+  }
+  const date5 = edit.date ?? context.now?.slice(0, 10);
+  const status = edit.status ?? "accepted";
+  blueprint.decisions.push({
+    id,
+    title: edit.title,
+    status,
+    ...date5 ? { date: date5 } : {},
+    ...edit.components?.length ? { components: [...edit.components] } : {},
+    ...edit.context !== void 0 ? { context: edit.context } : {},
+    decision: edit.decision,
+    ...edit.consequences !== void 0 ? { consequences: edit.consequences } : {},
+    provenance: context.provenance
+  });
+  return { summary: `Recorded decision ${id} (${status}): "${edit.title}".`, targets: [id, ...edit.components ?? []], weakens: false };
+}
+function removeDecision(context, edit) {
+  const { blueprint } = context;
+  const decision = blueprint.decisions.find((item) => item.id === edit.id);
+  if (!decision) {
+    const suggestions = nearestIds(edit.id, blueprint.decisions.map((item) => item.id));
+    throw new EditFailure(`There is no decision "${edit.id}".`, suggestions);
+  }
+  blueprint.decisions = blueprint.decisions.filter((item) => item.id !== edit.id);
+  const targets = [decision.id];
+  for (const other of blueprint.decisions) {
+    if (other.supersededBy !== decision.id) continue;
+    delete other.supersededBy;
+    targets.push(other.id);
+  }
+  const note = targets.length > 1 ? `; ${list(targets.slice(1))} no longer point${targets.length === 2 ? "s" : ""} to it as superseding` : "";
+  return { summary: `Removed decision ${decision.id}: "${decision.title}"${note}.`, targets, weakens: false };
+}
+function setPolicy(context, edit) {
+  const policy = context.blueprint.policy;
+  const changes = [];
+  let weakens = false;
+  for (const key of ["undeclaredDependencies", "unmappedFiles"]) {
+    const value = edit[key];
+    if (value === void 0 || value === policy[key]) continue;
+    if (SEVERITY_RANK3[value] < SEVERITY_RANK3[policy[key]]) weakens = true;
+    changes.push(`${key === "undeclaredDependencies" ? "undeclared dependencies" : "unmapped files"} ${policy[key]} → ${value}`);
+    policy[key] = value;
+  }
+  for (const key of ["includeTypeOnly", "verificationHeuristics"]) {
+    const value = edit[key];
+    if (value === void 0 || value === policy[key]) continue;
+    if (!value) weakens = true;
+    changes.push(key === "includeTypeOnly" ? `type-only imports ${value ? "counted" : "ignored"}` : `verification heuristics ${value ? "on" : "off"}`);
+    policy[key] = value;
+  }
+  const added = [...new Set(edit.ignoreAdd ?? [])].filter((glob) => !policy.ignore.includes(glob));
+  if (added.length) {
+    policy.ignore = [...policy.ignore, ...added];
+    changes.push(`now ignoring ${list(added)}`);
+    weakens = true;
+  }
+  const removed = [...new Set(edit.ignoreRemove ?? [])];
+  const missing = removed.filter((glob) => !policy.ignore.includes(glob));
+  if (missing.length) throw new EditFailure(`${list(missing)} ${missing.length === 1 ? "is" : "are"} not in the ignore list.`, policy.ignore.slice(0, 5));
+  if (removed.length) {
+    policy.ignore = policy.ignore.filter((glob) => !removed.includes(glob));
+    changes.push(`no longer ignoring ${list(removed)}`);
+  }
+  if (!changes.length) throw new EditFailure("Nothing to change: the policy already has these values.");
+  return { summary: `Updated policy: ${changes.join("; ")}.`, targets: [], weakens };
+}
+function setRuntime(context, edit) {
+  const component2 = componentOrFail(context.blueprint, edit.id);
+  const target = component2;
+  const runtime = { ...target.runtime ?? {} };
+  const changes = [];
+  if (edit.health !== void 0) {
+    if (edit.health === null) {
+      if (runtime.health !== void 0) changes.push("health check removed");
+      delete runtime.health;
+    } else if (!same(runtime.health, edit.health)) {
+      runtime.health = { ...edit.health };
+      changes.push(`health check ${edit.health.method ?? "GET"} ${edit.health.url}${edit.health.expectStatus ? ` expecting ${edit.health.expectStatus}` : ""}`);
+    }
+  }
+  if (edit.deployment !== void 0) {
+    if (edit.deployment === null) {
+      if (runtime.deployment !== void 0) changes.push("deployment removed");
+      delete runtime.deployment;
+    } else if (!same(runtime.deployment, edit.deployment)) {
+      runtime.deployment = { ...edit.deployment };
+      changes.push(`deployed to environment ${edit.deployment.environment}`);
+    }
+  }
+  if (edit.workflow !== void 0) {
+    if (edit.workflow === null) {
+      if (runtime.workflow !== void 0) changes.push("workflow removed");
+      delete runtime.workflow;
+    } else if (!same(runtime.workflow, edit.workflow)) {
+      runtime.workflow = { ...edit.workflow };
+      changes.push(`workflow ${edit.workflow.file}`);
+    }
+  }
+  if (!changes.length) throw new EditFailure(`Nothing to change: the runtime of "${component2.name}" already has these values.`);
+  if (Object.keys(runtime).length) target.runtime = runtime;
+  else delete target.runtime;
+  return { summary: `Set runtime of "${component2.name}": ${changes.join("; ")}.`, targets: [component2.id], weakens: false };
+}
+function applyOne(context, edit) {
+  switch (edit.op) {
+    case "add_component":
+      return addComponent(context, edit);
+    case "update_component":
+      return updateComponent(context, edit);
+    case "remove_component":
+      return removeComponent(context, edit);
+    case "rename_component":
+      return renameComponent(context, edit);
+    case "declare_dependency":
+      return declareDependency(context, edit);
+    case "remove_dependency":
+      return removeDependency(context, edit);
+    case "forbid_dependency":
+      return forbidDependency(context, edit);
+    case "allow_only":
+      return allowOnly(context, edit);
+    case "set_layers":
+      return setLayers(context, edit);
+    case "forbid_cycles":
+      return forbidCycles(context, edit);
+    case "protect_paths":
+      return protectPaths(context, edit);
+    case "restrict_secret":
+      return restrictSecret(context, edit);
+    case "update_rule":
+      return updateRule(context, edit);
+    case "remove_rule":
+      return removeRule(context, edit);
+    case "add_invariant":
+      return addInvariant(context, edit);
+    case "remove_invariant":
+      return removeInvariant(context, edit);
+    case "add_decision":
+      return addDecision(context, edit);
+    case "remove_decision":
+      return removeDecision(context, edit);
+    case "set_policy":
+      return setPolicy(context, edit);
+    case "set_runtime":
+      return setRuntime(context, edit);
+  }
+}
+function issueText(issues) {
+  return issues.slice(0, 4).map((issue2) => `${issue2.path}: ${issue2.message}`).join("; ");
+}
+function applyBlueprintEdits(blueprint, edits, options = {}) {
+  const start = parseBlueprint(clone2(blueprint));
+  if (!start.ok) {
+    throw new BlueprintEditError(-1, "", `The blueprint is invalid before any edit: ${issueText(start.issues)}`, { issues: start.issues });
+  }
+  const provenance = {
+    ...options.provenance ?? { source: "human" },
+    ...options.now !== void 0 && options.provenance?.at === void 0 ? { at: options.now } : {}
+  };
+  let draft = start.blueprint;
+  const applied = [];
+  edits.forEach((raw, index) => {
+    const opName = typeof raw?.op === "string" ? raw.op : "";
+    const parsed = blueprintEditSchema.safeParse(raw);
+    if (!parsed.success) {
+      const detail = parsed.error.issues.slice(0, 3).map((issue2) => `${issue2.path.length ? `${issue2.path.join(".")}: ` : ""}${issue2.message}`).join("; ");
+      const ops = blueprintEditSchema.options.map((option) => option.shape.op.value);
+      const unknownOp = !ops.includes(opName);
+      throw new BlueprintEditError(index, opName, `Edit ${index + 1}${opName ? ` (${opName})` : ""} is not a valid edit: ${detail}`, {
+        suggestions: unknownOp ? nearestIds(opName, ops) : void 0
+      });
+    }
+    const edit = parsed.data;
+    let outcome;
+    try {
+      outcome = applyOne({ blueprint: draft, provenance: { ...provenance }, now: options.now }, edit);
+    } catch (error62) {
+      if (error62 instanceof EditFailure) throw new BlueprintEditError(index, edit.op, error62.message, { suggestions: error62.suggestions });
+      throw error62;
+    }
+    const checked = parseBlueprint(draft);
+    if (!checked.ok) {
+      throw new BlueprintEditError(index, edit.op, `Edit ${index + 1} (${edit.op}) would make the blueprint invalid: ${issueText(checked.issues)}`, {
+        issues: checked.issues
+      });
+    }
+    draft = checked.blueprint;
+    applied.push({ index, op: edit.op, ...outcome, targets: [...new Set(outcome.targets)] });
+  });
+  return { blueprint: draft, applied };
+}
+function describeEdits(applied) {
+  if (!applied.length) return "No changes.";
+  const lines = applied.map((edit, position) => `${position + 1}. ${edit.summary}${edit.weakens ? " [weakens the contract]" : ""}`);
+  const weakening = applied.filter((edit) => edit.weakens).length;
+  lines.push(
+    `${applied.length} ${applied.length === 1 ? "change" : "changes"}${weakening ? `, ${weakening} of which ${weakening === 1 ? "weakens" : "weaken"} the contract` : ""}.`
+  );
+  return lines.join("\n");
+}
+var globSchema2, globListSchema, tagListSchema, ownerListSchema, nameSchema, reasonSchema, longTextSchema, componentIdListSchema, secretListSchema, componentPatchSchema, rulePatchSchema, healthSchema, blueprintEditSchema, BlueprintEditError, KIND_WORDS, EditFailure, SEVERITY_RANK3, DEFAULT_SEVERITY, RULE_FIELDS;
+var init_edits = __esm({
+  "src/blueprint/edits.ts"() {
+    "use strict";
+    init_zod();
+    init_schema();
+    init_util3();
+    globSchema2 = external_exports.string().trim().min(1).max(400);
+    globListSchema = external_exports.array(globSchema2).max(200);
+    tagListSchema = external_exports.array(external_exports.string().trim().min(1).max(80)).max(50);
+    ownerListSchema = external_exports.array(external_exports.string().trim().min(1).max(120)).max(50);
+    nameSchema = external_exports.string().trim().min(1).max(200);
+    reasonSchema = external_exports.string().max(2e3);
+    longTextSchema = external_exports.string().max(8e3);
+    componentIdListSchema = external_exports.array(blueprintIdSchema).max(100);
+    secretListSchema = external_exports.array(external_exports.string().trim().min(1).max(200)).min(1).max(200);
+    componentPatchSchema = external_exports.strictObject({
+      name: nameSchema.optional(),
+      kind: componentKindSchema.optional(),
+      description: external_exports.string().max(2e3).nullable().optional(),
+      intent: longTextSchema.nullable().optional(),
+      paths: globListSchema.optional(),
+      exclude: globListSchema.nullable().optional(),
+      tags: tagListSchema.nullable().optional(),
+      owners: ownerListSchema.nullable().optional(),
+      assurance: assuranceSchema.nullable().optional(),
+      external: external_exports.boolean().optional(),
+      public: external_exports.boolean().optional(),
+      priority: external_exports.number().int().min(-100).max(100).nullable().optional()
+    });
+    rulePatchSchema = external_exports.strictObject({
+      severity: severitySchema.optional(),
+      reason: reasonSchema.nullable().optional(),
+      from: selectorSchema.optional(),
+      to: selectorSchema.optional(),
+      layers: external_exports.array(selectorSchema).min(2).max(20).optional(),
+      paths: globListSchema.min(1).optional(),
+      secrets: secretListSchema.optional(),
+      allow: selectorSchema.optional(),
+      scope: selectorSchema.nullable().optional(),
+      includeTypeOnly: external_exports.boolean().optional()
+    });
+    healthSchema = external_exports.strictObject({
+      url: external_exports.string().trim().max(500).regex(/^https?:\/\/\S+$/i, "health.url is an http(s) URL"),
+      method: external_exports.enum(["GET", "HEAD"]).optional(),
+      expectStatus: external_exports.number().int().min(100).max(599).optional(),
+      timeoutMs: external_exports.number().int().min(100).max(3e4).optional()
+    });
+    blueprintEditSchema = external_exports.discriminatedUnion("op", [
+      external_exports.strictObject({
+        op: external_exports.literal("add_component"),
+        id: blueprintIdSchema.optional(),
+        name: nameSchema,
+        kind: componentKindSchema.optional(),
+        paths: globListSchema.default([]),
+        description: external_exports.string().max(2e3).optional(),
+        intent: longTextSchema.optional(),
+        tags: tagListSchema.optional(),
+        owners: ownerListSchema.optional(),
+        external: external_exports.boolean().optional()
+      }),
+      external_exports.strictObject({ op: external_exports.literal("update_component"), id: blueprintIdSchema, set: componentPatchSchema }),
+      external_exports.strictObject({ op: external_exports.literal("remove_component"), id: blueprintIdSchema }),
+      external_exports.strictObject({
+        op: external_exports.literal("rename_component"),
+        id: blueprintIdSchema,
+        newId: blueprintIdSchema.optional(),
+        name: nameSchema.optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("declare_dependency"),
+        from: blueprintIdSchema,
+        to: blueprintIdSchema,
+        kind: dependencyKindSchema.optional(),
+        reason: reasonSchema.optional()
+      }),
+      external_exports.strictObject({ op: external_exports.literal("remove_dependency"), from: blueprintIdSchema, to: blueprintIdSchema }),
+      external_exports.strictObject({
+        op: external_exports.literal("forbid_dependency"),
+        from: selectorSchema,
+        to: selectorSchema,
+        id: blueprintIdSchema.optional(),
+        severity: severitySchema.optional(),
+        reason: reasonSchema.optional(),
+        includeTypeOnly: external_exports.boolean().optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("allow_only"),
+        from: selectorSchema,
+        to: selectorSchema,
+        id: blueprintIdSchema.optional(),
+        severity: severitySchema.optional(),
+        reason: reasonSchema.optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("set_layers"),
+        layers: external_exports.array(selectorSchema).min(2).max(20),
+        id: blueprintIdSchema.optional(),
+        reason: reasonSchema.optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("forbid_cycles"),
+        scope: selectorSchema.optional(),
+        id: blueprintIdSchema.optional(),
+        reason: reasonSchema.optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("protect_paths"),
+        paths: globListSchema.min(1),
+        id: blueprintIdSchema.optional(),
+        reason: reasonSchema.optional(),
+        severity: severitySchema.optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("restrict_secret"),
+        secrets: secretListSchema,
+        allow: selectorSchema,
+        id: blueprintIdSchema.optional(),
+        reason: reasonSchema.optional()
+      }),
+      external_exports.strictObject({ op: external_exports.literal("update_rule"), id: blueprintIdSchema, set: rulePatchSchema }),
+      external_exports.strictObject({ op: external_exports.literal("remove_rule"), id: blueprintIdSchema }),
+      external_exports.strictObject({
+        op: external_exports.literal("add_invariant"),
+        id: blueprintIdSchema.optional(),
+        statement: external_exports.string().trim().min(1).max(2e3),
+        components: componentIdListSchema.optional(),
+        run: external_exports.string().trim().min(1).max(1e3).optional(),
+        tests: external_exports.array(globSchema2).max(100).optional(),
+        severity: severitySchema.optional()
+      }),
+      external_exports.strictObject({ op: external_exports.literal("remove_invariant"), id: blueprintIdSchema }),
+      external_exports.strictObject({
+        op: external_exports.literal("add_decision"),
+        id: blueprintIdSchema.optional(),
+        title: external_exports.string().trim().min(1).max(300),
+        decision: longTextSchema,
+        context: longTextSchema.optional(),
+        consequences: longTextSchema.optional(),
+        status: external_exports.enum(["proposed", "accepted", "superseded", "deprecated"]).optional(),
+        components: componentIdListSchema.optional(),
+        date: external_exports.string().trim().min(4).max(40).optional()
+      }),
+      external_exports.strictObject({ op: external_exports.literal("remove_decision"), id: blueprintIdSchema }),
+      external_exports.strictObject({
+        op: external_exports.literal("set_policy"),
+        undeclaredDependencies: external_exports.enum(["off", "info", "warning", "error"]).optional(),
+        unmappedFiles: external_exports.enum(["off", "info", "warning"]).optional(),
+        includeTypeOnly: external_exports.boolean().optional(),
+        verificationHeuristics: external_exports.boolean().optional(),
+        ignoreAdd: external_exports.array(globSchema2).max(500).optional(),
+        ignoreRemove: external_exports.array(globSchema2).max(500).optional()
+      }),
+      external_exports.strictObject({
+        op: external_exports.literal("set_runtime"),
+        id: blueprintIdSchema,
+        health: healthSchema.nullable().optional(),
+        deployment: external_exports.strictObject({ environment: external_exports.string().trim().min(1).max(100) }).nullable().optional(),
+        workflow: external_exports.strictObject({ file: external_exports.string().trim().min(1).max(200) }).nullable().optional()
+      })
+    ]);
+    BlueprintEditError = class extends Error {
+      constructor(index, op, message, extra = {}) {
+        super(message);
+        this.name = "BlueprintEditError";
+        this.index = index;
+        this.op = op;
+        if (extra.suggestions?.length) this.suggestions = extra.suggestions;
+        if (extra.issues?.length) this.issues = extra.issues;
+      }
+    };
+    KIND_WORDS = [
+      { words: ["ui", "frontend", "front-end", "front end", "user interface", "web ui"], kinds: ["component", "route", "client", "ui", "frontend", "page", "view"] },
+      { words: ["db", "database", "databases", "storage", "data store", "datastore", "persistence"], kinds: ["database", "storage", "db", "datastore"] },
+      { words: ["api", "apis"], kinds: ["api"] },
+      { words: ["tests", "test", "specs", "test suite"], kinds: ["test", "tests"] }
+    ];
+    EditFailure = class extends Error {
+      constructor(message, suggestions) {
+        super(message);
+        this.suggestions = suggestions;
+      }
+    };
+    SEVERITY_RANK3 = { off: 0, info: 1, warning: 2, error: 3 };
+    DEFAULT_SEVERITY = {
+      forbid: "error",
+      "allow-only": "error",
+      layers: "error",
+      "secret-access": "error",
+      "no-cycles": "warning",
+      protect: "warning"
+    };
+    RULE_FIELDS = {
+      forbid: ["severity", "reason", "from", "to", "includeTypeOnly"],
+      "allow-only": ["severity", "reason", "from", "to", "includeTypeOnly"],
+      layers: ["severity", "reason", "layers", "includeTypeOnly"],
+      "no-cycles": ["severity", "reason", "scope", "includeTypeOnly"],
+      protect: ["severity", "reason", "paths"],
+      "secret-access": ["severity", "reason", "secrets", "allow"]
+    };
+  }
+});
+
+// src/blueprint/intent.ts
+function unquote(text4) {
+  return text4.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+function cleanTerm(text4) {
+  return unquote(text4).replace(/^(?:the|our|my|a|an)\s+/i, "").trim();
+}
+function quoted2(items) {
+  const parts = items.map((item) => `"${item}"`);
+  return parts.length <= 1 ? parts[0] ?? "" : `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}`;
+}
+function component(context, raw) {
+  const term = cleanTerm(raw);
+  const key = `component:${term.toLowerCase()}`;
+  const chosen = context.choices.get(key);
+  if (chosen) return chosen;
+  const resolved = resolveComponentRef(context.blueprint, term);
+  if ("id" in resolved) return resolved.id;
+  if (resolved.candidates.length) throw new AmbiguousReference(key, term, resolved.candidates);
+  const suggestions = nearestIds(term, context.blueprint.components.map((item) => item.id));
+  throw new UnknownReference(
+    `I don't know a component called "${term}".${suggestions.length ? ` Did you mean ${quoted2(suggestions)}?` : ""} For an npm package say "package ${term}", for files give a path such as src/${slugify3(term)}/**.`,
+    suggestions
+  );
+}
+function ruleRef(context, raw) {
+  const term = cleanTerm(raw).replace(/^rule\s+/i, "");
+  const key = `rule:${term.toLowerCase()}`;
+  const chosen = context.choices.get(key);
+  if (chosen) return chosen;
+  const ids = context.blueprint.rules.map((rule) => rule.id);
+  const lower = term.toLowerCase();
+  const exact = ids.find((id) => id === term) ?? ids.find((id) => id.toLowerCase() === lower) ?? ids.find((id) => id.toLowerCase() === slugify3(term, 80));
+  if (exact) return exact;
+  const partial2 = ids.filter((id) => id.toLowerCase().includes(lower));
+  if (partial2.length === 1) return partial2[0];
+  if (partial2.length > 1) throw new AmbiguousReference(key, term, partial2);
+  const suggestions = nearestIds(term, ids);
+  throw new UnknownReference(`There is no rule called "${term}".${suggestions.length ? ` Did you mean ${quoted2(suggestions)}?` : ""}`, suggestions);
+}
+function exactComponent(blueprint, text4) {
+  const lower = cleanTerm(text4).toLowerCase();
+  const found = blueprint.components.find((item) => item.id.toLowerCase() === lower || item.name.toLowerCase() === lower);
+  return found ? found.id : null;
+}
+function isPathLike(text4) {
+  if (!text4 || /\s/.test(text4) || /^https?:/i.test(text4) || /^(?:node|package|tag|component):/i.test(text4) || text4.startsWith("@")) return false;
+  if (/[/*]/.test(text4)) return true;
+  if (text4.startsWith(".") && text4.length > 1) return true;
+  if (BARE_FILES.test(text4)) return true;
+  return /^[\w-][\w.-]*\.[A-Za-z0-9]{1,5}$/.test(text4) && !/^node\.js$/i.test(text4);
+}
+function toGlob(text4) {
+  const path = unquote(text4).replace(/^path:/, "").replace(/^\.\//, "").replace(/\\/g, "/");
+  if (path.endsWith("/")) return `${path}**`;
+  if (path.includes("*")) return path;
+  const last = path.slice(path.lastIndexOf("/") + 1);
+  if (BARE_FILES.test(last)) return path;
+  if (last.startsWith(".")) return DOT_DIRECTORIES.has(last) ? `${path}/**` : path;
+  if (last.includes(".")) return path;
+  return `${path}/**`;
+}
+function splitList(text4) {
+  return text4.split(/\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or|plus)\s+|\s*&\s*/i).map((part) => part.trim()).filter(Boolean);
+}
+function terms(context, text4) {
+  const whole = cleanTerm(text4);
+  if (/[,&]|\s(?:and|or|plus)\s/i.test(whole) && exactComponent(context.blueprint, whole)) return [whole];
+  return splitList(whole);
+}
+function pathList(context, text4) {
+  const globs = [];
+  for (const raw of terms(context, text4)) {
+    const term = cleanTerm(raw).replace(/^(?:files?|everything|anything|code)\s+(?:in|under|inside|matching|at)\s+/i, "");
+    if (isPathLike(term) || term.startsWith("path:")) {
+      globs.push(toGlob(term));
+      continue;
+    }
+    const owner = context.blueprint.components.find((item) => item.id === component(context, term));
+    if (!owner || owner.paths.length === 0) throw new UnknownReference(`"${term}" owns no files. Give a path such as src/${slugify3(term)}/**.`);
+    globs.push(...owner.paths);
+  }
+  return [...new Set(globs)];
+}
+function selectorEntry(context, raw) {
+  const term = cleanTerm(raw);
+  if (EVERYTHING.test(term)) return "*";
+  if (/^(?:path|package|tag):\S+$/i.test(term)) return term;
+  if (/^component:/i.test(term)) return component(context, term.slice("component:".length));
+  const known = exactComponent(context.blueprint, term);
+  if (known) return known;
+  if (/^node(?:\.js)?(?:'s)?(?:\s+(?:built-?ins?|builtins|core(?:\s+modules)?|standard\s+library|stdlib|modules|apis?))?$/i.test(term)) return "package:node:*";
+  if (/^node:[\w/*.-]+$/i.test(term)) return `package:${term}`;
+  if (/^@[\w.-]+\/[\w.*-]+$/.test(term)) return `package:${term}`;
+  let match = /^(?:the\s+)?(?:npm\s+)?(?:packages?|librar(?:y|ies)|modules?|dependency|sdk)\s+(\S+)$/i.exec(term);
+  if (match) return `package:${unquote(match[1])}`;
+  match = /^(\S+)\s+(?:package|library|sdk|npm\s+package)$/i.exec(term);
+  if (match) return `package:${unquote(match[1])}`;
+  match = /^(?:components?|anything|everything|files|code)\s+tagged\s+(?:with\s+|as\s+)?(\S+)$/i.exec(term);
+  if (match) return `tag:${unquote(match[1])}`;
+  match = /^(?:files?|code|anything|everything|modules?)\s+(?:in|under|inside|within|matching|at)\s+(.+)$/i.exec(term);
+  const body = match ? cleanTerm(match[1]) : term;
+  if (isPathLike(body)) return `path:${toGlob(body)}`;
+  return component(context, body);
+}
+function selector(context, text4) {
+  const cleaned = cleanTerm(text4);
+  const exception = /^(.*?)(?:,\s*|\s+|^)(?:except(?:\s+for)?|but\s+not|other\s+than|excluding|apart\s+from|besides)\s+(.+)$/i.exec(cleaned);
+  const base = exception ? exception[1].trim() : cleaned;
+  const entries2 = base ? terms(context, base).map((part) => selectorEntry(context, part)) : ["*"];
+  if (exception) for (const part of terms(context, exception[2])) entries2.push(`!${selectorEntry(context, part)}`);
+  const unique = [...new Set(entries2)];
+  return unique.length === 1 ? unique[0] : unique;
+}
+function entriesOf2(value) {
+  return Array.isArray(value) ? value : [value];
+}
+function re(source) {
+  return new RegExp(source, "i");
+}
+function suffix(command) {
+  const result = { body: command };
+  const because = /^(.*?)(?:,|\s+-+|\s+—)?\s+(?:because|since)\s+(.+)$/i.exec(result.body);
+  if (because) {
+    result.body = because[1].trim();
+    result.reason = sentence(because[2]);
+  }
+  const typeOnly = /^(.*?)(?:,|\s)\s*\(?(?:except|but|excluding|ignoring|not\s+counting)\s+(?:for\s+)?type(?:-only|\s+only)?\s+imports?(?:\s+are\s+(?:fine|ok|okay|allowed))?\)?$/i.exec(result.body);
+  if (typeOnly) {
+    result.body = typeOnly[1].trim();
+    result.includeTypeOnly = false;
+  }
+  const severity = /^(.*?)(?:,\s*|\s+)\(?(?:as|with\s+severity|severity:?)\s+(?:an?\s+)?(error|warning|info)\)?$/i.exec(result.body);
+  if (severity) {
+    result.body = severity[1].trim();
+    result.severity = severity[2].toLowerCase();
+  }
+  return result;
+}
+function sentence(text4) {
+  const trimmed = unquote(text4).trim();
+  return trimmed ? trimmed[0].toUpperCase() + trimmed.slice(1) : trimmed;
+}
+function ruleOptions(parts) {
+  return { ...parts.reason ? { reason: parts.reason } : {}, ...parts.severity ? { severity: parts.severity } : {} };
+}
+function forbidEdit(from, to, parts) {
+  return [
+    {
+      op: "forbid_dependency",
+      from,
+      to,
+      ...ruleOptions(parts),
+      ...parts.includeTypeOnly !== void 0 ? { includeTypeOnly: parts.includeTypeOnly } : {}
+    }
+  ];
+}
+function isSecretName(text4) {
+  return /^[A-Z0-9_*]+$/.test(text4) && /[A-Z]/.test(text4);
+}
+function secretNames(text4) {
+  const body = cleanTerm(text4).replace(/^(?:the\s+)?(?:secrets?|env(?:ironment)?\s+var(?:iable)?s?|keys?)\s+/i, "");
+  const names = splitList(body).map(unquote);
+  return names.length && names.every(isSecretName) ? names : null;
+}
+function dependencyKind(verb) {
+  const lower = (verb ?? "").toLowerCase();
+  if (/^call|^talk/.test(lower)) return "calls";
+  if (/^read/.test(lower)) return "reads";
+  if (/^writ/.test(lower)) return "writes";
+  if (/^us/.test(lower)) return "uses";
+  if (/^import/.test(lower)) return "imports";
+  return void 0;
+}
+function normalize2(text4) {
+  return text4.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'").replace(/\r/g, "");
+}
+function splitCommands(text4) {
+  const commands = [];
+  let current = "";
+  let quote2 = null;
+  for (let index = 0; index < text4.length; index += 1) {
+    const char = text4[index];
+    if (quote2) {
+      if (char === quote2) quote2 = null;
+      current += char;
+      continue;
+    }
+    if (char === '"' || char === "`") {
+      quote2 = char;
+      current += char;
+      continue;
+    }
+    if (char === "\n" || char === ";") {
+      commands.push(current);
+      current = "";
+      continue;
+    }
+    const rest = text4.slice(index);
+    const joiner = /^(?:,\s*|\s+)(?:and\s+then|then\s+also|and\s+also)\s+/i.exec(rest) ?? /^\.\s+(?=[A-Z])/.exec(rest);
+    if (joiner && !(joiner[0].startsWith(".") && /^\s*\d*$/.test(current))) {
+      commands.push(current);
+      current = "";
+      index += joiner[0].length - 1;
+      continue;
+    }
+    current += char;
+  }
+  commands.push(current);
+  return commands.map(
+    (command) => command.trim().replace(/^(?:[-*•]|\d+[.)])\s+/, "").replace(/^(?:please|pls|rassam[,:]?|hey[,:]?|ok[,:]?|now|also|and|then|can\s+you|could\s+you|i\s+want\s+to|i'd\s+like\s+to|let's|we\s+should|we\s+need\s+to)\s+/i, "").replace(/^(?:please)\s+/i, "").replace(/[\s.!?]+$/, "").replace(/\s+/g, " ").trim()
+  ).filter(Boolean);
+}
+function runCommand(command, branch, choices, depth = 0) {
+  const context = { blueprint: branch.blueprint, choices };
+  let firstFailure = null;
+  for (const handler of HANDLERS) {
+    let produced;
+    try {
+      produced = handler(command, context);
+    } catch (error62) {
+      if (error62 instanceof AmbiguousReference) {
+        if (depth >= 3) return { ok: false, message: `"${error62.term}" is ambiguous; name the component by id.` };
+        const branches = [];
+        let lastFailure = "";
+        for (const candidate of error62.candidates.slice(0, MAX_BRANCHES)) {
+          const outcome = runCommand(command, branch, new Map([...choices, [error62.key, candidate]]), depth + 1);
+          if (outcome.ok) branches.push(...outcome.branches);
+          else lastFailure = outcome.message;
+        }
+        if (!branches.length) return { ok: false, message: lastFailure || `"${error62.term}" is ambiguous.` };
+        return { ok: true, branches: branches.slice(0, MAX_BRANCHES), ambiguity: { term: error62.term, candidates: error62.candidates } };
+      }
+      if (error62 instanceof UnknownReference) {
+        firstFailure ??= error62.message;
+        continue;
+      }
+      throw error62;
+    }
+    if (!produced || !produced.length) continue;
+    const edits = [];
+    let invalid = false;
+    for (const edit of produced) {
+      const parsed = blueprintEditSchema.safeParse(edit);
+      if (!parsed.success) {
+        firstFailure ??= `I understood "${command}" but could not build a valid change: ${parsed.error.issues[0]?.message ?? "invalid value"}.`;
+        invalid = true;
+        break;
+      }
+      edits.push(parsed.data);
+    }
+    if (invalid) continue;
+    try {
+      const result = applyBlueprintEdits(branch.blueprint, edits);
+      return {
+        ok: true,
+        branches: [
+          {
+            blueprint: result.blueprint,
+            edits: [...branch.edits, ...edits],
+            summaries: [...branch.summaries, ...result.applied.map((item) => item.summary)]
+          }
+        ]
+      };
+    } catch (error62) {
+      if (error62 instanceof BlueprintEditError) return { ok: false, message: error62.message };
+      throw error62;
+    }
+  }
+  return { ok: false, message: firstFailure ?? `I could not understand "${command}".` };
+}
+function parseIntent(text4, blueprint) {
+  const commands = splitCommands(normalize2(text4 ?? ""));
+  if (!commands.length) {
+    return { status: "unknown", message: "Tell me what to change in the blueprint.", examples: INTENT_EXAMPLES };
+  }
+  let branches = [{ blueprint, edits: [], summaries: [] }];
+  const ambiguities = [];
+  for (const command of commands) {
+    const next = [];
+    let failure2 = null;
+    let ambiguity;
+    for (const branch of branches) {
+      const outcome = runCommand(command, branch, /* @__PURE__ */ new Map());
+      if (!outcome.ok) {
+        failure2 = outcome.message;
+        continue;
+      }
+      next.push(...outcome.branches);
+      if (outcome.branches.length > 1) ambiguity = outcome.ambiguity;
+    }
+    if (!next.length) {
+      return { status: "unknown", message: failure2 ?? `I could not understand "${command}".`, examples: INTENT_EXAMPLES };
+    }
+    if (ambiguity) ambiguities.push(ambiguity);
+    branches = next.slice(0, MAX_BRANCHES);
+  }
+  if (branches.length === 1) {
+    return { status: "ok", edits: branches[0].edits, interpretation: branches[0].summaries.join(" ") };
+  }
+  const nameOf = (id) => blueprint.components.find((item) => item.id === id)?.name ?? id;
+  const message = ambiguities.map((item) => `"${item.term}" could mean ${quoted2(item.candidates.map(nameOf))}.`).concat("Which one did you mean?").join(" ");
+  return {
+    status: "ambiguous",
+    message,
+    options: branches.map((branch) => ({ label: branch.summaries.join(" "), edits: branch.edits }))
+  };
+}
+var INTENT_EXAMPLES, AmbiguousReference, UnknownReference, DOT_DIRECTORIES, BARE_FILES, EVERYTHING, VERB, NEGATION, MAY, FORBID, ARROW, REMOVE, invariantHandler, decisionHandler, layersHandler, cyclesHandler, protectHandler, secretHandler, allowOnlyHandler, forbidHandler, removeDependencyHandler, declareHandler, PATH_PREPOSITION, addComponentHandler, removeHandler, renameHandler, pathsHandler, ASSURANCE, componentFieldHandler, severityHandler, kindHandler, policyHandler, runtimeHandler, colonIntentHandler, HANDLERS, MAX_BRANCHES;
+var init_intent = __esm({
+  "src/blueprint/intent.ts"() {
+    "use strict";
+    init_edits();
+    init_util3();
+    INTENT_EXAMPLES = [
+      "forbid ui from importing db because the UI goes through the API",
+      "domain may only depend on util and shared",
+      "declare ui -> domain",
+      "add a component Payments for src/payments/**",
+      "rename ui to storefront",
+      'set intent of payments to "Owns charging, refunds and payouts"',
+      "make rule ui-no-db a warning",
+      "protect src/security/** and next.config.ts",
+      "only payments may read STRIPE_*",
+      "layers: ui > domain > infra"
+    ];
+    AmbiguousReference = class extends Error {
+      constructor(key, term, candidates) {
+        super(`"${term}" is ambiguous`);
+        this.key = key;
+        this.term = term;
+        this.candidates = candidates;
+      }
+    };
+    UnknownReference = class extends Error {
+      constructor(message, suggestions = []) {
+        super(message);
+        this.suggestions = suggestions;
+      }
+    };
+    DOT_DIRECTORIES = /* @__PURE__ */ new Set([".github", ".rassam", ".vscode", ".husky", ".circleci", ".claude", ".cursor", ".config", ".devcontainer", ".storybook"]);
+    BARE_FILES = /^(?:Dockerfile|Makefile|LICENSE|README|CODEOWNERS|Procfile|Gemfile|Rakefile)(?:\.[\w.-]+)?$/;
+    EVERYTHING = /^(?:\*|anything|everything|any(?:\s+(?:file|code|component|module))?|all(?:\s+(?:code|files|components|modules))?|every(?:one|body|\s+component|\s+file)|anyone|anybody|nothing|nobody|no\s+one|(?:anything|everything|everyone)\s+else|the\s+rest)$/i;
+    VERB = "(?:depend(?:s|ing)?\\s+on|import(?:s|ing)?(?:\\s+from)?|us(?:e|es|ing)|call(?:s|ing)?|referenc(?:e|es|ing)|touch(?:es|ing)?|access(?:es|ing)?|reach(?:es|ing)?(?:\\s+into)?|talk(?:s|ing)?\\s+to|know(?:s|ing)?\\s+about|read(?:s|ing)?(?:\\s+from)?|writ(?:e|es|ing)(?:\\s+to)?|requir(?:e|es|ing)|load(?:s|ing)?|pull(?:s|ing)?\\s+in)";
+    NEGATION = "(?:must\\s+not|must\\s+never|mustn't|may\\s+not|may\\s+never|cannot|can\\s+not|can't|cant|can\\s+never|should\\s+not|shouldn't|should\\s+never|shall\\s+not|(?:is|are)\\s+not\\s+allowed\\s+to|(?:isn't|aren't)\\s+allowed\\s+to|(?:is|are)\\s+forbidden\\s+(?:to|from)|(?:is|are)\\s+never\\s+allowed\\s+to|does\\s+not|doesn't|do\\s+not|don't|never)";
+    MAY = "(?:may|can|should|must|shall|is\\s+allowed\\s+to|are\\s+allowed\\s+to|gets?\\s+to)";
+    FORBID = "(?:forbid|block|ban|disallow|prevent|deny|prohibit|stop|bar)";
+    ARROW = "(?:-+>|→|=>|⟶)";
+    REMOVE = "(?:remove|delete|drop|get\\s+rid\\s+of|retire)";
+    invariantHandler = (command) => {
+      const match = /^(?:(?:add|record|new|create|define)\s+)?(?:an?\s+|the\s+)?invariant\s*(?::|-|—|that)?\s*(.+)$/i.exec(command);
+      if (!match) return null;
+      let statement = match[1].trim();
+      let run;
+      let tests;
+      const check2 = /^(.*?)[\s,;]*\(?\s*(?:check(?:ed)?(?:\s+(?:with|by))?|run|verify(?:\s+with)?|verified\s+by)\s*[:=]?\s*`?([^`)]+?)`?\s*\)?$/i.exec(statement);
+      if (check2 && /[:=`(]|\b(?:with|by)\b/i.test(statement.slice(check2[1].length))) {
+        statement = check2[1].trim();
+        run = check2[2].trim();
+      }
+      const tested = /^(.*?)[\s,;]*\(?\s*tests?\s*[:=]\s*([^)]+?)\s*\)?$/i.exec(statement);
+      if (tested) {
+        statement = tested[1].trim();
+        tests = splitList(tested[2]).map(toGlob);
+      }
+      statement = sentence(statement.replace(/[.\s]+$/, ""));
+      if (!statement) return null;
+      return [{ op: "add_invariant", statement, ...run ? { run } : {}, ...tests?.length ? { tests } : {} }];
+    };
+    decisionHandler = (command) => {
+      const match = /^(?:(?:record|add|log|note|new|document|write\s+down)\s+)?(?:an?\s+|the\s+)?(?:decision|adr)\s*(?::|-|—|that|to)?\s*(.+)$/i.exec(command);
+      if (!match) return null;
+      const body = match[1].trim();
+      const because = /^(.*?)(?:,)?\s+because\s+(.+)$/i.exec(body);
+      const decision = sentence((because ? because[1] : body).replace(/[.\s]+$/, ""));
+      if (!decision) return null;
+      return [{ op: "add_decision", title: decision.slice(0, 300), decision, ...because ? { context: sentence(because[2]) } : {} }];
+    };
+    layersHandler = (command, context) => {
+      const parts = suffix(command);
+      let body = null;
+      const labelled = /^(?:(?:set|define|enforce|add|use)\s+)?(?:the\s+)?layers?(?:\s+(?:are|order|rule))?\s*(?::|=|-)?\s*(.+)$/i.exec(parts.body);
+      if (labelled) body = labelled[1];
+      else if (/\s(?:above|on\s+top\s+of)\s/i.test(parts.body)) body = parts.body.replace(/\s+(?:is|are|sits?|lives?|goes)\s+(?=above|on\s+top\s+of)/gi, " ");
+      if (body === null) return null;
+      const arrows = /\s*(?:>+|→|-+>|=>|⟶)\s*|\s+(?:then|above|over|on\s+top\s+of|before)\s+/i;
+      let layers = body.split(arrows).map((part) => part.trim()).filter(Boolean);
+      if (layers.length < 2) layers = body.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+      if (layers.length < 2) return null;
+      return [{ op: "set_layers", layers: layers.map((layer) => selector(context, layer)), ...parts.reason ? { reason: parts.reason } : {} }];
+    };
+    cyclesHandler = (command, context) => {
+      const parts = suffix(command);
+      const match = re(
+        `^(?:(?:no|${FORBID}|avoid)\\s+)(?:dependency\\s+|import\\s+|component\\s+)?(?:cycles|cyclic\\s+(?:dependencies|imports)|circular\\s+(?:dependencies|imports|deps))(?:\\s+(?:in|within|inside|between|among|across)\\s+(.+))?$`
+      ).exec(parts.body);
+      if (!match) return null;
+      const scopeText = match[1] && !/^(?:components|the\s+components|anything|everything|the\s+codebase|the\s+system)$/i.test(match[1].trim()) ? match[1] : null;
+      return [{ op: "forbid_cycles", ...scopeText ? { scope: selector(context, scopeText) } : {}, ...parts.reason ? { reason: parts.reason } : {} }];
+    };
+    protectHandler = (command, context) => {
+      const parts = suffix(command);
+      const match = /^(?:protect|guard|lock(?:\s+down)?|freeze)\s+(.+)$/i.exec(parts.body) ?? /^require\s+(?:a\s+)?(?:human\s+)?(?:review|approval|sign-?off)\s+(?:for|of|on|before)\s+(?:any\s+)?(?:changes?\s+(?:to|in)\s+|changing\s+|editing\s+)?(.+)$/i.exec(parts.body);
+      if (!match) return null;
+      return [{ op: "protect_paths", paths: pathList(context, match[1]), ...ruleOptions(parts) }];
+    };
+    secretHandler = (command, context) => {
+      const parts = suffix(command);
+      let match = re(`^only\\s+(.+?)\\s+${MAY}\\s+(?:read|access|use|see|load|touch)\\s+(.+)$`).exec(parts.body);
+      if (match) {
+        const names = secretNames(match[2]);
+        if (!names) return null;
+        return [{ op: "restrict_secret", secrets: names, allow: selector(context, match[1]), ...parts.reason ? { reason: parts.reason } : {} }];
+      }
+      match = /^(?:restrict|limit|confine|scope)\s+(.+?)\s+to\s+(.+)$/i.exec(parts.body);
+      if (match) {
+        const names = secretNames(match[1]);
+        if (!names) return null;
+        return [{ op: "restrict_secret", secrets: names, allow: selector(context, match[2]), ...parts.reason ? { reason: parts.reason } : {} }];
+      }
+      match = /^(.+?)\s+(?:is|are)\s+only\s+(?:readable|accessible|visible|available)\s+(?:by|to|in|from)\s+(.+)$/i.exec(parts.body);
+      if (match) {
+        const names = secretNames(match[1]);
+        if (!names) return null;
+        return [{ op: "restrict_secret", secrets: names, allow: selector(context, match[2]), ...parts.reason ? { reason: parts.reason } : {} }];
+      }
+      return null;
+    };
+    allowOnlyHandler = (command, context) => {
+      const parts = suffix(command);
+      const match = re(`^(.+?)\\s+${MAY}\\s+only\\s+(?:ever\\s+)?${VERB}\\s+(.+)$`).exec(parts.body) ?? re(`^(.+?)\\s+only\\s+(?:ever\\s+)?${VERB}\\s+(.+)$`).exec(parts.body) ?? re(`^(.+?)\\s+${MAY}\\s+${VERB}\\s+only\\s+(.+)$`).exec(parts.body) ?? re(`^(?:restrict|limit)\\s+(.+?)\\s+to\\s+(?:only\\s+)?(?:${VERB}\\s+)?(.+)$`).exec(parts.body);
+      if (!match) return null;
+      if (/^only\b/i.test(match[1])) return null;
+      return [{ op: "allow_only", from: selector(context, match[1]), to: selector(context, match[2]), ...ruleOptions(parts) }];
+    };
+    forbidHandler = (command, context) => {
+      const parts = suffix(command);
+      const body = parts.body;
+      let match = re(
+        `^(?:nothing|nobody|no\\s+one|no\\s+(?:code|files?|component|module)s?)(?:\\s+(?:in|inside|under|within|from)\\s+(.+?))?(?:\\s+(?:except|but|other\\s+than|besides)\\s+(.+?))?\\s+${MAY}\\s+(?:ever\\s+)?${VERB}\\s+(.+)$`
+      ).exec(body);
+      if (match) {
+        const from = [...entriesOf2(match[1] ? selector(context, match[1]) : "*")];
+        if (match[2]) for (const part of terms(context, match[2])) from.push(`!${selectorEntry(context, part)}`);
+        return forbidEdit(from.length === 1 ? from[0] : from, selector(context, match[3]), parts);
+      }
+      match = re(`^only\\s+(.+?)\\s+${MAY}\\s+${VERB}\\s+(.+)$`).exec(body);
+      if (match) {
+        const to = selector(context, match[2]);
+        const exempt = [...terms(context, match[1]).map((part) => selectorEntry(context, part)), ...entriesOf2(to).filter((entry) => !/^(?:\*|!|path:|package:|tag:)/.test(entry))];
+        return forbidEdit(["*", ...new Set(exempt.map((entry) => `!${entry}`))], to, parts);
+      }
+      match = re(`^${FORBID}\\s+(?:the\\s+)?(?:dependency|dependencies|imports?|edge|arrow)\\s+(?:from\\s+)?(.+?)\\s+(?:to|on|${ARROW})\\s+(.+)$`).exec(body) ?? re(`^${FORBID}\\s+(.+?)\\s*${ARROW}\\s*(.+)$`).exec(body) ?? re(`^${FORBID}\\s+(.+?)\\s+(?:from\\s+|to\\s+)?${VERB}\\s+(.+)$`).exec(body) ?? re(`^(?:don't|do\\s+not|never)\\s+(?:let|allow|permit)\\s+(.+?)\\s+(?:to\\s+)?${VERB}\\s+(.+)$`).exec(body) ?? re(`^(?:keep|isolate)\\s+(.+?)\\s+(?:away\\s+from|out\\s+of|free\\s+of|independent\\s+of|from)\\s+(.+)$`).exec(body) ?? re(`^(.+?)\\s+${NEGATION}\\s+(?:ever\\s+|directly\\s+)?${VERB}\\s+(.+)$`).exec(body) ?? re(`^(.+?)\\s*(?:-/->|-x->|!->|-\\|->|↛)\\s*(.+)$`).exec(body);
+      if (!match) return null;
+      return forbidEdit(selector(context, match[1]), selector(context, match[2]), parts);
+    };
+    removeDependencyHandler = (command, context) => {
+      const match = re(`^(?:${REMOVE}|undeclare|retract)\\s+(?:the\\s+)?(?:declared\\s+)?(?:dependency|edge|link|arrow)\\s+(?:from\\s+|of\\s+)?(.+?)\\s*(?:\\s(?:to|on)\\s|${ARROW})\\s*(.+)$`).exec(command) ?? re(`^(?:undeclare|retract)\\s+(?:that\\s+)?(.+?)\\s*(?:${ARROW}|\\s(?:to|depends\\s+on|uses|imports)\\s)\\s*(.+)$`).exec(command) ?? re(`^(.+?)\\s+(?:no\\s+longer|doesn't\\s+need\\s+to|should\\s+stop)\\s+${VERB}\\s+(.+)$`).exec(command);
+      if (!match) return null;
+      return [{ op: "remove_dependency", from: component(context, match[1]), to: component(context, match[2]) }];
+    };
+    declareHandler = (command, context) => {
+      const parts = suffix(command);
+      const body = parts.body;
+      if (/^(?:only|nothing|nobody|no\s)/i.test(body)) return null;
+      const verbGroup = `(${VERB})`;
+      let from;
+      let to;
+      let verb;
+      let generic = false;
+      let match = re(`^(?:declare|allow|permit|add|record)\\s+(?:that\\s+)?(?:an?\\s+|the\\s+)?(?:dependency\\s+|edge\\s+|arrow\\s+)?(?:from\\s+)?(.+?)\\s*${ARROW}\\s*(.+)$`).exec(body) ?? re(`^(?:declare|add|record)\\s+(?:an?\\s+|the\\s+)?(?:dependency|edge|arrow)\\s+(?:from\\s+)?(.+?)\\s+(?:to|on)\\s+(.+)$`).exec(body);
+      if (match) [, from, to] = match;
+      if (!match) {
+        match = re(`^(?:declare|record|note)\\s+(?:that\\s+)?(.+?)\\s+${verbGroup}\\s+(.+)$`).exec(body) ?? re(`^(?:allow|let|permit)\\s+(.+?)\\s+(?:to\\s+)?${verbGroup}\\s+(.+)$`).exec(body) ?? re(`^(.+?)\\s+(?:${MAY}\\s+|is\\s+allowed\\s+to\\s+|needs\\s+to\\s+|needs\\s+)?${verbGroup}\\s+(.+)$`).exec(body);
+        if (match) [, from, verb, to] = match;
+        generic = Boolean(match) && !/^(?:declare|record|note|allow|let|permit)\s/i.test(body);
+      }
+      if (!match) {
+        match = re(`^(.+?)\\s*${ARROW}\\s*(.+)$`).exec(body);
+        if (match) [, from, to] = match;
+        generic = true;
+      }
+      if (!from || !to) return null;
+      if (generic) {
+        const first = resolveComponentRef(context.blueprint, cleanTerm(terms(context, from)[0] ?? ""));
+        if (!("id" in first) && first.candidates.length === 0) return null;
+      }
+      const kind = dependencyKind(verb);
+      const edits = [];
+      for (const source of terms(context, from)) {
+        for (const target of terms(context, to)) {
+          edits.push({
+            op: "declare_dependency",
+            from: component(context, source),
+            to: component(context, target),
+            ...kind ? { kind } : {},
+            ...parts.reason ? { reason: parts.reason } : {}
+          });
+        }
+      }
+      return edits;
+    };
+    PATH_PREPOSITION = "(?:for|at|covering|owning|in|under|from|over|with\\s+paths?|that\\s+owns|which\\s+owns)";
+    addComponentHandler = (command, context) => {
+      const match = /^(?:add|create|define|new|register|introduce)\s+(?:an?\s+|the\s+)?(?:new\s+)?(.*?)\bcomponent\b\s*(.*)$/i.exec(command);
+      if (!match) return null;
+      let before = match[1].trim();
+      if (/\b(?:to|from|dependency|edge|arrow|rule|invariant|decision|intent|tag)\b|[/*]/i.test(before)) return null;
+      let after = match[2].trim().replace(/^(?:called|named)\s+/i, "");
+      const external = /\bexternal\b/i.test(before);
+      before = before.replace(/\bexternal\b/i, "").trim();
+      let kind;
+      const kindSuffix = /^(.*?)(?:,\s*|\s+)\(?(?:of\s+kind|kind:?|as\s+an?)\s+([a-z][a-z0-9-]*)\)?$/i.exec(after);
+      if (kindSuffix) {
+        after = kindSuffix[1].trim();
+        kind = kindSuffix[2].toLowerCase();
+      }
+      let name;
+      let pathText = "";
+      const startsWithPaths = re(`^${PATH_PREPOSITION}\\s+(.+)$`).exec(after);
+      if (before && (!after || startsWithPaths)) {
+        name = before;
+        pathText = startsWithPaths ? startsWithPaths[1] : "";
+      } else {
+        if (before) kind = kind ?? slugify3(before, 40);
+        const quotedName = /^["'`]([^"'`]+)["'`]\s*(.*)$/.exec(after);
+        const split = quotedName ? null : re(`^(.+?)\\s+${PATH_PREPOSITION}\\s+(.+)$`).exec(after);
+        if (quotedName) {
+          name = quotedName[1];
+          pathText = quotedName[2].replace(re(`^${PATH_PREPOSITION}\\s+`), "");
+        } else if (split) {
+          name = split[1];
+          pathText = split[2];
+        } else {
+          name = after;
+        }
+      }
+      name = unquote(name);
+      if (!name) return null;
+      if (!/[A-Z]/.test(name)) name = titleCase(name);
+      const paths = pathText ? splitList(pathText).map(toGlob) : [];
+      if (!external && paths.length === 0) {
+        throw new UnknownReference(`Which files does "${name}" own? Say: add a component ${name} for src/${slugify3(name)}/** (or: add external component ${name}).`);
+      }
+      if (context.blueprint.components.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+        throw new UnknownReference(`A component called "${name}" already exists.`);
+      }
+      return [{ op: "add_component", name, paths, ...kind ? { kind } : {}, ...external ? { external: true } : {} }];
+    };
+    removeHandler = (command, context) => {
+      let match = re(`^${REMOVE}\\s+(?:the\\s+)?rule\\s+(.+)$`).exec(command) ?? re(`^${REMOVE}\\s+(?:the\\s+)?(.+?)\\s+rule$`).exec(command);
+      if (match) return [{ op: "remove_rule", id: ruleRef(context, match[1]) }];
+      match = re(`^${REMOVE}\\s+(?:the\\s+)?component\\s+(.+)$`).exec(command) ?? re(`^${REMOVE}\\s+(?:the\\s+)?(.+?)\\s+component$`).exec(command);
+      if (match) return [{ op: "remove_component", id: component(context, match[1]) }];
+      match = re(`^${REMOVE}\\s+(?:the\\s+)?(invariant|decision|adr)\\s+(.+)$`).exec(command);
+      if (match) {
+        const isInvariant = match[1].toLowerCase() === "invariant";
+        const ids = (isInvariant ? context.blueprint.invariants : context.blueprint.decisions).map((item) => item.id);
+        const wanted2 = unquote(match[2]);
+        const id = ids.find((item) => item.toLowerCase() === wanted2.toLowerCase()) ?? ids.find((item) => item.toLowerCase() === slugify3(wanted2, 80));
+        if (!id) {
+          const suggestions = nearestIds(wanted2, ids);
+          throw new UnknownReference(`There is no ${isInvariant ? "invariant" : "decision"} "${wanted2}".${suggestions.length ? ` Did you mean ${quoted2(suggestions)}?` : ""}`, suggestions);
+        }
+        return [isInvariant ? { op: "remove_invariant", id } : { op: "remove_decision", id }];
+      }
+      match = re(`^${REMOVE}\\s+(.+?)\\s+from\\s+(?:the\\s+)?(?:component\\s+)?(.+)$`).exec(command);
+      if (match && splitList(match[1]).every((part) => isPathLike(unquote(part)))) {
+        const ownerId = component(context, match[2]);
+        const owner = context.blueprint.components.find((item) => item.id === ownerId);
+        if (!owner) return null;
+        const globs = splitList(match[1]).map(toGlob);
+        const missing = globs.filter((glob) => !owner.paths.includes(glob));
+        if (missing.length) throw new UnknownReference(`"${owner.name}" does not own ${missing.join(", ")}. It owns ${owner.paths.join(", ") || "no paths"}.`, owner.paths);
+        return [{ op: "update_component", id: owner.id, set: { paths: owner.paths.filter((path) => !globs.includes(path)) } }];
+      }
+      match = re(`^${REMOVE}\\s+(?:the\\s+)?(.+)$`).exec(command);
+      if (!match) return null;
+      const wanted = unquote(match[1]);
+      const lower = wanted.toLowerCase();
+      const rule = context.blueprint.rules.find((item) => item.id.toLowerCase() === lower);
+      if (rule) return [{ op: "remove_rule", id: rule.id }];
+      const invariant = context.blueprint.invariants.find((item) => item.id.toLowerCase() === lower);
+      if (invariant) return [{ op: "remove_invariant", id: invariant.id }];
+      const decision = context.blueprint.decisions.find((item) => item.id.toLowerCase() === lower);
+      if (decision) return [{ op: "remove_decision", id: decision.id }];
+      return [{ op: "remove_component", id: component(context, wanted) }];
+    };
+    renameHandler = (command, context) => {
+      const match = re(`^rename\\s+(?:the\\s+)?(?:component\\s+)?(.+?)\\s+(?:to|as|into|${ARROW})\\s+(.+)$`).exec(command);
+      if (!match) return null;
+      const id = component(context, match[1]);
+      const wanted = unquote(match[2]);
+      if (!wanted) return null;
+      const newId = slugify3(wanted, 80);
+      const name = /[A-Z]/.test(wanted) ? wanted : titleCase(wanted);
+      return [{ op: "rename_component", id, ...newId !== id ? { newId } : {}, name }];
+    };
+    pathsHandler = (command, context) => {
+      const allPaths = (text4) => splitList(text4).every((part) => isPathLike(unquote(part)));
+      let pathsText;
+      let ownerText;
+      let match = /^(?:move|assign|give|add|map)\s+(.+?)\s+(?:to|into|under)\s+(?:the\s+)?(?:component\s+)?(.+)$/i.exec(command) ?? /^(.+?)\s+(?:belongs?|belong)\s+(?:to|in)\s+(?:the\s+)?(?:component\s+)?(.+)$/i.exec(command);
+      if (match && allPaths(match[1])) [, pathsText, ownerText] = match;
+      if (!pathsText) {
+        match = /^(.+?)\s+(?:also\s+|now\s+)?(?:owns|covers|includes|contains)\s+(.+)$/i.exec(command);
+        if (match && allPaths(match[2])) [, ownerText, pathsText] = match;
+      }
+      if (!pathsText || !ownerText) return null;
+      const owner = context.blueprint.components.find((item) => item.id === component(context, ownerText));
+      if (!owner) return null;
+      const globs = splitList(pathsText).map(toGlob);
+      const fresh = globs.filter((glob) => !owner.paths.includes(glob));
+      if (!fresh.length) throw new UnknownReference(`"${owner.name}" already owns ${globs.join(", ")}.`);
+      const edits = [];
+      for (const other of context.blueprint.components) {
+        if (other.id === owner.id || !other.paths.some((path) => fresh.includes(path))) continue;
+        const rest = other.paths.filter((path) => !fresh.includes(path));
+        if (rest.length || other.external) edits.push({ op: "update_component", id: other.id, set: { paths: rest } });
+      }
+      edits.push({ op: "update_component", id: owner.id, set: { paths: [...owner.paths, ...fresh] } });
+      return edits;
+    };
+    ASSURANCE = "untested|tested|property-tested|property\\s+tested|formally-verified|formally\\s+verified";
+    componentFieldHandler = (command, context) => {
+      let match = /^(?:(?:set|change|update|write|make)\s+)?(?:the\s+)?(intent|description|purpose)\s+(?:of|for)\s+(.+?)\s*(?:\s(?:to|as|is)\s|:|=)\s*(.+)$/i.exec(command);
+      if (match) {
+        const text4 = unquote(match[3]);
+        if (!text4) return null;
+        const field = match[1].toLowerCase() === "description" ? "description" : "intent";
+        return [{ op: "update_component", id: component(context, match[2]), set: { [field]: text4 } }];
+      }
+      match = /^(?:write|add|set)\s+(?:an?\s+|the\s+)?intent\s+(?:of|for)\s+(.+)$/i.exec(command);
+      if (match) {
+        const id = component(context, match[1]);
+        throw new UnknownReference(`What is ${id} for? Say: set intent of ${id} to "what it owns, what it must never do".`);
+      }
+      match = /^describe\s+(.+?)\s+as\s+(.+)$/i.exec(command);
+      if (match) return [{ op: "update_component", id: component(context, match[1]), set: { description: unquote(match[2]) } }];
+      match = /^(?:set|change|update)\s+(?:the\s+)?kind\s+(?:of|for)\s+(.+?)\s+(?:to|as|=)\s+(?:an?\s+)?(.+)$/i.exec(command);
+      if (match) return [{ op: "update_component", id: component(context, match[1]), set: { kind: slugify3(unquote(match[2]), 40) } }];
+      match = /^(?:tag|label)\s+(.+?)\s+(?:with|as)\s+(.+)$/i.exec(command);
+      if (match) {
+        const ownerId = component(context, match[1]);
+        const owner = context.blueprint.components.find((item) => item.id === ownerId);
+        if (!owner) return null;
+        const tags = match[2].split(/\s*,\s*|\s+and\s+|\s+/).map(unquote).filter(Boolean);
+        return [{ op: "update_component", id: owner.id, set: { tags: [.../* @__PURE__ */ new Set([...owner.tags ?? [], ...tags])] } }];
+      }
+      match = /^(?:untag|remove\s+(?:the\s+)?tag)\s+(\S+)\s+from\s+(.+)$/i.exec(command);
+      if (match) {
+        const ownerId = component(context, match[2]);
+        const owner = context.blueprint.components.find((item) => item.id === ownerId);
+        if (!owner) return null;
+        const tag = unquote(match[1]);
+        if (!owner.tags?.includes(tag)) throw new UnknownReference(`"${owner.name}" is not tagged ${tag}.`, owner.tags ?? []);
+        const rest = owner.tags.filter((item) => item !== tag);
+        return [{ op: "update_component", id: owner.id, set: { tags: rest.length ? rest : null } }];
+      }
+      match = /^(.+?)\s+(?:is|are)\s+owned\s+by\s+(.+)$/i.exec(command) ?? /^(?:set\s+)?(?:the\s+)?owners?\s+(?:of|for)\s+(.+?)\s*(?:\s(?:to|is|are)\s|:|=)\s*(.+)$/i.exec(command);
+      if (match) return [{ op: "update_component", id: component(context, match[1]), set: { owners: splitList(match[2]).map(unquote) } }];
+      match = re(`^(?:make|mark|set|flag)\\s+(.+?)\\s+(?:as\\s+|to\\s+)?(public|private|external|internal|${ASSURANCE})$`).exec(command) ?? re(`^(.+?)\\s+(?:is|are|should\\s+be)\\s+(public|private|external|internal|${ASSURANCE})$`).exec(command);
+      if (match) {
+        const id = component(context, match[1]);
+        const word = match[2].toLowerCase().replace(/\s+/g, "-");
+        if (word === "public" || word === "private") return [{ op: "update_component", id, set: { public: word === "public" } }];
+        if (word === "external" || word === "internal") return [{ op: "update_component", id, set: { external: word === "external" } }];
+        return [{ op: "update_component", id, set: { assurance: word } }];
+      }
+      return null;
+    };
+    severityHandler = (command, context) => {
+      const match = /^(?:set|change)\s+(?:the\s+)?severity\s+(?:of|for)\s+(?:the\s+)?(?:rule\s+)?(.+?)\s+(?:to|as|=)\s+(?:an?\s+)?(error|warning|warn|info)$/i.exec(command) ?? /^(?:make|set|turn|change|downgrade|upgrade|demote|promote|lower|raise)\s+(?:the\s+)?(?:rule\s+)?(.+?)\s+(?:(?:in)?to|as)?\s*(?:an?\s+)?(error|warning|warn|info)(?:\s+only)?$/i.exec(command);
+      if (!match) return null;
+      const severity = match[2].toLowerCase() === "warn" ? "warning" : match[2].toLowerCase();
+      return [{ op: "update_rule", id: ruleRef(context, match[1].replace(/\s+rule$/i, "")), set: { severity } }];
+    };
+    kindHandler = (command, context) => {
+      const match = /^make\s+(.+?)\s+an?\s+([a-z][a-z0-9-]*)$/i.exec(command);
+      if (!match) return null;
+      return [{ op: "update_component", id: component(context, match[1]), set: { kind: match[2].toLowerCase() } }];
+    };
+    policyHandler = (command) => {
+      const levelOf = (word) => word.toLowerCase().replace(/s$/, "").replace(/^warn$/, "warning");
+      let match = /^(?:treat|report|flag|make|show|count)\s+(undeclared|unmapped)\s+\w+\s+(?:as\s+)?(?:an?\s+)?(errors?|warnings?|warn|infos?|off)$/i.exec(command);
+      if (match) {
+        const level = levelOf(match[2]);
+        if (match[1].toLowerCase() === "undeclared") return [{ op: "set_policy", undeclaredDependencies: level }];
+        if (level === "error") throw new UnknownReference("Unmapped files can be reported as warning, info or off, not as errors.", ["treat unmapped files as warnings"]);
+        return [{ op: "set_policy", unmappedFiles: level }];
+      }
+      match = /^(turn\s+off|disable|silence|mute|switch\s+off|stop|turn\s+on|enable|switch\s+on)\s+(?:the\s+)?(?:reporting\s+|warnings?\s+(?:for|about)\s+|checks?\s+(?:for|on)\s+)?(undeclared|unmapped|verification)\b.*$/i.exec(command);
+      if (match) {
+        const on = /on|enable/i.test(match[1]) && !/off/i.test(match[1]);
+        const subject = match[2].toLowerCase();
+        if (subject === "verification") return [{ op: "set_policy", verificationHeuristics: on }];
+        if (subject === "undeclared") return [{ op: "set_policy", undeclaredDependencies: on ? "warning" : "off" }];
+        return [{ op: "set_policy", unmappedFiles: on ? "warning" : "off" }];
+      }
+      match = /^(ignore|skip|exclude|don't\s+count|do\s+not\s+count|count|include)\s+type(?:-only|\s+only)?\s+imports?$/i.exec(command);
+      if (match) return [{ op: "set_policy", includeTypeOnly: /^(?:count|include)$/i.test(match[1]) }];
+      match = /^(?:stop\s+ignoring|unignore|no\s+longer\s+ignore|analy[sz]e)\s+(.+)$/i.exec(command);
+      if (match) return [{ op: "set_policy", ignoreRemove: splitList(match[1]).map(toGlob) }];
+      match = /^(?:ignore|exclude|skip)\s+(.+)$/i.exec(command);
+      if (match) return [{ op: "set_policy", ignoreAdd: splitList(match[1].replace(/^(?:everything|anything|files?)\s+(?:in|under|matching)\s+/i, "")).map(toGlob) }];
+      return null;
+    };
+    runtimeHandler = (command, context) => {
+      let match = /^(?:monitor|watch|probe|ping|health-?\s?check)\s+(.+?)\s+(?:at|on|via|with|using)\s+(https?:\/\/\S+?)(?:\s+(?:expecting|expect|and\s+expect)\s+(?:status\s+)?(\d{3}))?$/i.exec(command) ?? /^(?:the\s+)?(.+?)(?:'s)?\s+health\s*(?:check|url|endpoint)?\s*(?:\s(?:is|at)\s|=|:\s)\s*(https?:\/\/\S+?)(?:\s+(?:expecting|expect)\s+(?:status\s+)?(\d{3}))?$/i.exec(command);
+      if (match) {
+        return [{ op: "set_runtime", id: component(context, match[1]), health: { url: match[2], ...match[3] ? { expectStatus: Number(match[3]) } : {} } }];
+      }
+      match = /^(?:stop\s+monitoring|unmonitor|stop\s+watching)\s+(.+)$/i.exec(command);
+      if (match) return [{ op: "set_runtime", id: component(context, match[1]), health: null }];
+      match = /^(.+?)\s+(?:is\s+|gets\s+|are\s+)?(?:deployed|deploys|runs|ships|released|lives)\s+(?:to|in|on)\s+(?:the\s+)?(?:environment\s+|env\s+)?["']?([\w.-]+)["']?(?:\s+environment|\s+env)?$/i.exec(command);
+      if (match) return [{ op: "set_runtime", id: component(context, match[1]), deployment: { environment: match[2] } }];
+      match = /^(.+?)\s+(?:is\s+)?(?:built|deployed|released|tested|shipped|run)\s+by\s+(?:the\s+)?(?:workflow\s+)?(\S+\.ya?ml)(?:\s+workflow)?$/i.exec(command);
+      if (match) {
+        const file2 = match[2].includes("/") ? match[2] : `.github/workflows/${match[2]}`;
+        return [{ op: "set_runtime", id: component(context, match[1]), workflow: { file: file2 } }];
+      }
+      return null;
+    };
+    colonIntentHandler = (command, context) => {
+      const match = /^([^:"]{1,80}):\s+(.+)$/.exec(command);
+      if (!match) return null;
+      const resolved = resolveComponentRef(context.blueprint, match[1]);
+      if (!("id" in resolved)) return null;
+      const text4 = unquote(match[2]);
+      return text4 ? [{ op: "update_component", id: resolved.id, set: { intent: text4 } }] : null;
+    };
+    HANDLERS = [
+      invariantHandler,
+      decisionHandler,
+      layersHandler,
+      colonIntentHandler,
+      cyclesHandler,
+      runtimeHandler,
+      addComponentHandler,
+      removeDependencyHandler,
+      removeHandler,
+      renameHandler,
+      severityHandler,
+      componentFieldHandler,
+      policyHandler,
+      protectHandler,
+      secretHandler,
+      allowOnlyHandler,
+      forbidHandler,
+      pathsHandler,
+      kindHandler,
+      declareHandler
+    ];
+    MAX_BRANCHES = 12;
+  }
+});
+
+// src/cli/commands/do.ts
+var do_exports = {};
+__export(do_exports, {
+  doCommand: () => doCommand
+});
+import { writeFile as writeFile7 } from "node:fs/promises";
+import { join as join9 } from "node:path";
+function apply(blueprint, edits, provenance, now) {
+  try {
+    return applyBlueprintEdits(blueprint, edits, { provenance, now });
+  } catch (error62) {
+    if (error62 instanceof BlueprintEditError) {
+      throw new CliError(`The change cannot be applied: ${error62.message}`, { hint: error62.suggestions?.length ? `Did you mean: ${error62.suggestions.join(", ")}?` : void 0 });
+    }
+    throw error62;
+  }
+}
+async function doCommand(args, io) {
+  const context = await loadContextFor(io, stringFlag(args, "root"));
+  const blueprint = requireBlueprint(context);
+  const instruction = args.positionals.join(" ").trim();
+  const json2 = stringFlag(args, "format") === "json";
+  const write = booleanFlag(args, "write");
+  const result = parseIntent(instruction, blueprint);
+  if (result.status === "unknown") {
+    if (json2) io.stdout(renderJsonText({ status: "unknown", message: result.message, examples: result.examples }));
+    else io.stderr([`rassam: ${result.message}`, "", "Instructions that work:", ...result.examples.slice(0, MAX_EXAMPLES).map((example) => `  rassam do "${example.replace(/([\\"])/g, "\\$1")}"`), ""].join("\n"));
+    return EXIT_USAGE;
+  }
+  let edits;
+  let interpretation;
+  if (result.status === "ambiguous") {
+    const choice = numberFlag(args, "choose");
+    if (choice === void 0) {
+      if (json2) io.stdout(renderJsonText({ status: "ambiguous", message: result.message, options: result.options.map((option2, index) => ({ choose: index + 1, label: option2.label })) }));
+      else io.stderr([`rassam: ${result.message}`, "", ...result.options.map((option2, index) => `  ${index + 1}. ${option2.label}`), "", "Nothing was changed. Say it more precisely, or pick one with --choose <n>.", ""].join("\n"));
+      return EXIT_USAGE;
+    }
+    const option = Number.isInteger(choice) ? result.options[choice - 1] : void 0;
+    if (!option) throw new CliError(`--choose expects a number from 1 to ${result.options.length}`);
+    edits = option.edits;
+    interpretation = option.label;
+  } else {
+    edits = result.edits;
+    interpretation = result.interpretation;
+  }
+  const by = stringFlag(args, "by")?.trim() || (context.isGit ? await userName(context.root) : null) || void 0;
+  const provenance = { source: "human", ...by ? { by } : {} };
+  const now = (io.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  const outcome = apply(blueprint, edits, provenance, now);
+  const weakening = outcome.applied.filter((edit) => edit.weakens);
+  const refused = weakening.length > 0 && !booleanFlag(args, "allowWeakening");
+  const saved = write && !refused && outcome.applied.length > 0;
+  if (json2) {
+    io.stdout(renderJsonText({ status: refused ? "refused" : "ok", interpretation, edits, applied: outcome.applied, weakens: weakening.length > 0, written: saved }));
+  } else {
+    const lines = [`Understood as: ${interpretation}`, "", describeEdits(outcome.applied), ""];
+    if (refused) {
+      lines.push(
+        `Refused: ${weakening.length === 1 ? "this change loosens" : "these changes loosen"} the contract agents are judged by. Nothing was written.`,
+        "If that is what you want, run it again with --allow-weakening. The flag only lets the edit into the file:",
+        "a pull request that weakens the blueprint still needs a person to add the approval label before CI passes.",
+        ""
+      );
+    } else if (saved) {
+      lines.push(`Saved to ${BLUEPRINT_PATH}${by ? `, recorded as written by ${by}` : ""}. Review the diff and commit it like any other change.`);
+      if (weakening.length) lines.push("This loosens the contract: the pull request needs the approval label before CI passes.");
+      lines.push("");
+    } else if (!outcome.applied.length) lines.push("Nothing to change.", "");
+    else lines.push(`Dry run: ${BLUEPRINT_PATH} was not changed. Add --write to save.`, "");
+    (refused ? io.stderr : io.stdout)(lines.join("\n"));
+  }
+  if (refused) return EXIT_USAGE;
+  if (saved) await writeFile7(join9(context.root, BLUEPRINT_PATH), serializeBlueprint(outcome.blueprint), "utf8");
+  return EXIT_OK;
+}
+var MAX_EXAMPLES;
+var init_do = __esm({
+  "src/cli/commands/do.ts"() {
+    "use strict";
+    init_edits();
+    init_intent();
+    init_schema();
+    init_args();
+    init_context();
+    init_git();
+    init_io();
+    init_format();
+    MAX_EXAMPLES = 6;
+  }
+});
+
 // src/cli/commands/proposals.ts
 var proposals_exports = {};
 __export(proposals_exports, {
   listEntries: () => listEntries,
   proposalsCommand: () => proposalsCommand
 });
-import { readdir as readdir2, readFile as readFile3 } from "node:fs/promises";
-import { join as join6 } from "node:path";
-import { resolve as resolve5 } from "node:path";
-function text(value) {
+import { readdir as readdir2, readFile as readFile5 } from "node:fs/promises";
+import { join as join10 } from "node:path";
+import { resolve as resolve6 } from "node:path";
+function text2(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 async function readEntry(root, directory, name, type) {
   const file2 = `${directory}/${name}`;
   const blank = { type, file: file2, title: name, author: null, date: null, status: null };
   try {
-    const data = JSON.parse(await readFile3(join6(root, file2), "utf8"));
+    const data = JSON.parse(await readFile5(join10(root, file2), "utf8"));
     if (typeof data !== "object" || data === null || Array.isArray(data)) return { ...blank, problem: "not a JSON object" };
     const record2 = data;
     return {
       type,
       file: file2,
-      title: text(record2.title) ?? text(record2.summary) ?? name,
-      author: text(record2.agent) ?? text(record2.author),
-      date: text(record2.createdAt) ?? text(record2.date),
-      status: text(record2.status)
+      title: text2(record2.title) ?? text2(record2.summary) ?? name,
+      author: text2(record2.agent) ?? text2(record2.author),
+      date: text2(record2.createdAt) ?? text2(record2.date),
+      status: text2(record2.status)
     };
   } catch {
     return { ...blank, problem: "unreadable or invalid JSON" };
@@ -29413,7 +33215,7 @@ async function listEntries(root) {
     [BLUEPRINT_ESCALATIONS_DIR, "escalation"]
   ];
   for (const [directory, type] of sources) {
-    const names = await readdir2(join6(root, directory)).catch(() => []);
+    const names = await readdir2(join10(root, directory)).catch(() => []);
     for (const name of names.filter((entry) => entry.endsWith(".json")).sort()) {
       entries2.push(await readEntry(root, directory, name, type));
     }
@@ -29431,7 +33233,7 @@ function section(heading, entries2) {
 }
 async function proposalsCommand(args, io) {
   const rootFlag = stringFlag(args, "root");
-  const start = resolve5(io.cwd, rootFlag ?? ".");
+  const start = resolve6(io.cwd, rootFlag ?? ".");
   const root = rootFlag ? start : await repoRoot(start).catch(() => null) ?? start;
   const entries2 = await listEntries(root);
   if (stringFlag(args, "format") === "json") {
@@ -29574,8 +33376,8 @@ function createMcpHandler(options) {
     if (problem) return toolFailure(`Invalid arguments for ${tool.name}: ${problem}.`);
     try {
       const outcome = await tool.handler(args);
-      const text3 = outcome.text ?? JSON.stringify(outcome.structured, null, 2);
-      return { content: [{ type: "text", text: text3 }], structuredContent: outcome.structured, isError: false };
+      const text4 = outcome.text ?? JSON.stringify(outcome.structured, null, 2);
+      return { content: [{ type: "text", text: text4 }], structuredContent: outcome.structured, isError: false };
     } catch (error62) {
       if (!(error62 instanceof ToolError)) log(`tool ${tool.name} failed: ${error62 instanceof Error ? error62.stack ?? error62.message : String(error62)}`);
       return toolFailure(error62 instanceof Error ? error62.message : String(error62));
@@ -29774,12 +33576,12 @@ var init_protocol = __esm({
 });
 
 // src/cli/mcp/tools.ts
-import { mkdir as mkdir3, stat as stat2, writeFile as writeFile5 } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { mkdir as mkdir5, stat as stat2, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join11 } from "node:path";
 function objectSchema(properties, required2 = []) {
   return { type: "object", properties, required: required2, additionalProperties: false };
 }
-function text2(description, maxLength = 2e3) {
+function text3(description, maxLength = 2e3) {
   return { type: "string", minLength: 1, maxLength, description };
 }
 function asJson(value) {
@@ -29809,7 +33611,7 @@ function createTools(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   let cache2 = null;
   async function cacheKey(isGit) {
-    const info = await stat2(join7(deps.root, BLUEPRINT_PATH)).catch(() => null);
+    const info = await stat2(join11(deps.root, BLUEPRINT_PATH)).catch(() => null);
     const head = isGit ? await headSha(deps.root).catch(() => null) : null;
     return `${info ? `${info.mtimeMs}:${info.size}` : "none"}|${head ?? "nohead"}`;
   }
@@ -29846,18 +33648,18 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
   }
   function componentArg(blueprint, value) {
     const id = String(value).trim();
-    if (blueprint.components.some((component) => component.id === id)) return id;
-    const ids = blueprint.components.map((component) => component.id);
+    if (blueprint.components.some((component2) => component2.id === id)) return id;
+    const ids = blueprint.components.map((component2) => component2.id);
     throw new ToolError(`Unknown component "${id}". Components: ${ids.slice(0, 60).join(", ")}${ids.length > 60 ? ", …" : ""}`);
   }
   async function writeNote(directory, title, fallback, record2) {
     const stamp = fileTimestamp(now());
     const slug = slugify(title, fallback);
-    await mkdir3(join7(deps.root, directory), { recursive: true });
+    await mkdir5(join11(deps.root, directory), { recursive: true });
     for (let attempt = 1; attempt <= 50; attempt++) {
       const file2 = `${directory}/${stamp}-${slug}${attempt === 1 ? "" : `-${attempt}`}.json`;
       try {
-        await writeFile5(join7(deps.root, file2), `${JSON.stringify(record2, null, 2)}
+        await writeFile8(join11(deps.root, file2), `${JSON.stringify(record2, null, 2)}
 `, { encoding: "utf8", flag: "wx" });
         return file2;
       } catch (error62) {
@@ -29944,12 +33746,88 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       })
     };
   }
+  async function systemStatus() {
+    const snap = await snapshot();
+    const blueprint = blueprintOf(snap);
+    const monitored = blueprint.components.filter((component2) => component2.runtime);
+    const file2 = await readStatusFile(deps.root);
+    if (file2.state !== "ok") {
+      const note = file2.state === "invalid" ? `${STATUS_PATH} is not a valid status file (${file2.message}). Treat every component as unknown.` : monitored.length ? `No status has been recorded yet (${STATUS_PATH} is missing). A person or CI records it with "rassam status --write"; until then the state of every component is unknown.` : "No component declares runtime in the blueprint, so nothing is monitored. This says nothing about whether the system is running.";
+      return {
+        structured: asJson({ available: false, monitored: monitored.length, summary: summarizeStatus(null, blueprint), components: monitored.map((component2) => ({ id: component2.id, name: component2.name, state: "unknown" })), note })
+      };
+    }
+    const { status } = file2;
+    const current = now();
+    const stale = isStale(status, current, STATUS_MAX_AGE_MINUTES);
+    const checked = Date.parse(status.checkedAt);
+    const ageMinutes = Number.isFinite(checked) ? Math.max(0, Math.round((current.getTime() - checked) / 6e4)) : null;
+    const ids = [.../* @__PURE__ */ new Set([...monitored.map((component2) => component2.id), ...Object.keys(status.components)])].sort();
+    const names = new Map(blueprint.components.map((component2) => [component2.id, component2.name]));
+    return {
+      structured: asJson({
+        available: true,
+        checkedAt: status.checkedAt,
+        commit: status.commit,
+        ageMinutes,
+        stale,
+        monitored: monitored.length,
+        summary: summarizeStatus(status, blueprint),
+        components: ids.map((id) => {
+          const entry = status.components[id];
+          return { id, name: names.get(id) ?? id, state: entry?.state ?? "unknown", source: entry?.source, detail: entry?.detail, latencyMs: entry?.latencyMs, checkedAt: entry?.checkedAt };
+        }),
+        note: stale ? `This status is ${ageMinutes === null ? "of unknown age" : `${ageMinutes} minutes old`}: treat every state as unknown until it is refreshed with "rassam status --write".` : "Recorded by the last probe run. It can be minutes old; it is not a live reading."
+      })
+    };
+  }
+  async function architectureDiff(args) {
+    invalidate();
+    const snap = await snapshot();
+    blueprintOf(snap);
+    if (!snap.context.isGit) throw new ToolError("This directory is not a git repository, so there is no base to compare the architecture with.");
+    const requested = typeof args.base === "string" && args.base.trim() ? args.base.trim() : void 0;
+    const base = requested ?? await defaultBaseRef(deps.root) ?? void 0;
+    if (!base) throw new ToolError("No base branch found (origin/main, main, ...). Pass base, e.g. HEAD~1 or origin/main.");
+    let comparison;
+    try {
+      comparison = await compareArchitecture(snap.context, base, snap.workspace.graphView());
+    } catch (error62) {
+      if (error62 instanceof CliError) throw new ToolError(`${error62.message}${error62.hint ? ` ${error62.hint}` : ""}`);
+      throw error62;
+    }
+    const { diff } = comparison;
+    if (!diff) {
+      return {
+        structured: asJson({
+          base: { ref: base, sha: comparison.sha },
+          comparable: false,
+          changed: false,
+          summary: `The blueprint at the base commit is ${comparison.baseBlueprint}, so there is no earlier architecture to compare with.`
+        })
+      };
+    }
+    const cut = (items) => items.slice(0, MAX_DIFF_ENTRIES);
+    const more = [diff.components.added, diff.components.removed, diff.edges.added, diff.edges.removed, diff.edges.statusChanged].reduce((sum, items) => sum + Math.max(0, items.length - MAX_DIFF_ENTRIES), 0);
+    return {
+      structured: asJson({
+        base: { ref: base, sha: comparison.sha },
+        comparable: true,
+        changed: diff.changed,
+        summary: diff.changed ? `Since ${base}: ${diff.summary}.` : `No architecture changes since ${base}.`,
+        components: { added: cut(diff.components.added), removed: cut(diff.components.removed) },
+        edges: { added: cut(diff.edges.added), removed: cut(diff.edges.removed), statusChanged: cut(diff.edges.statusChanged) },
+        moreEntries: more || void 0,
+        note: "Uncommitted and untracked files are included. An edge that became undeclared or forbidden is a violation: run check_changes for the findings."
+      })
+    };
+  }
   async function listDecisions(args) {
     const snap = await snapshot();
     const blueprint = blueprintOf(snap);
-    const component = args.component === void 0 || args.component === null ? void 0 : componentArg(blueprint, args.component);
-    const decisions = blueprint.decisions.filter((decision) => !component || !decision.components?.length || decision.components.includes(component));
-    return { structured: asJson({ component: component ?? null, count: decisions.length, decisions }) };
+    const component2 = args.component === void 0 || args.component === null ? void 0 : componentArg(blueprint, args.component);
+    const decisions = blueprint.decisions.filter((decision) => !component2 || !decision.components?.length || decision.components.includes(component2));
+    return { structured: asJson({ component: component2 ?? null, count: decisions.length, decisions }) };
   }
   async function proposeChange(args) {
     const createdAt = now().toISOString();
@@ -29993,7 +33871,7 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       name: "explain_path",
       title: "Explain a path",
       description: "Call this BEFORE editing or creating a file. Returns which component owns the path, its intent and owners, the rules that constrain changes there, what it may and may not depend on, the invariants and decisions to respect, and whether the path is protected (changes need human review).",
-      inputSchema: objectSchema({ path: text2("Repository-relative path, e.g. src/lib/ai.ts") }, ["path"]),
+      inputSchema: objectSchema({ path: text3("Repository-relative path, e.g. src/lib/ai.ts") }, ["path"]),
       annotations: READ_ONLY,
       handler: explainPath
     },
@@ -30001,7 +33879,7 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       name: "get_component",
       title: "Get a component",
       description: "Full summary of one component: definition and intent, files, what it depends on and what depends on it (declared and observed), external packages, environment variables it reads, tests, rules, invariants and decisions.",
-      inputSchema: objectSchema({ id: text2("Component id from blueprint_overview", 80) }, ["id"]),
+      inputSchema: objectSchema({ id: text3("Component id from blueprint_overview", 80) }, ["id"]),
       annotations: READ_ONLY,
       handler: getComponent
     },
@@ -30011,8 +33889,8 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       description: 'Call this BEFORE adding an import. Answers "may code in from_path import target?" where target is a repository path or a package name. Returns allowed, the rules it would violate with their human-written reasons, and whether the dependency is undeclared.',
       inputSchema: objectSchema(
         {
-          from_path: text2("Repository-relative path of the file that would contain the import"),
-          target: text2('What it would import: a repository path (src/lib/db.ts) or a package name ("octokit", "node:fs")')
+          from_path: text3("Repository-relative path of the file that would contain the import"),
+          target: text3('What it would import: a repository path (src/lib/db.ts) or a package name ("octokit", "node:fs")')
         },
         ["from_path", "target"]
       ),
@@ -30034,7 +33912,7 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       name: "check_changes",
       title: "Check my changes",
       description: "Call this BEFORE you finish or open a pull request. Runs the same gate as CI on the current working tree (uncommitted and untracked files included) and returns the verdict with the top findings, so you can fix them first. Compares against base (default: the repository's default branch) and judges by the blueprint at the merge-base; without a resolvable base it checks the whole tree.",
-      inputSchema: objectSchema({ base: text2("Git ref the change will merge into, e.g. origin/main", 200) }),
+      inputSchema: objectSchema({ base: text3("Git ref the change will merge into, e.g. origin/main", 200) }),
       annotations: READ_ONLY,
       handler: checkChanges
     },
@@ -30042,9 +33920,25 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       name: "list_decisions",
       title: "List decisions",
       description: "Architecture decision records from the blueprint (context, decision, consequences, status), optionally only those that apply to one component. Read them before proposing to change how something works.",
-      inputSchema: objectSchema({ component: text2("Only decisions that apply to this component id", 80) }),
+      inputSchema: objectSchema({ component: text3("Only decisions that apply to this component id", 80) }),
       annotations: READ_ONLY,
       handler: listDecisions
+    },
+    {
+      name: "architecture_diff",
+      title: "What my change did to the architecture",
+      description: "Structural diff of the system design: which components and dependencies the working tree added, removed or changed status (declared, undeclared, forbidden, no longer observed) compared with base (default: the repository's default branch), plus one sentence summarizing it. Use it to tell the user what your change did to the architecture. It reports structure only; check_changes reports violations.",
+      inputSchema: objectSchema({ base: text3("Git ref to compare with, e.g. origin/main or HEAD~1", 200) }),
+      annotations: READ_ONLY,
+      handler: architectureDiff
+    },
+    {
+      name: "system_status",
+      title: "What is running",
+      description: 'Runtime status recorded in .rassam/status.json by "rassam status --write" (usually in CI): overall summary and, per component that declares runtime, its state (up, degraded, down, unknown), the signal it came from (health check, deployment, workflow) and when it was checked. Includes how old the data is and whether it is stale. Read-only: it never probes anything itself.',
+      inputSchema: NO_ARGUMENTS,
+      annotations: READ_ONLY,
+      handler: systemStatus
     },
     {
       name: "propose_change",
@@ -30052,10 +33946,10 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       description: "Suggest a change to the contract for a human to review. Writes a file under .rassam/proposals/ and never edits .rassam/blueprint.json. The current contract keeps applying until a human accepts the proposal.",
       inputSchema: objectSchema(
         {
-          title: text2("Short title of the proposed change", 200),
-          rationale: text2("Why the contract should change", 8e3),
-          changes: text2("The change itself: a precise description or a JSON patch of the blueprint", 5e4),
-          agent: text2("Your name, e.g. Claude Code", 120)
+          title: text3("Short title of the proposed change", 200),
+          rationale: text3("Why the contract should change", 8e3),
+          changes: text3("The change itself: a precise description or a JSON patch of the blueprint", 5e4),
+          agent: text3("Your name, e.g. Claude Code", 120)
         },
         ["title", "rationale", "changes"]
       ),
@@ -30068,11 +33962,11 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       description: "Use this when the task cannot be completed without breaking a rule or invariant, weakening a test or check, or editing the blueprint. This is the sanctioned way to stop: it records the conflict under .rassam/escalations/ for a human and tells you how to proceed. Stopping here is a correct outcome, not a failure.",
       inputSchema: objectSchema(
         {
-          summary: text2("One sentence: what conflicts with what", 300),
-          details: text2("What you tried, what the rule requires, and what would resolve it", 8e3),
-          rule_id: text2("Id of the rule or invariant involved, if any", 80),
+          summary: text3("One sentence: what conflicts with what", 300),
+          details: text3("What you tried, what the rule requires, and what would resolve it", 8e3),
+          rule_id: text3("Id of the rule or invariant involved, if any", 80),
           paths: { type: "array", items: { type: "string" }, maxItems: 100, description: "Repository-relative paths involved" },
-          agent: text2("Your name, e.g. Claude Code", 120)
+          agent: text3("Your name, e.g. Claude Code", 120)
         },
         ["summary"]
       ),
@@ -30081,24 +33975,27 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
     }
   ];
 }
-var SERVER_INSTRUCTIONS, USAGE_HINT, READ_ONLY, WRITES_NOTE, NO_ARGUMENTS, CACHE_TTL_MS, MAX_FINDINGS, MAX_LOCATIONS2;
+var SERVER_INSTRUCTIONS, USAGE_HINT, READ_ONLY, WRITES_NOTE, NO_ARGUMENTS, CACHE_TTL_MS, MAX_FINDINGS, MAX_LOCATIONS2, MAX_DIFF_ENTRIES, STATUS_MAX_AGE_MINUTES;
 var init_tools = __esm({
   "src/cli/mcp/tools.ts"() {
     "use strict";
     init_report();
     init_schema();
+    init_status();
     init_workspace();
     init_context();
     init_gate();
     init_git();
     init_io();
+    init_live();
     init_repo_path();
     init_util();
     init_protocol();
     SERVER_INSTRUCTIONS = [
       "This repository has a human-owned architecture contract (.rassam/blueprint.json). Changes are checked against it in CI, judged by the base branch's copy, so editing the contract does not relax the rules for your change.",
       "Call explain_path before editing a file, check_dependency before adding an import, and check_changes before you finish.",
-      "If the task cannot be done without breaking a rule, weakening a test or check, or editing the blueprint, stop and call report_conflict instead, then tell the user. Use propose_change to suggest a contract change for a human to review."
+      "If the task cannot be done without breaking a rule, weakening a test or check, or editing the blueprint, stop and call report_conflict instead, then tell the user. Use propose_change to suggest a contract change for a human to review.",
+      "architecture_diff shows what your change did to the system design (components and dependencies added or removed); system_status shows what is running, when the repository records it."
     ].join(" ");
     USAGE_HINT = "Before editing a file call explain_path. Before adding an import call check_dependency. Before finishing call check_changes. If the task conflicts with a rule, call report_conflict and stop instead of weakening tests, checks or the blueprint. Never edit .rassam/blueprint.json yourself: call propose_change.";
     READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -30107,6 +34004,8 @@ var init_tools = __esm({
     CACHE_TTL_MS = 2e3;
     MAX_FINDINGS = 20;
     MAX_LOCATIONS2 = 5;
+    MAX_DIFF_ENTRIES = 100;
+    STATUS_MAX_AGE_MINUTES = 30;
   }
 });
 
@@ -30161,6 +34060,9 @@ var LOADERS = {
   reach: async () => (await Promise.resolve().then(() => (init_query(), query_exports))).reachCommand,
   verify: async () => (await Promise.resolve().then(() => (init_verify2(), verify_exports))).verifyCommand,
   sync: async () => (await Promise.resolve().then(() => (init_sync2(), sync_exports))).syncCommand,
+  render: async () => (await Promise.resolve().then(() => (init_render(), render_exports))).renderCommand,
+  status: async () => (await Promise.resolve().then(() => (init_status2(), status_exports))).statusCommand,
+  do: async () => (await Promise.resolve().then(() => (init_do(), do_exports))).doCommand,
   proposals: async () => (await Promise.resolve().then(() => (init_proposals(), proposals_exports))).proposalsCommand,
   schema: async () => (await Promise.resolve().then(() => (init_schema2(), schema_exports))).schemaCommand,
   mcp: async () => (await Promise.resolve().then(() => (init_mcp(), mcp_exports))).mcpCommand

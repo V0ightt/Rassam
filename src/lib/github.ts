@@ -17,6 +17,12 @@ const isValidToken = Boolean(
 export const octokit = new Octokit({
   auth: isValidToken ? githubToken : undefined,
   userAgent: "rassam/0.3",
+  // Fail fast when the quota is exhausted. The default behaviour waits for the
+  // reset (up to an hour) and retries, which leaves the request hanging.
+  throttle: {
+    onRateLimit: () => false,
+    onSecondaryRateLimit: () => false,
+  },
 });
 
 export type RepoNodeType = "blob" | "tree" | "commit";

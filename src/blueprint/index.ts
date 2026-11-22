@@ -47,3 +47,32 @@ export {
   type Verdict,
   type GraphView,
 } from "./report";
+export {
+  componentStateSchema,
+  systemStatusSchema,
+  parseSystemStatus,
+  serializeSystemStatus,
+  summarizeStatus,
+  overallStatus,
+  isStale,
+  STATUS_PATH,
+  type ComponentState,
+  type ComponentStatus,
+  type SystemStatus,
+} from "./status";
+export { diffArchitecture, type ArchitectureDiff, type ArchitectureEdge } from "./arch-diff";
+export { layoutGraph } from "./layout";
+export { renderSystemDiagram, renderStatusBadge, DIAGRAM_PALETTES } from "./diagram";
+export {
+  blueprintEditSchema,
+  applyBlueprintEdits,
+  describeEdits,
+  summarizeBlueprintDelta,
+  resolveComponentRef,
+  BlueprintEditError,
+  type BlueprintEdit,
+  type BlueprintEditInput,
+  type AppliedEdit,
+  type BlueprintDelta,
+} from "./edits";
+export { parseIntent, suggestIntents, INTENT_EXAMPLES, type IntentResult } from "./intent";

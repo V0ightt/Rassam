@@ -14,6 +14,8 @@ export interface Io {
   stdin?: Readable;
   stdoutStream?: Writable;
   fetch?: typeof fetch;
+  /** The clock, replaceable in tests (default: the system clock). */
+  now?(): Date;
 }
 
 export const EXIT_OK = 0;

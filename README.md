@@ -1,61 +1,162 @@
->[!NOTE]
->Rassam is under active development and has not reached 1.0. The blueprint format is versioned (`0.1`) and may gain fields; existing files stay valid within a version.
-
->[!Tip]
->Why Rassam? Rassam (رسّام) means "painter" in Arabic. It used to paint portraits of code. Now it paints the blueprint that code is checked against.
-
-# Rassam
-
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
-[![Website](https://img.shields.io/badge/Website-rassam.dev-blue?style=for-the-badge&logo=google-chrome&logoColor=white)](https://rassam.dev)
-![AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=for-the-badge)
-
-**The architecture contract for agent-built software.** Rassam keeps a human-owned blueprint of your system in the repository, gives coding agents a way to ask it what they may do before they act, and checks every change against it in CI.
-
 <div align="center">
-  <a href="https://rassam.dev" target="_blank"><img src="./public/logo.png" alt="Rassam logo" width="180" height="180" /></a>
+  <a href="https://rassam.dev"><img src="./public/logo.png" alt="Rassam" width="96" height="96" /></a>
+  <h1>Rassam</h1>
+  <p><b>Is your project still on track?</b><br/>
+  One place where you and your coding agents check before changing anything.</p>
+
+  [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
+  [![Website](https://img.shields.io/badge/rassam.dev-visit-9c95fe?style=flat-square)](https://rassam.dev)
+  ![AGPL v3](https://img.shields.io/badge/license-AGPL%20v3-blue?style=flat-square)
 </div>
 
-## Why
+<p align="center">
+  <img src="./docs/images/studio-canvas.png" alt="The Rassam Studio: your system design on a canvas, with a health pill and a bar to tell it what to change" width="900" />
+</p>
 
-Coding agents now start a large and fast-growing share of pull requests, and the measured bottleneck has moved from writing code to verifying it. Repository-to-diagram tools are free everywhere, so a picture of your code is no longer scarce. What stays scarce as models improve is what a model cannot infer from the code: **what the system is supposed to be, what each part may depend on and reach, and who approved it.**
+> Rassam (رسّام) means "painter" in Arabic. It used to paint pictures of your code. Now it paints the blueprint your code gets checked against.
 
-Rassam captures exactly that, enforces it mechanically, and spends human attention only on a short, ranked list of exceptions. The evidence behind this direction is in [`reports/Rassam pivot for the AGI era.md`](reports/Rassam%20pivot%20for%20the%20AGI%20era.md).
+> [!NOTE]
+> Rassam is young and moving fast. The blueprint format is versioned (`0.1`), so your files stay valid as it grows.
 
-## What you get
+## So, what is this?
 
-| Piece | What it does |
-| --- | --- |
-| **Blueprint** — `.rassam/blueprint.json` | An open, versioned JSON contract: components and the files they own, intent written by people, declared dependencies, rules (`forbid`, `allow-only`, `layers`, `no-cycles`, `protect`, `secret-access`), invariants, decisions, and human sign-offs. [Spec](docs/blueprint-spec.md) · [JSON Schema](schema/blueprint-0.1.schema.json) |
-| **Gate** — `rassam check` + GitHub Action | Re-derives the import graph from source, judges a change **by the base branch's blueprint** (a PR cannot relax its own rules), fails only on *new* violations, flags contract-weakening edits, tests or CI being weakened, and changes to agent permissions or committed credentials. Output as text, a sticky PR comment, annotations, JSON or SARIF. |
-| **MCP server** — `rassam mcp` | Lets Claude Code, Codex, Cursor, Copilot and others ask before acting: `explain_path`, `check_dependency`, `impact`, `check_changes`, and a sanctioned `report_conflict` instead of quietly weakening a test. Supports MCP 2025-11-25 and the stateless 2026-07-28 protocol. |
-| **Canvas** — the web app | Open a local folder (Chromium) or a public GitHub repo, see declared vs. observed dependencies, write intent, draw a forbidden edge, sign off, and save the blueprint straight back into your repository. |
-| **Reach map** | What agents can touch: MCP servers and the credentials they receive, broad permission grants, secrets committed in agent configs, and which components read which environment variables. |
+Agents write a lot of your code now. That part got easy. The hard part is knowing whether all those changes still add up to the system you actually wanted.
 
-## Quickstart
+Rassam fixes that with one small file in your repo, `.rassam/blueprint.json`. Think of it as the house rules for your codebase:
 
-```bash
-npm install
-npx tsx src/cli/index.ts init          # draft a blueprint from your code (all facts marked "derived")
-# open .rassam/blueprint.json: write intent, add a rule or two
-npx tsx src/cli/index.ts check         # full check of the working tree
-npx tsx src/cli/index.ts check --base main   # judge your branch the way CI will
+- **what the parts are** ("this folder is the payments service")
+- **what each part is for**, in your own words
+- **what may talk to what** ("the UI never touches the database")
+- **who may hold which secrets** ("only payments reads the Stripe key")
+
+Then three things happen on their own:
+
+1. **Your agents ask before they act.** Claude Code, Codex, Cursor and friends query the blueprint over MCP: *may I import this from here?*
+2. **Every pull request gets checked.** If a change breaks a rule, weakens a test, or quietly loosens the rules themselves, you hear about it.
+3. **Your README shows the real system.** A diagram of your architecture that redraws itself on every push.
+
+You stay the author. Agents do the typing.
+
+## This repo's own system design, live
+
+This picture is not a screenshot. A GitHub Action redraws it every time someone pushes to `main`, straight from the code and this repo's own blueprint.
+
+<!-- rassam:system:start -->
+<!-- Written by `rassam render --readme`. Edit the blueprint, not this block: it is overwritten. -->
+<p align="center">
+  <a href="https://github.com/V0ightt/Rassam">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/system-dark.svg">
+      <img alt="System design of Rassam: its components, their dependencies and the state of the blueprint check" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/system-light.svg">
+    </picture>
+  </a>
+</p>
+<p align="center">
+  <img alt="Blueprint check" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-blueprint.svg">
+  <img alt="System status" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-system.svg">
+</p>
+<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of 2026-11-22 22:08 UTC</sub></p>
+
+<details>
+<summary>Components (24)</summary>
+
+| Component | Kind | Status | Intent |
+| --- | --- | --- | --- |
+| Web shell | route | — | Next.js pages that mount the workbench and settings. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tes… |
+| API routes | api | — | Server route handlers. Every request body is untrusted and validated with zod; every route goes through request-security (rate limits, origin checks). Credenti… |
+| Workbench shell | component | — | Composes the workbench: wires the Map and Blueprint features, panels and hooks together. Thin wiring only; feature logic lives in feature components and hooks.… |
+| Workbench UI | component | — | The VS Code-style workbench: map canvas, explorer, editor tabs, evidence inspector and the Rassam chat panel. Renders state owned by hooks; AI output reaches t… |
+| UI primitives | component | — | The design system: tokens-driven buttons, sheets, popovers, pills and status glyphs. Status is never shown by colour alone; everything is keyboard reachable. D… |
+| Studio | component | — | The first screen and the main product: is the project on track? Five persistent elements only (source pill, health pill, canvas, intent bar, zoom cluster). Peo… |
+| Blueprint UI | component | — | Where humans author the contract and rule on exceptions: the blueprint canvas, the ranked attention list, rule and intent editors, and the reach view. It must… |
+| State hooks | hook | — | Client state and lifecycles (projects, history, clipboard, editor tabs, blueprint sessions). Hooks own state; components render it. |
+| Blueprint client | service | — | Browser-side host for the engine: loads a blueprint for a GitHub project through the API, or reads and writes a local folder through the File System Access API… |
+| Local store | storage | — | Local-first persistence of projects, graphs, chats and cached source in IndexedDB and localStorage, plus import and export. Exports never contain credentials. |
+| Chat agent | service | — | Server-side ask/agent orchestration over the selected model: plans tool calls, reads cited source, and validates canvas changes as complete, revisioned patches… |
+| Blueprint intent | service | — | Server-side helpers for &quot;tell Rassam what to change&quot;: builds the model prompt (edit operation catalogue, selector grammar, a compact blueprint digest inside da… |
+| Repository analysis | core | — | Deterministic map building from source evidence (static analysis is the only source of edges), with optional AI enrichment of names and descriptions for verifi… |
+| GitHub gateway | gateway | — | The only code that talks to GitHub and holds GITHUB\_TOKEN. Binds repository identity and commit with signed source grants so clients cannot request content the… |
+| Server platform | middleware | — | Cross-cutting server concerns: rate limiting, origin and deployment checks, request parsing, the error envelope and privacy-preserving telemetry. |
+| LLM providers | service | — | Adapters over model providers behind one interface. The only code that reads provider API keys. |
+| Shared library | utility | — | Runtime-neutral code shared by browser and server: zod contracts, types, canvas normalization, source-sensitivity policy, patch application, search and small u… |
+| Blueprint engine | core | — | The isomorphic heart of Rassam: blueprint format, import graph, rules, gate, reach analysis and reports. It runs unchanged in the CLI, the MCP server, CI and t… |
+| CLI and MCP server | client | — | The Node host: \`rassam\` commands, git and GitHub Actions integration, and the dual-era MCP server agents call before acting. Agent proposals and escalations ar… |
+| Build tooling | config | — | Build, lint, test and bundling configuration, including the CLI bundle consumed by the GitHub Action. |
+| Tests | test | — | Unit, integration and browser tests. Tests may depend on anything; nothing may depend on tests. |
+| Gate benchmark | test | — | Labeled scenarios (documented agent reward hacks, architecture violations, reach problems and legitimate changes) that measure the gate's recall and false posi… |
+| GitHub API | external external-api | — | Public repository trees and blobs, and PR comments from the GitHub Action. |
+| Model provider APIs | external external-api | — | DeepSeek, OpenAI, Anthropic, Google and Ollama endpoints, called only through llm-providers. |
+
+</details>
+<!-- rassam:system:end -->
+
+Want the same in your README? [It takes one workflow file.](docs/live-system-design.md)
+
+## Just tell it what you want
+
+No forms. Type what you mean, see it on the canvas first, then hit Enter.
+
+<p align="center">
+  <img src="./docs/images/studio-proposal.png" alt="Typing 'forbid web from importing storage' previews a new rule on the canvas before applying it" width="820" />
+</p>
+
+Things you can say:
+
+```text
+forbid web from importing storage because the UI must go through the API
+add a component Payments for src/payments
+only payments may read STRIPE_*
+domain may only depend on util and shared
+monitor api at https://api.example.com/health
 ```
 
-The bundled single-file CLI lives at `action/dist/rassam.mjs` (`node action/dist/rassam.mjs check`). See [docs/getting-started.md](docs/getting-started.md) for wiring the GitHub Action and connecting the MCP server to your agents.
+Nothing changes until you apply it, and every change has an Undo. Loosening a rule always asks twice. The common commands work with no AI key at all; plug in a model in Settings if you want free-form requests.
 
-A minimal blueprint:
+Prefer the terminal? Same thing:
+
+```bash
+rassam do "forbid web from importing storage" --write
+```
+
+## What it looks like
+
+| | |
+| --- | --- |
+| **One health pill.** "On track" or "2 need a ruling". Click it for a short, ranked list with the exact file and line. | **Click any component** to see what it is for, what it may depend on, and which secrets it reads. |
+| <img src="./docs/images/studio-attention.png" alt="Attention sheet with ranked findings and one-click rulings" width="430" /> | <img src="./docs/images/studio-inspector.png" alt="Inspector showing a component's intent, boundaries and secrets" width="430" /> |
+| **Start in ten seconds.** Paste a GitHub URL, open a local folder, or try the sample. | **Light or dark.** Follows your system, switchable any time. |
+| <img src="./docs/images/studio-start.png" alt="Start screen asking 'Is the project on track?'" width="430" /> | <img src="./docs/images/studio-light.png" alt="The Studio in the light theme" width="430" /> |
+
+## Try it in two minutes
+
+```bash
+git clone https://github.com/V0ightt/Rassam && cd Rassam
+npm install
+npm run dev          # open http://localhost:3000 and click "Try the sample"
+```
+
+Now point it at your own project:
+
+```bash
+# inside YOUR repo
+node /path/to/Rassam/action/dist/rassam.mjs init      # drafts a blueprint from your code
+node /path/to/Rassam/action/dist/rassam.mjs check     # checks the code against it
+```
+
+`init` only writes down what it can see in your code, and marks every line as "derived". The good stuff, the *why*, is yours to add. Open the folder in the Studio (Chrome or Edge) and it saves straight back into your repo.
+
+<details>
+<summary><b>A tiny blueprint, so you can see there is no magic</b></summary>
 
 ```json
 {
-  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
   "version": "0.1",
   "system": { "name": "Shop" },
   "components": [
-    { "id": "ui", "name": "Storefront", "kind": "component", "paths": ["src/ui/**"],
+    { "id": "ui", "name": "Storefront", "paths": ["src/ui/**"],
       "intent": "Renders the shop. Never touches storage directly." },
-    { "id": "db", "name": "Database access", "kind": "database", "paths": ["src/db/**"] },
-    { "id": "payments", "name": "Payments", "kind": "service", "paths": ["src/payments/**"] }
+    { "id": "db", "name": "Database access", "paths": ["src/db/**"] },
+    { "id": "payments", "name": "Payments", "paths": ["src/payments/**"] }
   ],
   "rules": [
     { "id": "ui-no-db", "kind": "forbid", "from": "ui", "to": "db",
@@ -65,51 +166,102 @@ A minimal blueprint:
 }
 ```
 
-## How the gate thinks
+Full format: [docs/blueprint-spec.md](docs/blueprint-spec.md).
+</details>
 
-- **Judged by the base contract.** In a pull request, rules come from the merge-base blueprint. Edits to the blueprint itself are diffed semantically; anything that loosens it (a removed rule, a narrowed forbid, a lowered severity, a new ignore glob) is an error until a human applies the approval label (`rassam:approved` by default).
-- **Only new violations fail.** Pre-existing violations are reported, collapsed, so you can adopt Rassam on a legacy codebase without a wall of red.
-- **The checks are protected.** Documented reward hacks by coding agents attack the checks themselves, so changes to tests, CI, lockfiles, agent configuration and the blueprint always surface, and heuristics flag skipped or focused tests, removed or trivialized assertions, forced `exit(0)`, new suppressions, weakened CI steps and lowered coverage thresholds.
-- **A small attention budget.** Findings are scored by severity, novelty, blast radius and kind; the top few go first. Every finding cites `file:line` evidence.
-- **Humans stay authors, not rubber stamps.** Each blueprint fact records whether a person asserted it, it was derived from code, or an agent proposed it; the report shows the human-authored share. Agent proposals land in `.rassam/proposals/` and never edit the contract directly.
+## Hook up your agents
 
-## The web app
+Add this to `.mcp.json` (Claude Code) or the equivalent for your tool, and your agent can ask the blueprint questions:
 
-```bash
-npm install
-npm run dev     # http://localhost:3000
+```json
+{ "mcpServers": { "rassam": { "command": "node", "args": ["/path/to/Rassam/action/dist/rassam.mjs", "mcp"] } } }
 ```
 
-Open a local folder from the start screen (Chrome/Edge) to edit `.rassam/blueprint.json` in place, or analyze a public GitHub repository. Optional `.env.local` keys: `GITHUB_TOKEN` (rate limits), and `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OLLAMA_API_KEY` for the Rassam chat assistant and optional AI enrichment. See [docs/deployment.md](docs/deployment.md) for server settings.
-
-The original map workspace (evidence-linked architecture map, file explorer, editor tabs, and the ask/agent chat that proposes validated canvas patches) is still available under the **Map** view.
-
-## Repository layout
-
-| Path | Contents |
+| The agent asks | Rassam answers |
 | --- | --- |
-| `src/blueprint/` | The isomorphic engine: format, import graph (TS/JS, Python, Go, Java/Kotlin, Rust, C/C++, Ruby), rules, gate, reach, reports |
-| `src/cli/` | `rassam` CLI, git and GitHub Actions integration, MCP server |
-| `src/components/blueprint/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/` | Blueprint canvas, data layer, local-folder access |
-| `src/app/`, `src/components/`, `src/lib/` | The Next.js workbench and its server routes |
-| `action.yml`, `action/dist/` | The GitHub Action and its bundled CLI |
-| `.rassam/blueprint.json` | Rassam's own contract; Rassam is checked against it |
+| `explain_path` | Who owns this file, what it is for, which rules apply |
+| `check_dependency` | "May this file import that?" Yes or no, with your reason |
+| `impact` | What breaks if this changes |
+| `check_changes` | Does my work pass the gate right now? |
+| `architecture_diff` | What did I change structurally? |
+| `system_status` | What is running, what is down |
+| `report_conflict` | "The task and the rules disagree, I am stopping" |
 
-## Development
+That last one matters. Research on coding agents shows that when a task cannot be done honestly, giving the agent a sanctioned way to stop makes it far less likely to cheat by editing the tests.
+
+Setup for Cursor, Codex and VS Code: [docs/getting-started.md](docs/getting-started.md).
+
+## Guard your pull requests
+
+```yaml
+# .github/workflows/rassam.yml
+on: pull_request
+permissions: { contents: read, pull-requests: write }
+jobs:
+  blueprint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: V0ightt/Rassam@main
+```
+
+What makes this gate different:
+
+- **A PR cannot loosen its own rules.** It is judged by the blueprint on the base branch. Weakening the rules needs a human to add a label.
+- **Only new problems fail.** Old mess is reported quietly, so you can adopt it on a legacy codebase.
+- **It watches the checks themselves.** Skipped tests, deleted assertions, `|| true` in CI, code that behaves differently under test, new broad agent permissions, credentials committed by accident. These are the moves agents make when they are stuck.
+- **It respects your attention.** The top few findings first, each with file and line. The rest is collapsed.
+
+We measure it instead of bragging: [109 labelled cases](bench/gate/RESULTS.md), 89% caught, zero honest changes blocked. The misses are written down too.
+
+## "What is running?" on the diagram
+
+Tell Rassam where a component lives and the diagram shows whether it is up:
 
 ```bash
-npm test              # vitest
-npm run typecheck
-npm run lint
-npm run build         # Next.js production build
-npm run build:cli     # rebuild action/dist/rassam.mjs (CI checks it is fresh)
+rassam do "monitor api at https://api.example.com/health" --write
+```
+
+A scheduled workflow pings it and updates the picture. Honest fine print: a README can only show an image, so "live" means *refreshed within a few minutes*, with an "as of" time on it. [Details and the workflow file.](docs/live-system-design.md)
+
+## All the commands
+
+| Command | In plain words |
+| --- | --- |
+| `rassam init` | Draft a blueprint from the code |
+| `rassam check [--base main]` | Check everything, or just what your branch changed |
+| `rassam do "<sentence>"` | Change the blueprint by describing the change |
+| `rassam explain <path>` | What governs this file? |
+| `rassam impact <paths>` | What depends on these? |
+| `rassam render [--readme]` | Draw the system diagram (and update the README block) |
+| `rassam status` | Check what is running |
+| `rassam sync` | Add what the code has that the blueprint lacks |
+| `rassam verify <id>` | Sign off: "a human checked this" |
+| `rassam reach` | What can agents touch? Tools, permissions, secrets |
+| `rassam mcp` | Start the MCP server for agents |
+
+## Under the hood
+
+| Folder | What lives there |
+| --- | --- |
+| `src/blueprint/` | The engine: format, import analysis (TS/JS, Python, Go, Java, Kotlin, Rust, C/C++, Ruby), rules, gate, diagram. Runs the same in the CLI, CI and the browser |
+| `src/cli/` | The `rassam` command and the MCP server |
+| `src/components/studio/` | The Studio you see in the screenshots |
+| `action.yml`, `action/dist/` | The GitHub Action |
+| `.rassam/blueprint.json` | Rassam's own blueprint. Yes, it checks itself on every PR |
+
+```bash
+npm test             # 1,500+ tests
+npm run typecheck && npm run lint
+npm run build
 npm run rassam -- check --base main
 ```
 
-Read [`agents.md`](agents.md) before architectural changes. If you are a coding agent working on this repository, use the `rassam` MCP server configured in `.mcp.json`.
+Why we built it this way, with sources: [the research report](reports/Rassam%20pivot%20for%20the%20AGI%20era.md). What we still need to prove: [the evaluation plan](docs/evaluation-plan.md). The older map-and-chat workspace is still there at `/map`.
 
-## Thanks and contact
+## Say hi
 
-- **GitHub Student Pack** for the Student Developer Pack.
-- **Anthropic**: this project is built with Claude.
-- Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/) · `contact@rassam.dev`
+Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/) · `contact@rassam.dev`
+
+Built with Claude. Thanks to the GitHub Student Developer Pack.

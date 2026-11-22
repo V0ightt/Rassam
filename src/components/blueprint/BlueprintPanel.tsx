@@ -41,6 +41,10 @@ export interface BlueprintPanelProps {
   onNavigateToSource?: NavigateToSource;
   onShowOnCanvas?: (componentIds: string[]) => void;
   onClose?: () => void;
+  /** Inside a sheet that already has a title: no header, no source actions, no derived banner. */
+  embedded?: boolean;
+  /** Sections to offer, in order. Defaults to all five. */
+  tabs?: BlueprintTab[];
   className?: string;
 }
 
@@ -67,6 +71,8 @@ export default function BlueprintPanel({
   onNavigateToSource,
   onShowOnCanvas,
   onClose,
+  embedded = false,
+  tabs,
   className,
 }: BlueprintPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null);
@@ -111,13 +117,16 @@ export default function BlueprintPanel({
     });
   });
 
+  const shownTabs = tabs ? TABS.filter((tab) => tabs.includes(tab.id)) : TABS;
+  const activeTab: BlueprintTab = shownTabs.some((tab) => tab.id === ui.tab) ? ui.tab : shownTabs[0]?.id ?? 'attention';
+
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : offset ? (index + offset + TABS.length) % TABS.length : null;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? shownTabs.length - 1 : offset ? (index + offset + shownTabs.length) % shownTabs.length : null;
     if (next === null) return;
     event.preventDefault();
-    ui.setTab(TABS[next].id);
-    tabRefs.current[TABS[next].id]?.focus();
+    ui.setTab(shownTabs[next].id);
+    tabRefs.current[shownTabs[next].id]?.focus();
   };
 
   const { blueprint, report } = session;
@@ -143,14 +152,14 @@ export default function BlueprintPanel({
       // Controls inherit their font (global reset), so the base size is set here rather than on each button.
       className={cn('flex h-full min-w-0 flex-col bg-slate-900 text-xs text-slate-100', className)}
     >
-      <header className="shrink-0 border-b border-slate-800 px-3 py-2">
+      {!embedded && <header className="shrink-0 border-b border-slate-800 px-3 py-2">
         <div className="flex items-center gap-2">
           <ShieldCheck size={15} className="shrink-0 text-cyan-300" aria-hidden="true" />
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-50">
             {blueprint?.system.name ?? 'Blueprint'}
           </h2>
           {session.dirty && (
-            <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-amber-200" title="Unsaved changes">
+            <span className="inline-flex shrink-0 items-center gap-1 text-xs text-amber-200" title="Unsaved changes">
               <span className="h-2 w-2 rounded-full bg-amber-400" aria-hidden="true" />
               <span>Unsaved</span>
             </span>
@@ -163,7 +172,7 @@ export default function BlueprintPanel({
         </div>
 
         {badge && (
-          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-400">
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
             {session.source?.kind === 'github' ? <Github size={11} aria-hidden="true" /> : <FolderOpen size={11} aria-hidden="true" />}
             <span data-testid="blueprint-source" className="truncate font-mono">{badge}</span>
           </p>
@@ -206,13 +215,13 @@ export default function BlueprintPanel({
             {session.dirty && (
               confirmDiscard ? (
                 <span className="ml-auto flex items-center gap-1">
-                  <button type="button" className="rounded px-1.5 py-1 text-[11px] text-red-200 hover:bg-red-500/15" onClick={() => { session.discardChanges(); setConfirmDiscard(false); }}>
+                  <button type="button" className="rounded px-1.5 py-1 text-xs text-red-200 hover:bg-red-500/15" onClick={() => { session.discardChanges(); setConfirmDiscard(false); }}>
                     Discard all changes
                   </button>
-                  <button type="button" className="rounded px-1.5 py-1 text-[11px] text-slate-400 hover:bg-slate-800" onClick={() => setConfirmDiscard(false)}>Keep</button>
+                  <button type="button" className="rounded px-1.5 py-1 text-xs text-slate-400 hover:bg-slate-800" onClick={() => setConfirmDiscard(false)}>Keep</button>
                 </span>
               ) : (
-                <button type="button" className="ml-auto rounded px-1.5 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-slate-100" onClick={() => setConfirmDiscard(true)}>
+                <button type="button" className="ml-auto rounded px-1.5 py-1 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-100" onClick={() => setConfirmDiscard(true)}>
                   Discard…
                 </button>
               )
@@ -220,17 +229,17 @@ export default function BlueprintPanel({
           </div>
         )}
         <span className="sr-only" role="status">{copied ? 'Blueprint JSON copied to the clipboard' : ''}</span>
-      </header>
+      </header>}
 
       {(session.error || actionError) && (
-        <div role="alert" className="shrink-0 border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] leading-4 text-red-100">
+        <div role="alert" className="shrink-0 border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-xs leading-4 text-red-100">
           {actionError ?? session.error}
         </div>
       )}
 
       {session.status === 'loading' && (
         <div className="shrink-0 border-b border-slate-800 px-3 py-2" role="status" aria-live="polite">
-          <p className="text-[11px] text-slate-300">
+          <p className="text-xs text-slate-300">
             {session.progress?.phase ?? 'Loading'}
             {session.progress?.total ? ` · ${session.progress.completed ?? 0}/${session.progress.total}` : '…'}
           </p>
@@ -255,7 +264,7 @@ export default function BlueprintPanel({
               </p>
               {githubProject && (
                 <div className="space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-2.5">
-                  <p className="text-[11px] leading-4 text-slate-300">
+                  <p className="text-xs leading-4 text-slate-300">
                     Read the contract from <span className="font-mono text-slate-100">{githubName}</span>, or derive a first draft from its code.
                   </p>
                   {loadButton}
@@ -269,37 +278,37 @@ export default function BlueprintPanel({
                   Start empty
                 </button>
               </div>
-              <p className="text-[11px] leading-4 text-slate-500">Opening a folder needs a Chromium browser. Files stay on your machine.</p>
+              <p className="text-xs leading-4 text-slate-500">Opening a folder needs a Chromium browser. Files stay on your machine.</p>
             </div>
           )}
         </div>
       ) : (
         <>
-          {session.origin === 'derived' && (
+          {session.origin === 'derived' && !embedded && (
             <div role="note" aria-label="Derived draft" className="shrink-0 space-y-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2">
-              <p className="text-[11px] leading-4 text-amber-100">This is a draft derived from code. It becomes a contract when you confirm it.</p>
+              <p className="text-xs leading-4 text-amber-100">This is a draft derived from code. It becomes a contract when you confirm it.</p>
               <button type="button" className="inline-flex min-h-8 items-center rounded-md border border-amber-400/60 bg-amber-400/15 px-3 text-xs font-semibold text-amber-50 hover:bg-amber-400/25" onClick={() => session.adoptDraft()}>
                 Adopt draft
               </button>
             </div>
           )}
 
-          {mismatch && (
+          {mismatch && !embedded && (
             <div role="note" className="shrink-0 space-y-2 border-b border-slate-800 bg-slate-950/60 px-3 py-2">
-              <p className="text-[11px] leading-4 text-slate-300">The open project is <span className="font-mono text-slate-100">{githubName}</span>. This blueprint belongs to a different revision.</p>
+              <p className="text-xs leading-4 text-slate-300">The open project is <span className="font-mono text-slate-100">{githubName}</span>. This blueprint belongs to a different revision.</p>
               {loadButton}
             </div>
           )}
 
-          {session.issues.length > 0 && (
+          {session.issues.length > 0 && !embedded && (
             <div className="shrink-0 border-b border-slate-800 p-2">
               <IssueList issues={session.issues} title={`${session.issues.length} blueprint ${session.issues.length === 1 ? 'issue' : 'issues'}`} />
             </div>
           )}
 
           <div role="tablist" aria-label="Blueprint sections" className="flex shrink-0 overflow-x-auto border-b border-slate-800 bg-slate-950" style={{ scrollbarWidth: 'none' }}>
-            {TABS.map((tab, index) => {
-              const selected = ui.tab === tab.id;
+            {shownTabs.map((tab, index) => {
+              const selected = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
@@ -313,25 +322,25 @@ export default function BlueprintPanel({
                   onClick={() => ui.setTab(tab.id)}
                   onKeyDown={(event) => onTabKeyDown(event, index)}
                   className={cn(
-                    'flex min-h-9 flex-1 shrink-0 items-center justify-center gap-1 border-b-2 px-2 text-[11px]',
+                    'flex min-h-9 flex-1 shrink-0 items-center justify-center gap-1 border-b-2 px-2 text-xs',
                     selected ? 'border-cyan-400 text-cyan-200' : 'border-transparent text-slate-400 hover:text-slate-200',
                   )}
                 >
                   {tab.label}
                   {tab.id === 'attention' && attentionCount > 0 && (
-                    <span className="rounded-full bg-amber-500/20 px-1.5 text-[10px] text-amber-200" aria-label={`${attentionCount} errors and warnings`}>{attentionCount}</span>
+                    <span className="rounded-full bg-amber-500/20 px-1.5 text-xs text-amber-200" aria-label={`${attentionCount} errors and warnings`}>{attentionCount}</span>
                   )}
                 </button>
               );
             })}
           </div>
 
-          <div id="blueprint-tabpanel" role="tabpanel" aria-labelledby={`blueprint-tab-${ui.tab}`} className="min-h-0 flex-1 overflow-y-auto">
-            {ui.tab === 'attention' && <AttentionTab session={session} ui={ui} onNavigateToSource={onNavigateToSource} onShowOnCanvas={onShowOnCanvas} />}
-            {ui.tab === 'components' && <ComponentsTab session={session} ui={ui} />}
-            {ui.tab === 'rules' && <RulesTab session={session} ui={ui} />}
-            {ui.tab === 'intent' && <IntentTab session={session} />}
-            {ui.tab === 'reach' && <ReachTab session={session} onNavigateToSource={onNavigateToSource} />}
+          <div id="blueprint-tabpanel" role="tabpanel" aria-labelledby={`blueprint-tab-${activeTab}`} className="min-h-0 flex-1 overflow-y-auto">
+            {activeTab === 'attention' && <AttentionTab session={session} ui={ui} onNavigateToSource={onNavigateToSource} onShowOnCanvas={onShowOnCanvas} />}
+            {activeTab === 'components' && <ComponentsTab session={session} ui={ui} />}
+            {activeTab === 'rules' && <RulesTab session={session} ui={ui} />}
+            {activeTab === 'intent' && <IntentTab session={session} />}
+            {activeTab === 'reach' && <ReachTab session={session} onNavigateToSource={onNavigateToSource} />}
           </div>
         </>
       )}

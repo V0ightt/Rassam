@@ -1,0 +1,107 @@
+name: Rassam Live
+
+# Keeps the system design in the README current. On every push to main the
+# diagram, the badges and system.json are rendered and published to the orphan
+# branch `rassam-live`, which the README loads its images from. Every 15
+# minutes the runtime status (health URLs, deployments, workflows declared as
+# `runtime` in the blueprint) is probed again; that run is skipped when no
+# component declares `runtime`.
+#
+# Nothing is committed to main and no history is rewritten there: the branch
+# `rassam-live` holds exactly one commit, replaced on each change.
+# See docs/live-system-design.md.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the rassam-live branch
+  deployments: read # runtime.deployment
+  actions: read # runtime.workflow
+
+concurrency:
+  group: rassam-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    # Forks have no business publishing this repository's live branch.
+    if: github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RASSAM: node action/dist/rassam.mjs
+      LIVE_BRANCH: rassam-live
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Probe runtime status
+        id: status
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: $RASSAM status --write --github
+
+      # A scheduled run exists only to refresh the status. With nothing to
+      # monitor (or a failed probe step) there is nothing new to draw.
+      - name: Fetch the published branch
+        id: live
+        if: github.event_name != 'schedule' || (steps.status.outputs.monitored != '' && steps.status.outputs.monitored != '0')
+        run: |
+          set -euo pipefail
+          live="$RUNNER_TEMP/live"
+          rm -rf "$live"
+          mkdir -p "$live"
+          # Start from what is published, so unchanged files stay byte-identical.
+          if git fetch --quiet --no-tags origin "+refs/heads/$LIVE_BRANCH:refs/remotes/origin/$LIVE_BRANCH" 2> /dev/null; then
+            git archive "refs/remotes/origin/$LIVE_BRANCH" | tar -x -C "$live"
+          else
+            echo "Branch $LIVE_BRANCH does not exist yet; it will be created."
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Render the system design
+        if: steps.live.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          args=(render --out "$RUNNER_TEMP/live")
+          # Highlight what the last commit changed; the first commit has nothing to compare with.
+          if git rev-parse --verify --quiet "HEAD~1^{commit}" > /dev/null; then args+=(--base HEAD~1); fi
+          # With live status, draw its time into the picture ("as of 14:05 UTC").
+          if [ -f .rassam/status.json ]; then args+=(--stamp); fi
+          $RASSAM "${args[@]}"
+
+      - name: Publish to the live branch
+        if: steps.live.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          live="$RUNNER_TEMP/live"
+          git_dir="$(git rev-parse --absolute-git-dir)"
+          # A private index and plumbing commands: the checkout, its index and
+          # the history of every other branch are left untouched.
+          export GIT_INDEX_FILE="$RUNNER_TEMP/rassam-live.index"
+          rm -f "$GIT_INDEX_FILE"
+          cd "$live"
+          git --git-dir="$git_dir" --work-tree=. add --all .
+          tree="$(git --git-dir="$git_dir" write-tree)"
+          published="$(git --git-dir="$git_dir" rev-parse --verify --quiet "refs/remotes/origin/$LIVE_BRANCH^{tree}" || true)"
+          if [ "$tree" = "$published" ]; then
+            echo "Nothing changed; $LIVE_BRANCH is up to date."
+            exit 0
+          fi
+          commit="$(git --git-dir="$git_dir" \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit-tree "$tree" -m "Rassam live system design for ${GITHUB_SHA::7} [skip ci]")"
+          # One parentless commit, replaced each time: the branch never grows.
+          git --git-dir="$git_dir" push --force origin "$commit:refs/heads/$LIVE_BRANCH"
+          echo "Published $LIVE_BRANCH at ${commit::7}."

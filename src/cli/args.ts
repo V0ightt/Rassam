@@ -15,6 +15,8 @@ export interface FlagSpec {
   valueName?: string;
   choices?: readonly string[];
   default?: FlagValue;
+  /** A string flag whose value may be left out (`--readme` or `--readme docs/README.md`); without a value it is `true`. */
+  optionalValue?: boolean;
 }
 
 export interface CommandSpec {
@@ -156,6 +158,82 @@ export const COMMANDS: readonly CommandSpec[] = [
       "a person wrote, and never moves a file out of the component that owns it.",
     ],
     examples: ["rassam sync", "rassam sync --write --no-dependencies"],
+  },
+  {
+    name: "render",
+    summary: "Draw the system design (SVG, badges, system.json) and keep the README block current",
+    flags: [
+      { name: "out", type: "string", valueName: "dir", default: ".rassam/live", description: "Directory for system-light.svg, system-dark.svg, the badges and system.json" },
+      { name: "theme", type: "string", valueName: "theme", choices: ["light", "dark", "both"], default: "both", description: "Which diagrams to write: light, dark or both" },
+      { name: "detail", type: "string", valueName: "level", choices: ["calm", "full"], default: "calm", description: "calm hides tests, edges into shared components and implied dependencies; full draws everything" },
+      { name: "base", type: "string", valueName: "ref", description: "Highlight what changed in the architecture since the merge-base with <ref>" },
+      { name: "status", type: "string", valueName: "file", description: "Runtime status to overlay (default: .rassam/status.json when it exists)" },
+      { name: "status-max-age", type: "number", valueName: "minutes", default: 60, description: "Older status is drawn as \"No data\" instead of a stale state" },
+      { name: "readme", type: "string", valueName: "file", optionalValue: true, description: "Update the block between the rassam:system markers in README.md (or <file>)" },
+      { name: "format", type: "string", valueName: "fmt", choices: ["svg", "mermaid", "json"], default: "svg", description: "svg writes the files; mermaid and json print to stdout and write nothing" },
+      { name: "link", type: "string", valueName: "url", description: "Where the README diagram links to (default: the repository URL)" },
+      { name: "image-base", type: "string", valueName: "url|path", description: "URL or relative path the README loads the images from (default: the rassam-live branch on raw.githubusercontent.com)" },
+      { name: "stamp", type: "boolean", description: "Draw the time into the diagrams (otherwise identical commits give identical files)" },
+      ROOT_FLAG,
+    ],
+    details: [
+      "Writes system-light.svg, system-dark.svg, badge-blueprint.svg, badge-system.svg",
+      "and system.json. The drawing is a pure function of the blueprint, the code and",
+      "the status file: no model is involved, and nothing is rewritten when nothing changed.",
+      "",
+      "A README can only show a static image. Put these two lines where it should appear,",
+      "then run rassam render --readme:",
+      "  <!-- rassam:system:start -->",
+      "  <!-- rassam:system:end -->",
+      "",
+      "Exit codes: 0 rendered (violations are shown in the picture, they do not fail it), 2 usage or configuration error.",
+    ],
+    examples: ["rassam render", "rassam render --base HEAD~1 --out out/live", "rassam render --readme --image-base .rassam/live"],
+  },
+  {
+    name: "status",
+    summary: "Probe what is running: health URLs, deployments and workflows declared as runtime",
+    flags: [
+      { name: "write", type: "boolean", description: "Save the result to .rassam/status.json" },
+      FORMAT_TEXT_JSON,
+      { name: "timeout", type: "number", valueName: "ms", default: 5000, description: "Timeout of each request (a component's health.timeoutMs wins)" },
+      { name: "github", type: "boolean", description: "Read deployments and workflow runs from the GitHub API (also on when GITHUB_TOKEN is set)" },
+      { name: "fail-on-down", type: "boolean", description: "Exit 1 when a component is down" },
+      ROOT_FLAG,
+    ],
+    details: [
+      "For every component that declares runtime in the blueprint:",
+      "  health      GET or HEAD the URL: 2xx (or expectStatus) is up, 5xx, a timeout or a network error is down, anything else is degraded",
+      "  deployment  the latest GitHub deployment of that environment",
+      "  workflow    the latest run of that workflow file on the default branch",
+      "The worst signal wins. Requests are made from this machine; only http(s) URLs",
+      "without credentials are fetched, and response bodies are never read or printed.",
+      "",
+      "Exit codes: 0 always, unless --fail-on-down and a component is down (1); 2 usage or configuration error.",
+    ],
+    examples: ["rassam status", "rassam status --write --github"],
+  },
+  {
+    name: "do",
+    summary: "Change the blueprint with a plain-language instruction (a dry run by default)",
+    positionals: "<instruction...>",
+    minPositionals: 1,
+    flags: [
+      { name: "write", type: "boolean", description: "Save the change to .rassam/blueprint.json (default: show what would change)" },
+      { name: "allow-weakening", type: "boolean", description: "Allow an instruction that loosens the contract" },
+      { name: "choose", type: "number", valueName: "n", description: "Pick option <n> when the instruction is ambiguous" },
+      { name: "by", type: "string", valueName: "name", description: "Who is making the change (default: git config user.name)" },
+      FORMAT_TEXT_JSON,
+      ROOT_FLAG,
+    ],
+    details: [
+      "The instruction is parsed by fixed rules, not by a model, so the same words",
+      "always give the same edits. Quote it so the shell passes it as one argument.",
+      "New facts are recorded as written by a person (provenance \"human\").",
+      "",
+      "Exit codes: 0 understood (and saved with --write), 2 ambiguous, not understood, or refused.",
+    ],
+    examples: ['rassam do "forbid ui from importing db because pages go through the API"', 'rassam do "add a component Payments for src/payments/**" --write'],
   },
   {
     name: "reach",
@@ -309,6 +387,10 @@ export function parseArgs(argv: readonly string[], commands: readonly CommandSpe
       continue;
     }
     let raw = inline;
+    if (raw === undefined && flag.optionalValue && (argv[index + 1] === undefined || argv[index + 1].startsWith("-"))) {
+      parsed.flags[camelCase(flag.name)] = true;
+      continue;
+    }
     if (raw === undefined) {
       raw = argv[index + 1];
       if (raw === undefined || raw === "--") throw new UsageError(`Option --${flag.name} needs a value (${flag.valueName ?? "value"})`, spec.name);
@@ -347,7 +429,7 @@ export function booleanFlag(args: ParsedArgs, key: string): boolean {
 
 function flagLabel(flag: FlagSpec): string {
   if (flag.type === "boolean") return flag.default === true ? `--no-${flag.name}` : `--${flag.name}`;
-  return `--${flag.name} <${flag.valueName ?? "value"}>`;
+  return flag.optionalValue ? `--${flag.name} [${flag.valueName ?? "value"}]` : `--${flag.name} <${flag.valueName ?? "value"}>`;
 }
 
 function flagHelp(flag: FlagSpec): string {

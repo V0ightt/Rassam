@@ -3,10 +3,29 @@
 // `.rassam/blueprint.json` contract from GitHub (through /api/blueprint) or a
 // local folder (File System Access API), holds the working draft with undo
 // history, re-evaluates it on every edit and persists drafts per session.
+//
+// People change the contract by saying what they want: an instruction becomes
+// typed edits (deterministic parser first, a model when one is configured),
+// the edits become a previewable proposal, and applying it is one undo step.
+// The session can also follow its source: new commits on GitHub, or a local
+// folder that changed on disk.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { createWorkspace, type Workspace } from "@/blueprint/workspace";
+import { diffArchitecture, type ArchitectureDiff } from "@/blueprint/arch-diff";
+import {
+  applyBlueprintEdits,
+  blueprintEditSchema,
+  BlueprintEditError,
+  summarizeBlueprintDelta,
+  type AppliedEdit,
+  type BlueprintDelta,
+  type BlueprintEdit,
+  type BlueprintEditInput,
+} from "@/blueprint/edits";
+import { parseIntent, suggestIntents } from "@/blueprint/intent";
+import { parseSystemStatus, type SystemStatus } from "@/blueprint/status";
+import { createWorkspace, type Workspace, type WorkspaceGraphView } from "@/blueprint/workspace";
 import {
   emptyBlueprint,
   parseBlueprint,
@@ -20,6 +39,7 @@ import type { CheckReport, FileGraph, ReachReport } from "@/blueprint/types";
 import { stampVerification } from "@/blueprint/verify";
 import { analyzeLocalSnapshotOffThread } from "@/lib/blueprint-client/analysis";
 import { describeBlueprintApiError, fetchGitHubBlueprint } from "@/lib/blueprint-client/api";
+import { fetchCommits, type CommitSummary } from "@/lib/blueprint-client/commits-api";
 import {
   deleteDraft,
   githubSessionKey,
@@ -28,6 +48,7 @@ import {
   saveDraft,
   type BlueprintDraftRecord,
 } from "@/lib/blueprint-client/drafts";
+import { requestBlueprintEdit } from "@/lib/blueprint-client/edit-api";
 import { parseLayout, sanitizeLayout, serializeLayout, type BlueprintLayout } from "@/lib/blueprint-client/layout";
 import {
   LocalFolderError,
@@ -41,10 +62,61 @@ import {
   writeLayoutFile,
   type LocalDirectoryHandle,
 } from "@/lib/blueprint-client/local-folder";
+import { loadModelSettings } from "@/lib/model-settings";
 
 export type BlueprintSource =
   | { kind: "github"; owner: string; repo: string; commitSha: string }
   | { kind: "local"; name: string };
+
+/** A change that has been worked out but not applied: what it would do, and what the check says about the result. */
+export interface BlueprintProposal {
+  id: string;
+  instruction: string;
+  source: "parser" | "model" | "manual";
+  model?: string;
+  edits: BlueprintEdit[];
+  /** From the dry run. */
+  applied: AppliedEdit[];
+  interpretation: string;
+  /** The blueprint if applied. */
+  preview: Blueprint;
+  delta: BlueprintDelta;
+  /** Check of the preview. */
+  previewReport: CheckReport | null;
+  /** Preview graph vs current graph. */
+  graphDiff: ArchitectureDiff | null;
+  weakens: boolean;
+  questions?: string[];
+}
+
+export type IntentState =
+  | { status: "idle" }
+  | { status: "thinking"; instruction: string }
+  | { status: "proposed"; proposal: BlueprintProposal }
+  | { status: "ambiguous"; instruction: string; message: string; options: Array<{ label: string; edits: BlueprintEdit[] }> }
+  | { status: "unknown"; instruction: string; message: string; examples: string[] }
+  | { status: "error"; instruction: string; message: string };
+
+export interface LiveState {
+  watching: boolean;
+  checking: boolean;
+  /** Commit the view shows (GitHub sources). */
+  current: { sha: string; message?: string; author?: string; date?: string } | null;
+  /** Newest commit seen on the branch. */
+  latest: { sha: string; message?: string; author?: string; date?: string } | null;
+  /** `latest` differs from `current`. */
+  behind: boolean;
+  /** What the last sync changed. Local folders have no commits: the shas are the ISO times of the two scans. */
+  lastChange: { fromSha: string; toSha: string; diff: ArchitectureDiff; at: string } | null;
+  /** Newest first, at most 30, this session. */
+  history: Array<{ sha: string; message?: string; date?: string; summary: string }>;
+}
+
+export interface BlueprintReceipt {
+  id: string;
+  label: string;
+  at: string;
+}
 
 export interface BlueprintSessionState {
   status: "idle" | "loading" | "ready" | "error";
@@ -70,10 +142,23 @@ export interface BlueprintSessionState {
   canSaveToDisk: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Where "tell Rassam what to change" stands. */
+  intent: IntentState;
+  /** Up to 6 instructions that make sense for this blueprint right now. */
+  suggestions: string[];
+  live: LiveState;
+  /**
+   * What is running, from `.rassam/status.json` (written by the repository's CI).
+   * Named `systemStatus` because `status` is the load state of the session.
+   */
+  systemStatus: SystemStatus | null;
+  /** The last 10 applied changes, newest first. */
+  receipts: BlueprintReceipt[];
 }
 
 export interface BlueprintActions {
-  loadFromGitHub(input: { owner: string; repo: string; commitSha: string; sourceGrant: string }): Promise<void>;
+  /** `ref` (a branch name) is optional: it is the branch watched for new commits; the default branch when omitted. */
+  loadFromGitHub(input: { owner: string; repo: string; commitSha: string; sourceGrant: string; ref?: string }): Promise<void>;
   /** Picker, then read, then load. Call from a user gesture. */
   openLocalFolder(): Promise<void>;
   /** Reopen the last folder from its persisted handle. Resolves false when there is none or access is refused. */
@@ -99,10 +184,44 @@ export interface BlueprintActions {
   /** Back to the saved file (or the initial derived/empty draft). */
   discardChanges(): void;
   close(): void;
+  /**
+   * Turn an instruction into a proposal. The parser answers instantly in the
+   * browser; when it does not understand and a model is selected in Settings,
+   * /api/blueprint/edit is asked. Aborts a previous in-flight request.
+   */
+  proposeIntent(instruction: string, options?: { selection?: string[] }): Promise<void>;
+  /** Manual UI actions go through the same preview pipeline (source "manual"). */
+  proposeEdits(edits: BlueprintEditInput[], label: string): void;
+  /** Pick one reading of an ambiguous instruction. */
+  chooseIntentOption(index: number): void;
+  /** Commit the proposal as one undo step, add a receipt, return to idle. */
+  applyProposal(): void;
+  discardProposal(): void;
+  /** For trivial reversible manual edits: no preview, one undo step, one receipt. */
+  applyEditsNow(edits: BlueprintEditInput[], label: string): void;
+  /**
+   * GitHub sources: poll for new commits every 45 s while the tab is visible.
+   * Local folders: re-scan when the window regains focus.
+   */
+  setWatching(on: boolean): void;
+  /** Reload at the latest commit keeping unsaved work. Needs `configureLive({ getSourceGrant })`. */
+  syncToLatest(): Promise<void>;
+  configureLive(options: { getSourceGrant?: (sha: string) => Promise<string | null> }): void;
 }
 
 const HISTORY_LIMIT = 50;
 const PERSIST_DEBOUNCE_MS = 400;
+const POLL_INTERVAL_MS = 45_000;
+const POLL_MAX_INTERVAL_MS = 10 * 60_000;
+const FOCUS_DEBOUNCE_MS = 600;
+const RECEIPT_LIMIT = 10;
+const LIVE_HISTORY_LIMIT = 30;
+const SUGGESTION_LIMIT = 6;
+
+const IDLE_INTENT: IntentState = { status: "idle" };
+
+/** How a freshly read snapshot meets the session: start over, keep the draft, or follow the source quietly. */
+type LoadMode = "replace" | "keep" | "follow";
 
 type Origin = NonNullable<BlueprintSessionState["origin"]>;
 
@@ -126,6 +245,19 @@ interface CoreState {
   past: Blueprint[];
   future: Blueprint[];
   writable: boolean;
+  intent: IntentState;
+  receipts: BlueprintReceipt[];
+  systemStatus: SystemStatus | null;
+  watching: boolean;
+  polling: boolean;
+  syncing: boolean;
+  latest: CommitSummary | null;
+  /** Recent commits from the last poll (messages and dates for `live`). */
+  commits: CommitSummary[];
+  lastChange: LiveState["lastChange"];
+  liveHistory: LiveState["history"];
+  /** Local folders: ISO time of the scan the view shows. */
+  scannedAt: string | null;
 }
 
 const INITIAL: CoreState = {
@@ -146,6 +278,17 @@ const INITIAL: CoreState = {
   past: [],
   future: [],
   writable: false,
+  intent: IDLE_INTENT,
+  receipts: [],
+  systemStatus: null,
+  watching: false,
+  polling: false,
+  syncing: false,
+  latest: null,
+  commits: [],
+  lastChange: null,
+  liveHistory: [],
+  scannedAt: null,
 };
 
 interface LoadedSnapshot {
@@ -158,6 +301,7 @@ interface LoadedSnapshot {
   draft: Blueprint | null;
   layout: BlueprintLayout | null;
   writable: boolean;
+  systemStatus: SystemStatus | null;
 }
 
 function cloneBlueprint(blueprint: Blueprint): Blueprint {
@@ -196,13 +340,58 @@ function emptyGraph(): FileGraph {
   return { files: [], facts: new Map(), edges: [], externals: [], unresolved: [] };
 }
 
+/** The component graph of a blueprint over the observed files, or null when there is nothing to draw. */
+function graphViewOf(state: Pick<CoreState, "blueprint" | "graph" | "reach">, blueprint: Blueprint | null = state.blueprint): WorkspaceGraphView | null {
+  if (!state.graph || !blueprint) return null;
+  try {
+    return createWorkspace([], blueprint, { fileGraph: state.graph, ...(state.reach ? { reach: state.reach } : {}) }).graphView();
+  } catch {
+    return null;
+  }
+}
+
+function parseStatusText(text: string | null): SystemStatus | null {
+  if (text === null) return null;
+  const parsed = parseSystemStatus(text);
+  return parsed.ok && parsed.status ? parsed.status : null;
+}
+
+/** The draft is exactly what was loaded: following the source may replace it. */
+function isPristine(state: CoreState): boolean {
+  if (!state.blueprint || !state.baseline) return false;
+  return state.blueprint === state.baseline || serializeBlueprint(state.blueprint) === serializeBlueprint(state.baseline);
+}
+
+function sameSha(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function describeEditError(error: unknown): string {
+  if (error instanceof BlueprintEditError) {
+    return error.suggestions?.length ? `${error.message} Did you mean ${error.suggestions.join(", ")}?` : error.message;
+  }
+  return error instanceof Error && error.message ? error.message : "The change could not be applied.";
+}
+
+function clampNumber(value: unknown, minimum: number, maximum: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : undefined;
+}
+
 export function useBlueprint(): BlueprintSessionState & BlueprintActions {
   const [core, setCore] = useState<CoreState>(INITIAL);
   const coreRef = useRef<CoreState>(INITIAL);
   const mountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
   const handleRef = useRef<LocalDirectoryHandle | null>(null);
-  const githubInputRef = useRef<{ owner: string; repo: string; commitSha: string; sourceGrant: string } | null>(null);
+  const githubInputRef = useRef<{ owner: string; repo: string; commitSha: string; sourceGrant: string; ref?: string } | null>(null);
+  const intentAbortRef = useRef<AbortController | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  /** The blueprint a shown proposal was computed against. */
+  const proposalBaseRef = useRef<Blueprint | null>(null);
+  const liveConfigRef = useRef<{ getSourceGrant?: (sha: string) => Promise<string | null> }>({});
+  /** Latest render's derived values, for advisory use in actions (model context). */
+  const derivedRef = useRef<{ workspace: Workspace | null; report: CheckReport | null }>({ workspace: null, report: null });
+  const idCounterRef = useRef(0);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPersistRef = useRef<(() => void) | null>(null);
 
@@ -227,14 +416,25 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
     run?.();
   }, []);
 
-  const beginLoad = useCallback((phase: string, keepSession: boolean): AbortController => {
+  const beginLoad = useCallback((phase: string, mode: LoadMode): AbortController => {
     abortRef.current?.abort();
     flushPersist();
     const controller = new AbortController();
     abortRef.current = controller;
-    commit((previous) => (keepSession
-      ? { ...previous, status: "loading", progress: { phase }, error: null }
-      : { ...INITIAL, status: "loading", progress: { phase } }));
+    if (mode === "replace") {
+      intentAbortRef.current?.abort();
+      intentAbortRef.current = null;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      proposalBaseRef.current = null;
+    }
+    commit((previous) => (mode === "follow"
+      // Following the source happens behind the view: it stays usable.
+      ? { ...previous, error: null }
+      : mode === "keep"
+        ? { ...previous, status: "loading", progress: { phase }, error: null }
+        // A watched session stays watched when another source is opened.
+        : { ...INITIAL, watching: previous.watching, status: "loading", progress: { phase } }));
     return controller;
   }, [commit, flushPersist]);
 
@@ -246,16 +446,17 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
   const applySnapshot = useCallback(async (
     snapshot: LoadedSnapshot,
     controller: AbortController,
-    keepDraft: boolean,
+    mode: LoadMode,
   ): Promise<void> => {
     const savedText = snapshot.blueprintText;
     const savedCanonical = canonicalText(savedText);
     const baseline = snapshot.blueprint ?? snapshot.draft;
     const baselineOrigin: Origin | null = snapshot.blueprint ? "repository" : snapshot.draft ? "derived" : null;
     const previous = coreRef.current;
+    const scannedAt = snapshot.source.kind === "local" ? new Date().toISOString() : null;
 
-    if (keepDraft && previous.blueprint) {
-      commit({
+    if (mode !== "replace" && previous.blueprint) {
+      const kept: CoreState = {
         ...previous,
         status: "ready",
         progress: null,
@@ -269,7 +470,22 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
         baseline,
         baselineOrigin,
         writable: snapshot.writable,
-      });
+        systemStatus: snapshot.systemStatus,
+        scannedAt,
+      };
+      // Following with no unsaved work shows the source's own contract; unsaved work is never replaced.
+      if (mode === "follow" && baseline && isPristine(previous)) {
+        commit({
+          ...kept,
+          blueprint: baseline,
+          origin: snapshot.blueprint ? "repository" : previous.baselineOrigin === "derived" ? previous.origin : baselineOrigin,
+          layout: { ...(snapshot.layout ?? {}), ...previous.layout },
+          past: [],
+          future: [],
+        });
+        return;
+      }
+      commit(kept);
       return;
     }
 
@@ -308,6 +524,17 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
       past: [],
       future: [],
       writable: snapshot.writable,
+      intent: IDLE_INTENT,
+      receipts: [],
+      systemStatus: snapshot.systemStatus,
+      watching: coreRef.current.watching,
+      polling: false,
+      syncing: false,
+      latest: null,
+      commits: [],
+      lastChange: null,
+      liveHistory: [],
+      scannedAt,
     });
   }, [commit, isCurrent]);
 
@@ -321,16 +548,17 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
   }, [commit]);
 
   const runGitHubLoad = useCallback(async (
-    input: { owner: string; repo: string; commitSha: string; sourceGrant: string },
-    keepDraft: boolean,
-  ): Promise<void> => {
-    const controller = beginLoad("Fetching repository", keepDraft);
-    githubInputRef.current = { ...input };
+    input: { owner: string; repo: string; commitSha: string; sourceGrant: string; ref?: string },
+    mode: LoadMode,
+  ): Promise<boolean> => {
+    const controller = beginLoad("Fetching repository", mode);
+    // A failed follow must leave the session pointing at the commit it still shows.
+    if (mode !== "follow") githubInputRef.current = { ...input };
     handleRef.current = null;
     try {
       const response = await fetchGitHubBlueprint(input, controller.signal);
-      if (!isCurrent(controller)) return;
-      patch({ progress: { phase: "Evaluating blueprint" } });
+      if (!isCurrent(controller)) return false;
+      if (mode !== "follow") patch({ progress: { phase: "Evaluating blueprint" } });
       // The response crossed a trust boundary; validate blueprints again.
       const repository = response.blueprint ? parseBlueprint(response.blueprint) : null;
       const draft = response.draft ? parseBlueprint(response.draft) : null;
@@ -344,21 +572,26 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
         draft: draft?.ok ? draft.blueprint : null,
         layout: response.layout,
         writable: false,
-      }, controller, keepDraft);
+        systemStatus: response.status,
+      }, controller, mode);
+      if (!isCurrent(controller)) return false;
+      if (mode === "follow") githubInputRef.current = { ...input };
+      return true;
     } catch (error) {
-      failLoad(controller, error, "The blueprint could not be loaded from GitHub.", keepDraft);
+      failLoad(controller, error, "The blueprint could not be loaded from GitHub.", mode !== "replace");
+      return false;
     }
   }, [applySnapshot, beginLoad, failLoad, isCurrent, patch]);
 
-  const runLocalLoad = useCallback(async (handle: LocalDirectoryHandle, keepDraft: boolean): Promise<boolean> => {
-    const controller = beginLoad("Scanning folder", keepDraft);
+  const runLocalLoad = useCallback(async (handle: LocalDirectoryHandle, mode: LoadMode): Promise<boolean> => {
+    const controller = beginLoad("Scanning folder", mode);
     handleRef.current = handle;
     githubInputRef.current = null;
     try {
       const snapshot = await readLocalSnapshot(handle, {
         signal: controller.signal,
         onProgress: (progress) => {
-          if (!isCurrent(controller)) return;
+          if (!isCurrent(controller) || mode === "follow") return;
           patch({
             progress: {
               phase: progress.phase === "scanning" ? "Scanning folder" : "Reading files",
@@ -369,7 +602,7 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
         },
       });
       if (!isCurrent(controller)) return false;
-      patch({ progress: { phase: "Analyzing imports" } });
+      if (mode !== "follow") patch({ progress: { phase: "Analyzing imports" } });
       const analysis = await analyzeLocalSnapshotOffThread(
         { name: snapshot.name, files: snapshot.files, blueprintText: snapshot.blueprintText },
         controller.signal,
@@ -387,18 +620,21 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
         draft: analysis.draft,
         layout: parseLayout(snapshot.layoutText),
         writable: writeState !== "denied",
-      }, controller, keepDraft);
+        systemStatus: parseStatusText(snapshot.statusText ?? null),
+      }, controller, mode);
       if (!isCurrent(controller)) return false;
       void rememberLocalFolder(handle);
       return true;
     } catch (error) {
-      failLoad(controller, error, "The folder could not be read.", keepDraft);
+      failLoad(controller, error, "The folder could not be read.", mode !== "replace");
       return false;
     }
   }, [applySnapshot, beginLoad, failLoad, isCurrent, patch]);
 
   const loadFromGitHub = useCallback<BlueprintActions["loadFromGitHub"]>(
-    (input) => runGitHubLoad(input, false),
+    async (input) => {
+      await runGitHubLoad(input, "replace");
+    },
     [runGitHubLoad],
   );
 
@@ -415,14 +651,14 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
       patch({ error: picked.reason });
       return;
     }
-    await runLocalLoad(picked.handle, false);
+    await runLocalLoad(picked.handle, "replace");
   }, [patch, runLocalLoad]);
 
   const reopenLocalFolder = useCallback<BlueprintActions["reopenLocalFolder"]>(async () => {
     const handle = await recallLocalFolder();
     if (!handle || !mountedRef.current) return false;
     if (!(await verifyPermission(handle, "read", { request: true }))) return false;
-    return runLocalLoad(handle, false);
+    return runLocalLoad(handle, "replace");
   }, [runLocalLoad]);
 
   const rescan = useCallback<BlueprintActions["rescan"]>(async () => {
@@ -438,7 +674,7 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
         patch({ error: "Rassam no longer has permission to read this folder. Open it again." });
         return;
       }
-      await runLocalLoad(handle, true);
+      await runLocalLoad(handle, "keep");
       return;
     }
     const input = githubInputRef.current;
@@ -446,7 +682,7 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
       patch({ error: "The repository session has ended. Reload the project to rescan." });
       return;
     }
-    await runGitHubLoad(input, true);
+    await runGitHubLoad(input, "keep");
   }, [patch, runGitHubLoad, runLocalLoad]);
 
   /** Replace the working draft, recording the previous one for undo. */
@@ -666,11 +902,384 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
   const close = useCallback<BlueprintActions["close"]>(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    intentAbortRef.current?.abort();
+    intentAbortRef.current = null;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
+    proposalBaseRef.current = null;
     flushPersist();
     handleRef.current = null;
     githubInputRef.current = null;
     commit(INITIAL);
   }, [commit, flushPersist]);
+
+  // ── Tell Rassam what to change ──────────────────────────────
+
+  const nextId = useCallback((prefix: string): string => {
+    idCounterRef.current += 1;
+    return `${prefix}-${Date.now().toString(36)}-${idCounterRef.current}`;
+  }, []);
+
+  const setIntent = useCallback((intent: IntentState) => {
+    commit((previous) => ({ ...previous, intent }));
+  }, [commit]);
+
+  const addReceipt = useCallback((receipts: BlueprintReceipt[], label: string): BlueprintReceipt[] => (
+    [{ id: nextId("receipt"), label, at: new Date().toISOString() }, ...receipts].slice(0, RECEIPT_LIMIT)
+  ), [nextId]);
+
+  /** Dry-run edits against the working draft and show the result as a proposal. Nothing is applied. */
+  const presentProposal = useCallback((input: {
+    instruction: string;
+    source: BlueprintProposal["source"];
+    model?: string;
+    edits: readonly BlueprintEditInput[];
+    interpretation?: string;
+    questions?: string[];
+  }) => {
+    const state = coreRef.current;
+    const current = state.blueprint;
+    if (!current) {
+      setIntent({ status: "error", instruction: input.instruction, message: "There is no blueprint to change yet. Load a repository or start an empty blueprint." });
+      return;
+    }
+    let result: ReturnType<typeof applyBlueprintEdits>;
+    try {
+      result = applyBlueprintEdits(current, input.edits, {
+        provenance: input.source === "model" ? { source: "agent", ...(input.model ? { by: input.model } : {}) } : { source: "human" },
+        now: new Date().toISOString(),
+      });
+    } catch (error) {
+      setIntent({ status: "error", instruction: input.instruction, message: describeEditError(error) });
+      return;
+    }
+    const { blueprint: preview, applied } = result;
+    let previewReport: CheckReport | null = null;
+    let graphDiff: ArchitectureDiff | null = null;
+    if (state.graph) {
+      try {
+        const workspace = createWorkspace([], preview, { fileGraph: state.graph, ...(state.reach ? { reach: state.reach } : {}) });
+        previewReport = workspace.check();
+        const before = graphViewOf(state);
+        graphDiff = before ? diffArchitecture(before, workspace.graphView()) : null;
+      } catch {
+        previewReport = null;
+        graphDiff = null;
+      }
+    }
+    const interpretation = input.interpretation?.trim() || applied.map((edit) => edit.summary).join(" ") || "No changes.";
+    proposalBaseRef.current = current;
+    setIntent({
+      status: "proposed",
+      proposal: {
+        id: nextId("proposal"),
+        instruction: input.instruction,
+        source: input.source,
+        ...(input.model ? { model: input.model } : {}),
+        edits: input.edits.map((edit) => blueprintEditSchema.parse(edit)),
+        applied,
+        interpretation,
+        preview,
+        delta: summarizeBlueprintDelta(current, preview),
+        previewReport,
+        graphDiff,
+        weakens: applied.some((edit) => edit.weakens),
+        ...(input.questions?.length ? { questions: input.questions } : {}),
+      },
+    });
+  }, [nextId, setIntent]);
+
+  const proposeIntent = useCallback<BlueprintActions["proposeIntent"]>(async (instruction, options) => {
+    intentAbortRef.current?.abort();
+    intentAbortRef.current = null;
+    const text = instruction.trim();
+    const blueprint = coreRef.current.blueprint;
+    if (!blueprint) {
+      setIntent({ status: "error", instruction: text, message: "There is no blueprint to change yet. Load a repository or start an empty blueprint." });
+      return;
+    }
+    const parsed = parseIntent(text, blueprint);
+    if (parsed.status === "ok") {
+      presentProposal({ instruction: text, source: "parser", edits: parsed.edits, interpretation: parsed.interpretation });
+      return;
+    }
+    if (parsed.status === "ambiguous") {
+      setIntent({ status: "ambiguous", instruction: text, message: parsed.message, options: parsed.options });
+      return;
+    }
+
+    const settings = loadModelSettings();
+    if (!text || !settings.selectedProvider || !settings.selectedModel) {
+      setIntent({ status: "unknown", instruction: text, message: parsed.message, examples: parsed.examples });
+      return;
+    }
+
+    const controller = new AbortController();
+    intentAbortRef.current = controller;
+    setIntent({ status: "thinking", instruction: text });
+    const derived = derivedRef.current;
+    const maxTokens = clampNumber(settings.maxOutputTokens, 64, 8_192);
+    const temperature = clampNumber(settings.temperature, 0, 1);
+    try {
+      const result = await requestBlueprintEdit({
+        instruction: text,
+        blueprint,
+        context: {
+          edges: (graphViewOf(coreRef.current)?.edges ?? []).map((edge) => ({ from: edge.from, to: edge.to, status: edge.status })),
+          findings: (derived.report?.findings ?? []).map((finding) => ({ kind: finding.kind, title: finding.title })),
+          ...(options?.selection?.length ? { selection: options.selection } : {}),
+        },
+        modelSettings: {
+          providerId: settings.selectedProvider,
+          model: settings.selectedModel,
+          ...(maxTokens !== undefined ? { maxTokens: Math.floor(maxTokens) } : {}),
+          ...(temperature !== undefined ? { temperature } : {}),
+        },
+      }, controller.signal);
+      if (intentAbortRef.current !== controller || controller.signal.aborted) return;
+      intentAbortRef.current = null;
+      if (result.kind === "ambiguous") {
+        setIntent({ status: "ambiguous", instruction: text, message: result.message, options: result.options });
+      } else if (result.kind === "unknown") {
+        setIntent({
+          status: "unknown",
+          instruction: text,
+          message: result.modelUnavailable ? `${result.message} (The selected model could not be used: ${result.modelUnavailable}.)` : result.message,
+          examples: result.examples.length ? result.examples : parsed.examples,
+        });
+      } else if (!result.edits.length) {
+        // The model asked back instead of proposing: show its question with examples to copy.
+        setIntent({
+          status: "unknown",
+          instruction: text,
+          message: result.questions?.join(" ") || result.explanation || "No change could be worked out from that. Try one of the examples.",
+          examples: parsed.examples,
+        });
+      } else {
+        presentProposal({
+          instruction: text,
+          source: result.source,
+          ...(result.model ? { model: result.model } : {}),
+          edits: result.edits,
+          interpretation: result.interpretation,
+          ...(result.questions ? { questions: result.questions } : {}),
+        });
+      }
+    } catch (error) {
+      if (intentAbortRef.current !== controller || controller.signal.aborted || isAbort(error)) return;
+      intentAbortRef.current = null;
+      setIntent({ status: "error", instruction: text, message: describeBlueprintApiError(error) });
+    }
+  }, [presentProposal, setIntent]);
+
+  const proposeEdits = useCallback<BlueprintActions["proposeEdits"]>((edits, label) => {
+    intentAbortRef.current?.abort();
+    intentAbortRef.current = null;
+    presentProposal({ instruction: label, source: "manual", edits, interpretation: label });
+  }, [presentProposal]);
+
+  const chooseIntentOption = useCallback<BlueprintActions["chooseIntentOption"]>((index) => {
+    const intent = coreRef.current.intent;
+    if (intent.status !== "ambiguous") return;
+    const option = intent.options[index];
+    if (!option) return;
+    presentProposal({ instruction: intent.instruction, source: "parser", edits: option.edits, interpretation: option.label });
+  }, [presentProposal]);
+
+  const applyProposal = useCallback<BlueprintActions["applyProposal"]>(() => {
+    const state = coreRef.current;
+    if (state.intent.status !== "proposed" || !state.blueprint) return;
+    const proposal = state.intent.proposal;
+    let next = proposal.preview;
+    if (proposalBaseRef.current !== state.blueprint) {
+      // The draft moved on (undo, another edit) since the preview: apply to what is there now.
+      try {
+        next = applyBlueprintEdits(state.blueprint, proposal.edits, {
+          provenance: proposal.source === "model" ? { source: "agent", ...(proposal.model ? { by: proposal.model } : {}) } : { source: "human" },
+          now: new Date().toISOString(),
+        }).blueprint;
+      } catch (error) {
+        setIntent({ status: "error", instruction: proposal.instruction, message: `The blueprint changed since this preview. ${describeEditError(error)}` });
+        return;
+      }
+    }
+    proposalBaseRef.current = null;
+    if (serializeBlueprint(next) === serializeBlueprint(state.blueprint)) {
+      commit({ ...state, intent: IDLE_INTENT, error: null });
+      return;
+    }
+    pushBlueprint(next, { intent: IDLE_INTENT, receipts: addReceipt(state.receipts, proposal.interpretation) });
+  }, [addReceipt, commit, pushBlueprint, setIntent]);
+
+  const discardProposal = useCallback<BlueprintActions["discardProposal"]>(() => {
+    intentAbortRef.current?.abort();
+    intentAbortRef.current = null;
+    proposalBaseRef.current = null;
+    setIntent(IDLE_INTENT);
+  }, [setIntent]);
+
+  const applyEditsNow = useCallback<BlueprintActions["applyEditsNow"]>((edits, label) => {
+    const state = coreRef.current;
+    if (!state.blueprint) {
+      patch({ error: "There is no blueprint to edit yet. Load a repository or start an empty blueprint." });
+      return;
+    }
+    let result: ReturnType<typeof applyBlueprintEdits>;
+    try {
+      result = applyBlueprintEdits(state.blueprint, edits, { provenance: { source: "human" }, now: new Date().toISOString() });
+    } catch (error) {
+      patch({ error: `Change rejected: ${describeEditError(error)}` });
+      return;
+    }
+    if (serializeBlueprint(result.blueprint) === serializeBlueprint(state.blueprint)) {
+      if (state.error) patch({ error: null });
+      return;
+    }
+    const summary = label.trim() || result.applied.map((edit) => edit.summary).join(" ");
+    pushBlueprint(result.blueprint, { receipts: addReceipt(state.receipts, summary) });
+  }, [addReceipt, patch, pushBlueprint]);
+
+  // ── Following the source ────────────────────────────────────
+
+  const recordChange = useCallback((
+    fromSha: string,
+    toSha: string,
+    before: WorkspaceGraphView | null,
+    after: WorkspaceGraphView,
+    commitInfo: { message?: string; date?: string },
+    onlyWhenChanged: boolean,
+  ) => {
+    const diff = diffArchitecture(before, after);
+    if (onlyWhenChanged && !diff.changed) return;
+    const at = new Date().toISOString();
+    commit((previous) => ({
+      ...previous,
+      lastChange: { fromSha, toSha, diff, at },
+      liveHistory: [
+        {
+          sha: toSha,
+          ...(commitInfo.message ? { message: commitInfo.message } : {}),
+          ...(commitInfo.date ? { date: commitInfo.date } : {}),
+          summary: diff.summary,
+        },
+        ...previous.liveHistory,
+      ].slice(0, LIVE_HISTORY_LIMIT),
+    }));
+  }, [commit]);
+
+  /** Ask for the newest commit. Resolves false when the check failed (the caller backs off). */
+  const checkLatest = useCallback(async (): Promise<boolean> => {
+    const source = coreRef.current.source;
+    if (source?.kind !== "github") return true;
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+    commit((previous) => ({ ...previous, polling: true }));
+    const ref = githubInputRef.current?.ref;
+    try {
+      const result = await fetchCommits({ owner: source.owner, repo: source.repo, ...(ref ? { ref } : {}) }, controller.signal);
+      if (pollAbortRef.current !== controller) return true;
+      pollAbortRef.current = null;
+      const now = coreRef.current.source;
+      if (now?.kind !== "github" || now.owner !== source.owner || now.repo !== source.repo) {
+        commit((previous) => ({ ...previous, polling: false }));
+        return true;
+      }
+      commit((previous) => ({ ...previous, polling: false, latest: result.head, commits: result.recent }));
+      return true;
+    } catch (error) {
+      if (pollAbortRef.current !== controller) return true;
+      pollAbortRef.current = null;
+      commit((previous) => ({ ...previous, polling: false }));
+      return controller.signal.aborted || isAbort(error);
+    }
+  }, [commit]);
+
+  /** Local folders: re-read the folder behind the view and report what changed in the graph. */
+  const followLocal = useCallback(async (): Promise<void> => {
+    const state = coreRef.current;
+    const handle = handleRef.current;
+    if (state.source?.kind !== "local" || !handle || state.status !== "ready" || state.syncing) return;
+    // No user gesture here: never prompt, just skip when access is gone.
+    if (!(await verifyPermission(handle, "read", { request: false }))) return;
+    if (coreRef.current.source !== state.source || coreRef.current.status !== "ready") return;
+    const before = graphViewOf(coreRef.current);
+    const from = coreRef.current.scannedAt ?? "";
+    commit((previous) => ({ ...previous, syncing: true }));
+    let loaded = false;
+    try {
+      loaded = await runLocalLoad(handle, "follow");
+    } finally {
+      commit((previous) => ({ ...previous, syncing: false }));
+    }
+    if (!loaded) return;
+    const after = graphViewOf(coreRef.current);
+    if (after) recordChange(from, coreRef.current.scannedAt ?? new Date().toISOString(), before, after, {}, true);
+  }, [commit, recordChange, runLocalLoad]);
+
+  const setWatching = useCallback<BlueprintActions["setWatching"]>((on) => {
+    if (coreRef.current.watching === on) return;
+    if (!on) {
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+    }
+    commit((previous) => ({ ...previous, watching: on, ...(on ? {} : { polling: false }) }));
+  }, [commit]);
+
+  const configureLive = useCallback<BlueprintActions["configureLive"]>((options) => {
+    liveConfigRef.current = { ...(options.getSourceGrant ? { getSourceGrant: options.getSourceGrant } : {}) };
+  }, []);
+
+  const syncToLatest = useCallback<BlueprintActions["syncToLatest"]>(async () => {
+    const source = coreRef.current.source;
+    if (!source || coreRef.current.syncing || coreRef.current.status !== "ready") return;
+    if (source.kind === "local") {
+      await followLocal();
+      return;
+    }
+    if (!coreRef.current.latest) await checkLatest();
+    if (coreRef.current.source !== source) return;
+    const latest = coreRef.current.latest;
+    if (!latest) {
+      patch({ error: "Could not check for new commits. Try again shortly." });
+      return;
+    }
+    if (sameSha(latest.sha, source.commitSha)) return;
+    const getSourceGrant = liveConfigRef.current.getSourceGrant;
+    if (!getSourceGrant) {
+      patch({ error: "This view cannot move to the new commit by itself. Reload the project to see the latest commit." });
+      return;
+    }
+    commit((previous) => ({ ...previous, syncing: true }));
+    try {
+      let grant: string | null;
+      try {
+        grant = await getSourceGrant(latest.sha);
+      } catch {
+        grant = null;
+      }
+      if (coreRef.current.source !== source) return;
+      if (!grant) {
+        patch({ error: "Access to the latest commit could not be obtained. Refresh the project and try again." });
+        return;
+      }
+      const before = graphViewOf(coreRef.current);
+      const ref = githubInputRef.current?.ref;
+      const loaded = await runGitHubLoad({
+        owner: source.owner,
+        repo: source.repo,
+        commitSha: latest.sha,
+        sourceGrant: grant,
+        ...(ref ? { ref } : {}),
+      }, "follow");
+      if (!loaded) return;
+      const now = coreRef.current.source;
+      const after = graphViewOf(coreRef.current);
+      if (after && now?.kind === "github") recordChange(source.commitSha, now.commitSha, before, after, latest, false);
+    } finally {
+      commit((previous) => ({ ...previous, syncing: false }));
+    }
+  }, [checkLatest, commit, followLocal, patch, recordChange, runGitHubLoad]);
 
   // ── Derived state ───────────────────────────────────────────
 
@@ -696,6 +1305,104 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
 
   const draftText = useMemo(() => (blueprint ? serializeBlueprint(blueprint) : null), [blueprint]);
   const dirty = draftText !== null && draftText !== savedCanonical;
+
+  useEffect(() => {
+    derivedRef.current = { workspace, report };
+  }, [workspace, report]);
+
+  const suggestions = useMemo<string[]>(() => {
+    if (!blueprint) return [];
+    try {
+      return suggestIntents(blueprint, workspace?.graphView()).slice(0, SUGGESTION_LIMIT);
+    } catch {
+      return [];
+    }
+  }, [blueprint, workspace]);
+
+  const { watching, polling, syncing, latest, commits, lastChange, liveHistory } = core;
+  const liveSource = core.source;
+  const live = useMemo<LiveState>(() => {
+    const describe = (sha: string): LiveState["current"] => {
+      const known = commits.find((item) => sameSha(item.sha, sha)) ?? (latest && sameSha(latest.sha, sha) ? latest : null);
+      return {
+        sha,
+        ...(known?.message ? { message: known.message } : {}),
+        ...(known?.author ? { author: known.author } : {}),
+        ...(known?.date ? { date: known.date } : {}),
+      };
+    };
+    const current = liveSource?.kind === "github" ? describe(liveSource.commitSha) : null;
+    return {
+      watching,
+      checking: polling || syncing,
+      current,
+      latest: liveSource?.kind === "github" ? latest : null,
+      behind: Boolean(current && latest && !sameSha(latest.sha, current.sha)),
+      lastChange,
+      history: liveHistory,
+    };
+  }, [watching, polling, syncing, latest, commits, lastChange, liveHistory, liveSource]);
+
+  // ── Watching (poll GitHub, or re-scan a local folder on focus) ──
+
+  const watchKind = core.source?.kind ?? null;
+  const watchKey = core.source ? sessionKeyOf(core.source) : null;
+  useEffect(() => {
+    if (!watching || !watchKey || typeof window === "undefined" || typeof document === "undefined") return;
+
+    if (watchKind === "github") {
+      let stopped = false;
+      let running = false;
+      let failures = 0;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const tick = async (): Promise<void> => {
+        // The store is read directly: turning watching off takes effect before the next render.
+        if (stopped || running || document.hidden || !coreRef.current.watching) return;
+        running = true;
+        const ok = await checkLatest();
+        running = false;
+        if (stopped) return;
+        failures = ok ? 0 : Math.min(failures + 1, 8);
+        if (document.hidden) return;
+        timer = setTimeout(() => {
+          timer = null;
+          void tick();
+        }, Math.min(POLL_INTERVAL_MS * 2 ** failures, POLL_MAX_INTERVAL_MS));
+      };
+      const onVisibility = () => {
+        if (document.hidden) {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+          }
+        } else if (timer === null) {
+          void tick();
+        }
+      };
+      document.addEventListener("visibilitychange", onVisibility);
+      void tick();
+      return () => {
+        stopped = true;
+        if (timer !== null) clearTimeout(timer);
+        document.removeEventListener("visibilitychange", onVisibility);
+        pollAbortRef.current?.abort();
+      };
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onFocus = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void followLocal();
+      }, FOCUS_DEBOUNCE_MS);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [watching, watchKind, watchKey, checkLatest, followLocal]);
 
   // ── Draft persistence (debounced, per session) ──────────────
 
@@ -727,6 +1434,8 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
+      intentAbortRef.current?.abort();
+      pollAbortRef.current?.abort();
       if (persistTimerRef.current !== null) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
@@ -753,6 +1462,11 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
     canSaveToDisk: core.source?.kind === "local" && core.writable && core.status !== "idle",
     canUndo: core.past.length > 0,
     canRedo: core.future.length > 0,
+    intent: core.intent,
+    suggestions,
+    live,
+    systemStatus: core.systemStatus,
+    receipts: core.receipts,
     loadFromGitHub,
     openLocalFolder,
     reopenLocalFolder,
@@ -769,5 +1483,14 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
     copyToClipboard,
     discardChanges,
     close,
+    proposeIntent,
+    proposeEdits,
+    chooseIntentOption,
+    applyProposal,
+    discardProposal,
+    applyEditsNow,
+    setWatching,
+    syncToLatest,
+    configureLive,
   };
 }

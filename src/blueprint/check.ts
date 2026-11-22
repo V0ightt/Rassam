@@ -183,6 +183,30 @@ function ruleReferencedComponents(blueprint: Blueprint): Set<string> {
   return referenced;
 }
 
+/** Does a rule select this component directly (by id, tag or "*")? */
+function ruleSelects(blueprint: Blueprint, rule: Blueprint["rules"][number] | undefined, id: string): boolean {
+  if (!rule) return false;
+  const selectors: Selector[] = rule.kind === "forbid" || rule.kind === "allow-only"
+    ? [rule.from, rule.to]
+    : rule.kind === "layers" ? rule.layers
+      : rule.kind === "secret-access" ? [rule.allow]
+        : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
+  return selectors.some((selector) => {
+    const resolved = resolveSelector(selector, blueprint);
+    return resolved.all || resolved.components.has(id);
+  });
+}
+
+/**
+ * True when every base rule that selected `fromId` still exists at head and
+ * selects `toId` there: files moving between the two stay under the same rules.
+ */
+function coveredBySameRules(base: Blueprint, head: Blueprint, fromId: string, toId: string): boolean {
+  return base.rules.every((rule) => (
+    !ruleSelects(base, rule, fromId) || ruleSelects(head, head.rules.find((candidate) => candidate.id === rule.id), toId)
+  ));
+}
+
 /**
  * Files that leave a rule-constrained component because of a contract edit
  * (changed paths or excludes, a higher-priority component, a removed
@@ -199,6 +223,8 @@ function membershipMoves(base: Blueprint, head: Blueprint, files: readonly strin
     if (!from || !constrained.has(from)) continue;
     const to = after.get(path) ?? "(unmapped)";
     if (to === from) continue;
+    // Still under the same rules in its new component: a restructure, not a loosening.
+    if (to !== "(unmapped)" && coveredBySameRules(base, head, from, to)) continue;
     const key = `${from}\u0000${to}`;
     moves.set(key, [...(moves.get(key) ?? []), path]);
   }
@@ -296,24 +322,11 @@ function claimedPaths(base: Blueprint, head: Blueprint, alreadyReported: Set<str
     moves.set(key, [...(moves.get(key) ?? []), probe]);
   }
 
-  const selects = (blueprint: Blueprint, rule: Blueprint["rules"][number] | undefined, id: string): boolean => {
-    if (!rule) return false;
-    const selectors: Selector[] = rule.kind === "forbid" || rule.kind === "allow-only"
-      ? [rule.from, rule.to]
-      : rule.kind === "layers" ? rule.layers
-        : rule.kind === "secret-access" ? [rule.allow]
-          : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
-    return selectors.some((selector) => resolveSelector(selector, blueprint).components.has(id));
-  };
-
   const findings: Violation[] = [];
   for (const [key, probePaths] of moves) {
     const [targetId, ownerId] = key.split("\u0000");
     if (alreadyReported.has(key)) continue;
-    const coveredBySameRules = base.rules.every((rule) => (
-      !selects(base, rule, targetId) || selects(head, head.rules.find((candidate) => candidate.id === rule.id), ownerId)
-    ));
-    if (coveredBySameRules) continue;
+    if (coveredBySameRules(base, head, targetId, ownerId)) continue;
     const owner = headById.get(ownerId);
     const target = baseById.get(targetId);
     const globs = (owner?.paths ?? []).filter((glob) => probePaths.some((probe) => compileGlob(glob).test(probe)));

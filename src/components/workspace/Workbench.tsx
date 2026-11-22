@@ -29,8 +29,6 @@ import {
     Bot,
     FileCheck2,
     GripVertical,
-    Network,
-    ShieldCheck,
     X,
 } from 'lucide-react';
 
@@ -53,8 +51,6 @@ import StorageRecoveryNotice from '@/components/navigation/StorageRecoveryNotice
 import PersistenceConflictNotice from '@/components/navigation/PersistenceConflictNotice';
 import EvidenceInspector, { type GraphElementTarget } from '@/components/evidence/EvidenceInspector';
 import WorkspaceCommandPalette from '@/components/navigation/WorkspaceCommandPalette';
-import BlueprintPanel from '@/components/blueprint/BlueprintPanel';
-import { useBlueprintHost } from '@/components/blueprint/useBlueprintHost';
 
 import { useCanvasHistory } from '@/hooks/useCanvasHistory';
 import { useClipboard } from '@/hooks/useClipboard';
@@ -63,7 +59,6 @@ import { useResizablePane } from '@/hooks/useResizablePane';
 import { useProjects } from '@/hooks/useProjects';
 import { useFileExplorer } from '@/hooks/useFileExplorer';
 import { useEditorTabs } from '@/hooks/useEditorTabs';
-import { useBlueprint } from '@/hooks/useBlueprint';
 import { getCachedFiles as getFilesFromStore } from '@/lib/file-store';
 import { buildAvailableFiles } from '@/lib/chat-request';
 import { layoutGraphInWorker } from '@/lib/layout-client';
@@ -82,10 +77,6 @@ import { EdgeData, NodeCategory, NodeData } from '@/types';
 const EnhancedChatbot = dynamic(() => import('@/components/sidebar/EnhancedChatbot'), {
     ssr: false,
     loading: () => <div className="h-full animate-pulse bg-slate-900" aria-label="Loading Rassam" />,
-});
-const BlueprintCanvas = dynamic(() => import('@/components/blueprint/BlueprintCanvas'), {
-    ssr: false,
-    loading: () => <div className="h-full animate-pulse bg-slate-950" aria-label="Loading blueprint canvas" />,
 });
 const ExportPanel = dynamic(() => import('@/components/canvas/ExportPanel'), { ssr: false });
 const FileViewer = dynamic(() => import('@/components/editor/FileViewer'), {
@@ -364,25 +355,10 @@ function FlowCanvas() {
         void editorTabs.openFile(location);
     }, [editorTabs]);
 
-    // ── Blueprint (contract authoring) ────────────────────────
-    const blueprint = useBlueprint();
-    const { refreshProjectSourceGrant } = proj;
-    const { selectTab } = editorTabs;
-    const blueprintHost = useBlueprintHost({
-        session: blueprint,
-        repoDetails: proj.repoDetails,
-        refreshSourceGrant: useCallback(() => refreshProjectSourceGrant(), [refreshProjectSourceGrant]),
-        openSource: handleNavigateToSource,
-        showCanvas: useCallback(() => selectTab('__canvas__'), [selectTab]),
-        openPanel: useCallback(() => setActivePanel('blueprint'), []),
-    });
-    const { canvasView, setCanvasView } = blueprintHost;
-    const isBlueprintView = canvasView === 'blueprint';
-    const isLeftPanelOpen = activePanel === 'projects' || activePanel === 'explorer' || activePanel === 'blueprint';
+    const isLeftPanelOpen = activePanel === 'projects' || activePanel === 'explorer';
 
     const handleRevealGraphElement = useCallback((target: GraphElementTarget) => {
         editorTabs.selectTab('__canvas__');
-        setCanvasView('map');
         if (target.kind === 'node') {
             const node = nodesRef.current.find((candidate) => candidate.id === target.id);
             if (!node) return;
@@ -411,7 +387,7 @@ function FlowCanvas() {
             }
         }
         openInspector();
-    }, [editorTabs, openInspector, setCanvasView, setCenter]);
+    }, [editorTabs, openInspector, setCenter]);
 
     const handleWorkspaceReveal = useCallback((result: WorkspaceSearchResult) => {
         if (result.kind === 'node') {
@@ -730,7 +706,6 @@ function FlowCanvas() {
                 onPanelChange={handlePanelChange}
                 projectCount={proj.projects.length || undefined}
                 cachedFileCount={fileExplorer.cachedPaths.size || undefined}
-                blueprintAttentionCount={blueprintHost.attentionCount || undefined}
                 repoDetails={proj.repoDetails}
                 repoUrl={proj.repoUrl}
                 exportSlot={
@@ -747,19 +722,10 @@ function FlowCanvas() {
             {isLeftPanelOpen && (
                     <div
                         key={`${activePanel}-panel`}
-                        style={{ width: activePanel === 'blueprint' ? Math.max(leftPanelWidth, 340) : leftPanelWidth }}
+                        style={{ width: leftPanelWidth }}
                         className="workspace-side-panel h-full shrink-0 overflow-hidden border-r border-slate-800 bg-slate-900 transition-[width] duration-150 z-40"
                     >
-                        {activePanel === 'blueprint' ? (
-                            <BlueprintPanel
-                                session={blueprint}
-                                ui={blueprintHost.ui}
-                                githubProject={blueprintHost.githubProject}
-                                onNavigateToSource={blueprintHost.onNavigateToSource}
-                                onShowOnCanvas={blueprintHost.showOnCanvas}
-                                onClose={() => setActivePanel(null)}
-                            />
-                        ) : activePanel === 'projects' ? (
+                        {activePanel === 'projects' ? (
                             <ProjectSidebar
                                 projects={proj.projects}
                                 activeProjectId={proj.activeProjectId}
@@ -934,41 +900,8 @@ function FlowCanvas() {
                 {/* ── Canvas view (default) ────────────────────── */}
                 {editorTabs.isCanvasActive && (
                     <div id="editor-panel-__canvas__" role="tabpanel" aria-labelledby="editor-tab-0" className="h-full">
-                {/* Map | Blueprint view toggle */}
-                <div
-                    role="radiogroup"
-                    aria-label="Canvas view"
-                    data-canvas-shortcuts="off"
-                    className="absolute right-4 top-3 z-10 flex rounded-lg border border-slate-700 bg-slate-900/95 p-0.5 text-xs shadow-lg"
-                >
-                    {([['map', 'Map', Network], ['blueprint', 'Blueprint', ShieldCheck]] as const).map(([view, label, Icon]) => (
-                        <button
-                            key={view}
-                            type="button"
-                            role="radio"
-                            aria-checked={canvasView === view}
-                            onClick={() => setCanvasView(view)}
-                            className={cn(
-                                'flex min-h-7 items-center gap-1.5 rounded-md px-2.5',
-                                canvasView === view ? 'bg-cyan-400/20 text-cyan-100' : 'text-slate-400 hover:text-slate-100',
-                            )}
-                        >
-                            <Icon size={13} aria-hidden="true" /> {label}
-                        </button>
-                    ))}
-                </div>
-
-                {isBlueprintView && (
-                    <BlueprintCanvas
-                        session={blueprint}
-                        ui={blueprintHost.ui}
-                        onRevealPanel={() => setActivePanel('blueprint')}
-                        onNavigateToSource={blueprintHost.onNavigateToSource}
-                    />
-                )}
-
                 {/* Left-side toolbars */}
-                {!isBlueprintView && proj.activeProjectId && <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
+                {proj.activeProjectId && <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
                     <EditToolbar
                         selectedNode={selectedNode}
                         selectedNodes={selectedNodes}
@@ -1010,17 +943,15 @@ function FlowCanvas() {
                 </div>}
 
                 {/* Empty state */}
-                {!isBlueprintView && !proj.activeProjectId && !proj.loading && (
+                {!proj.activeProjectId && !proj.loading && (
                     <EmptyWorkspace
                         onAnalyzeRepository={() => openCreateProject('github')}
                         onImportProject={() => openCreateProject('json')}
                         onCreateBlank={() => openCreateProject('empty')}
                         onExploreSample={handleExploreSample}
-                        onOpenLocalFolder={blueprintHost.openLocalFolder}
                     />
                 )}
 
-                {!isBlueprintView && (
                 <NodeEditProvider value={nodeEditCtx}>
                   <EdgeEditProvider value={edgeEditCtx}>
                     <ReactFlow
@@ -1074,7 +1005,6 @@ function FlowCanvas() {
                     </ReactFlow>
                   </EdgeEditProvider>
                 </NodeEditProvider>
-                )}
                     </div>
                 )}
 

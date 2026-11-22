@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { Ban, CheckCircle2, CircleAlert, Crosshair, Link2, TriangleAlert } from 'lucide-react';
 
-import type { Finding } from '@/blueprint';
+import type { BlueprintEditInput, Finding } from '@/blueprint';
 import { cn } from '@/lib/utils';
 import {
   ATTENTION_LIMIT,
@@ -37,9 +37,13 @@ interface AttentionTabProps {
   ui: BlueprintUi;
   onNavigateToSource?: NavigateToSource;
   onShowOnCanvas?: (componentIds: string[]) => void;
+  /** Stage a ruling as a proposal (preview first) instead of changing the draft directly. */
+  onPropose?: (edits: BlueprintEditInput[], label: string) => void;
+  /** Hide the check summary (the host already shows the verdict). */
+  hideSummary?: boolean;
 }
 
-export default function AttentionTab({ session, ui, onNavigateToSource, onShowOnCanvas }: AttentionTabProps) {
+export default function AttentionTab({ session, ui, onNavigateToSource, onShowOnCanvas, onPropose, hideSummary = false }: AttentionTabProps) {
   const { report, workspace, blueprint } = session;
   const verdict = reportVerdict(report);
   const attention = useMemo(() => splitAttention(report), [report]);
@@ -59,7 +63,9 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
         <button
           type="button"
           className={secondaryButtonClass}
-          onClick={() => session.update(declareDependency(from, to), `Declare ${from} → ${to}`)}
+          onClick={() => (onPropose
+            ? onPropose([{ op: 'declare_dependency', from, to }], `Declare ${names.get(from) ?? from} → ${names.get(to) ?? to}`)
+            : session.update(declareDependency(from, to), `Declare ${from} → ${to}`))}
         >
           <Link2 size={12} aria-hidden="true" /> Declare
         </button>
@@ -67,6 +73,10 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
           type="button"
           className={secondaryButtonClass}
           onClick={() => {
+            if (onPropose) {
+              onPropose([{ op: 'forbid_dependency', from, to }], `Forbid ${names.get(from) ?? from} → ${names.get(to) ?? to}`);
+              return;
+            }
             session.update(forbidDependency(from, to), `Forbid ${from} → ${to}`);
             ui.editRule(forbidRuleId(from, to), { focusReason: true });
           }}
@@ -81,7 +91,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
 
   return (
     <div className="space-y-4 p-3">
-      <section aria-label="Check summary" className="space-y-3">
+      {!hideSummary && <section aria-label="Check summary" className="space-y-3">
         {report && verdict && VerdictIcon ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -96,7 +106,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
                 {plural(report.summary.errors, 'error')} · {plural(report.summary.warnings, 'warning')} · {report.summary.infos} info
               </span>
             </div>
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-400">
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-400">
               <div className="flex justify-between gap-2"><dt>Components</dt><dd className="text-slate-200">{report.summary.components}</dd></div>
               <div className="flex justify-between gap-2"><dt>Files mapped</dt><dd className="text-slate-200">{report.summary.filesMapped}/{report.summary.filesAnalyzed}</dd></div>
               <div className="flex justify-between gap-2"><dt>Dependencies seen</dt><dd className="text-slate-200">{report.summary.componentEdges}</dd></div>
@@ -111,7 +121,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
           <div className="flex items-baseline justify-between gap-2 text-xs">
             <span id="human-authored-label" className="font-medium text-slate-200">Human-authored {percent}%</span>
             {authorship && (
-              <span className="text-[11px] text-slate-500">
+              <span className="text-xs text-slate-500">
                 intent on {authorship.componentsWithIntent}/{authorship.components} components
               </span>
             )}
@@ -131,16 +141,16 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
             />
           </div>
           {ratio < HUMAN_NUDGE_THRESHOLD && (authorship?.total ?? 1) > 0 && (
-            <p className="mt-1.5 text-[11px] leading-4 text-amber-200/90">Derived facts are guesses until a person confirms them.</p>
+            <p className="mt-1.5 text-xs leading-4 text-amber-200/90">Derived facts are guesses until a person confirms them.</p>
           )}
         </div>
-      </section>
+      </section>}
 
       <section aria-labelledby="attention-heading" className="space-y-2">
         <div className="flex items-baseline justify-between">
-          <h3 id="attention-heading" className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Needs attention</h3>
+          <h3 id="attention-heading" className="text-xs font-semibold uppercase tracking-wider text-slate-400">Needs attention</h3>
           {report && report.findings.length > ATTENTION_LIMIT && (
-            <span className="text-[11px] text-slate-500">top {ATTENTION_LIMIT} of {report.findings.length}</span>
+            <span className="text-xs text-slate-500">top {ATTENTION_LIMIT} of {report.findings.length}</span>
           )}
         </div>
         {attention.top.length === 0 ? (
@@ -154,10 +164,10 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
                   <p className="min-w-0 flex-1 text-xs font-medium leading-5 text-slate-100">{finding.title}</p>
                 </div>
                 {finding.message && finding.message !== finding.title && (
-                  <p className="mt-1 text-[11px] leading-4 text-slate-400">{finding.message}</p>
+                  <p className="mt-1 text-xs leading-4 text-slate-400">{finding.message}</p>
                 )}
                 {finding.reason && (
-                  <blockquote className="mt-2 border-l-2 border-cyan-400/60 pl-2 text-[11px] italic leading-4 text-slate-300">
+                  <blockquote className="mt-2 border-l-2 border-cyan-400/60 pl-2 text-xs italic leading-4 text-slate-300">
                     “{finding.reason}”
                     {finding.ruleId && <cite className="ml-1 not-italic text-slate-500">— rule {finding.ruleId}</cite>}
                   </blockquote>
@@ -170,7 +180,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
                       </li>
                     ))}
                     {finding.locations.length > 3 && (
-                      <li className="text-[11px] text-slate-500">+{finding.locations.length - 3} more locations</li>
+                      <li className="text-xs text-slate-500">+{finding.locations.length - 3} more locations</li>
                     )}
                   </ul>
                 )}
@@ -200,11 +210,11 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
             <details key={group.kind} className="rounded-md border border-slate-800 bg-slate-950/40">
               <summary className="flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-xs text-slate-300 hover:text-slate-100">
                 <span>{group.label}</span>
-                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">{group.findings.length}</span>
+                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-300">{group.findings.length}</span>
               </summary>
               <ul className="space-y-1.5 border-t border-slate-800 p-2">
                 {group.findings.slice(0, GROUP_ROW_LIMIT).map((finding) => (
-                  <li key={finding.id} className="text-[11px] leading-4 text-slate-300">
+                  <li key={finding.id} className="text-xs leading-4 text-slate-300">
                     <span className="mr-1.5"><SeverityBadge severity={finding.severity} /></span>
                     {finding.title}
                     {finding.locations[0] && (
@@ -215,7 +225,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
                   </li>
                 ))}
                 {group.findings.length > GROUP_ROW_LIMIT && (
-                  <li className="text-[11px] text-slate-500">+{group.findings.length - GROUP_ROW_LIMIT} more</li>
+                  <li className="text-xs text-slate-500">+{group.findings.length - GROUP_ROW_LIMIT} more</li>
                 )}
               </ul>
             </details>
