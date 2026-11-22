@@ -313,10 +313,10 @@ describe("rassam CLI end to end", () => {
       };
     });
 
-    it("exposes nine tools; only the two note-writing tools are not read-only", async () => {
+    it("exposes eleven tools; only the two note-writing tools are not read-only", async () => {
       const { createTools, SERVER_INSTRUCTIONS } = await import("./mcp/tools");
       const tools = createTools({ root });
-      expect(tools.map((tool) => tool.name)).toEqual(["blueprint_overview", "explain_path", "get_component", "check_dependency", "impact", "check_changes", "list_decisions", "propose_change", "report_conflict"]);
+      expect(tools.map((tool) => tool.name)).toEqual(["blueprint_overview", "explain_path", "get_component", "check_dependency", "impact", "check_changes", "list_decisions", "architecture_diff", "system_status", "propose_change", "report_conflict"]);
       expect(tools.filter((tool) => !tool.annotations.readOnlyHint).map((tool) => tool.name)).toEqual(["propose_change", "report_conflict"]);
       expect(tools.every((tool) => tool.annotations.destructiveHint === false && tool.inputSchema.type === "object")).toBe(true);
       for (const word of ["explain_path", "check_dependency", "check_changes", "report_conflict"]) expect(SERVER_INSTRUCTIONS).toContain(word);
@@ -471,7 +471,7 @@ describe("rassam CLI end to end", () => {
     expect(messages.map((message) => message.id)).toEqual([1, 2, 3, 4]);
     expect(messages[0].result.serverInfo).toMatchObject({ name: "rassam", title: "Rassam Blueprint" });
     expect(messages[0].result.instructions).toContain("report_conflict");
-    expect(messages[1].result.tools).toHaveLength(9);
+    expect(messages[1].result.tools).toHaveLength(11);
     expect(messages[2].result.structuredContent.component.id).toBe("ui");
     expect(messages[3].result.resultType).toBe("complete");
     expect(Buffer.concat(err).toString("utf8")).toContain("[rassam mcp] serving");

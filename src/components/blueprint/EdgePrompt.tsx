@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { ArrowRight, Ban, Link2, Unlink, X } from 'lucide-react';
 
+import type { BlueprintEditInput } from '@/blueprint';
 import { EDGE_STATUS_STYLE, type EdgeStatus } from './BlueprintEdge';
 import { declareDependency, forbidDependency, forbidRuleId, hasDependency, undeclareDependency } from './model';
 import type { BlueprintSession } from './session';
@@ -22,6 +23,11 @@ interface EdgePromptProps {
   session: BlueprintSession;
   ui: BlueprintUi;
   onClose: () => void;
+  /**
+   * Stage the ruling as a proposal (previewed on the canvas, then applied or
+   * discarded) instead of changing the draft directly.
+   */
+  onPropose?: (edits: BlueprintEditInput[], label: string) => void;
   /** Called after "Forbid dependency" so the host can reveal the Rules tab. */
   onRevealPanel?: () => void;
   onNavigateToSource?: NavigateToSource;
@@ -40,7 +46,7 @@ const HEADLINE: Record<EdgePromptTarget['status'], string> = {
  * The ruling a person makes on one edge: declare it, forbid it, or read the
  * evidence. Shown when an edge is drawn or clicked on the Blueprint canvas.
  */
-export default function EdgePrompt({ target, session, ui, onClose, onRevealPanel, onNavigateToSource, style }: EdgePromptProps) {
+export default function EdgePrompt({ target, session, ui, onClose, onPropose, onRevealPanel, onNavigateToSource, style }: EdgePromptProps) {
   const { from, to, status } = target;
   const ref = useRef<HTMLDivElement>(null);
   const { blueprint, report } = session;
@@ -62,17 +68,27 @@ export default function EdgePrompt({ target, session, ui, onClose, onRevealPanel
   }, [from, to, status]);
 
   const declare = () => {
-    session.update(declareDependency(from, to), `Declare ${fromName} → ${toName}`);
+    const label = `Declare ${fromName} → ${toName}`;
+    if (onPropose) onPropose([{ op: 'declare_dependency', from, to }], label);
+    else session.update(declareDependency(from, to), label);
     onClose();
   };
   const forbid = () => {
-    if (!existingRule) session.update(forbidDependency(from, to), `Forbid ${fromName} → ${toName}`);
+    const label = `Forbid ${fromName} → ${toName}`;
+    if (onPropose && !existingRule) {
+      onPropose([{ op: 'forbid_dependency', from, to }], label);
+      onClose();
+      return;
+    }
+    if (!existingRule) session.update(forbidDependency(from, to), label);
     ui.editRule(forbidRuleId(from, to), { focusReason: true });
     onRevealPanel?.();
     onClose();
   };
   const undeclare = () => {
-    session.update(undeclareDependency(from, to), `Remove declared ${fromName} → ${toName}`);
+    const label = `Remove declared ${fromName} → ${toName}`;
+    if (onPropose) onPropose([{ op: 'remove_dependency', from, to }], label);
+    else session.update(undeclareDependency(from, to), label);
     onClose();
   };
 
@@ -85,7 +101,7 @@ export default function EdgePrompt({ target, session, ui, onClose, onRevealPanel
       role="dialog"
       aria-label={`Dependency from ${fromName} to ${toName}`}
       style={style}
-      className="nodrag nopan z-20 w-72 rounded-xl border border-slate-700 bg-slate-900 p-3 text-slate-100 shadow-2xl"
+      className="studio nodrag nopan z-20 w-72 animate-pop rounded-lg bg-overlay p-3 text-fg shadow-elev-2"
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
       }}
@@ -101,39 +117,39 @@ export default function EdgePrompt({ target, session, ui, onClose, onRevealPanel
         </button>
       </div>
 
-      <p className="mt-1 text-[11px] leading-4 text-slate-300">
+      <p className="mt-1 text-xs leading-4 text-slate-300">
         {status === 'new' && declared ? 'This dependency is already declared.' : HEADLINE[status]}
         {status !== 'new' && target.count ? ` ${target.count} ${target.count === 1 ? 'import' : 'imports'} observed.` : ''}
       </p>
       {status !== 'new' && (
-        <p className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">Status: {EDGE_STATUS_STYLE[status].label}</p>
+        <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">Status: {EDGE_STATUS_STYLE[status].label}</p>
       )}
 
       {status === 'forbidden' && (
         <div className="mt-2 max-h-56 space-y-2 overflow-y-auto">
           {violations.length === 0 ? (
-            <p className="text-[11px] text-slate-400">The check report lists no evidence for this edge yet. Rescan to refresh it.</p>
+            <p className="text-xs text-slate-400">The check report lists no evidence for this edge yet. Rescan to refresh it.</p>
           ) : (
             <ul className="space-y-2" aria-label="Violating imports">
               {violations.map((finding) => (
                 <li key={finding.id} className="rounded-md border border-red-500/30 bg-red-500/5 p-2">
-                  <p className="flex items-start gap-1.5 text-[11px] leading-4 text-slate-100">
+                  <p className="flex items-start gap-1.5 text-xs leading-4 text-slate-100">
                     <SeverityBadge severity={finding.severity} />
                     <span>{finding.title}</span>
                   </p>
-                  {finding.reason && <p className="mt-1 border-l-2 border-cyan-400/60 pl-2 text-[11px] italic text-slate-300">“{finding.reason}”</p>}
+                  {finding.reason && <p className="mt-1 border-l-2 border-cyan-400/60 pl-2 text-xs italic text-slate-300">“{finding.reason}”</p>}
                   <ul className="mt-1 space-y-0.5">
                     {finding.locations.slice(0, 8).map((location, index) => (
                       <li key={`${location.path}:${location.line ?? 0}:${index}`}>
                         <SourceLink target={{ path: location.path, line: location.line }} onNavigate={onNavigateToSource} />
                       </li>
                     ))}
-                    {finding.locations.length > 8 && <li className="text-[11px] text-slate-500">+{finding.locations.length - 8} more</li>}
+                    {finding.locations.length > 8 && <li className="text-xs text-slate-500">+{finding.locations.length - 8} more</li>}
                   </ul>
                   {finding.ruleId && (
                     <button
                       type="button"
-                      className="mt-1.5 text-[11px] text-cyan-300 underline underline-offset-2 hover:text-cyan-100"
+                      className="mt-1.5 text-xs text-cyan-300 underline underline-offset-2 hover:text-cyan-100"
                       onClick={() => { ui.editRule(finding.ruleId!); onRevealPanel?.(); onClose(); }}
                     >
                       Open rule {finding.ruleId}

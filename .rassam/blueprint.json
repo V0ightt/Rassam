@@ -26,9 +26,9 @@
       "kind": "route",
       "intent": "Next.js pages that mount the workbench and settings. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tested.",
       "paths": [
-        "src/app/page.tsx",
         "src/app/layout.tsx",
-        "src/app/settings/**"
+        "src/app/settings/**",
+        "src/app/map/**"
       ],
       "tags": [
         "runtime:browser"
@@ -68,11 +68,39 @@
       ],
       "exclude": [
         "src/components/blueprint/**",
-        "src/components/workspace/**"
+        "src/components/workspace/**",
+        "src/components/studio/**",
+        "src/components/ui/**"
       ],
       "tags": [
         "runtime:browser"
       ]
+    },
+    {
+      "id": "ui-primitives",
+      "name": "UI primitives",
+      "kind": "component",
+      "paths": [
+        "src/components/ui/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ],
+      "public": true,
+      "intent": "The design system: tokens-driven buttons, sheets, popovers, pills and status glyphs. Status is never shown by colour alone; everything is keyboard reachable. Depends on nothing else in the app."
+    },
+    {
+      "id": "studio",
+      "name": "Studio",
+      "kind": "component",
+      "paths": [
+        "src/components/studio/**",
+        "src/app/page.tsx"
+      ],
+      "tags": [
+        "runtime:browser"
+      ],
+      "intent": "The first screen and the main product: is the project on track? Five persistent elements only (source pill, health pill, canvas, intent bar, zoom cluster). People say what they want changed; every change is previewed on the canvas before it is applied and can be undone. Manual forms exist but stay behind progressive disclosure."
     },
     {
       "id": "blueprint-ui",
@@ -142,6 +170,18 @@
         "src/lib/chat-tools.ts",
         "src/lib/chat-file-summary.ts",
         "src/lib/canvas-patch.ts"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "blueprint-intent",
+      "name": "Blueprint intent",
+      "kind": "service",
+      "intent": "Server-side helpers for \"tell Rassam what to change\": builds the model prompt (edit operation catalogue, selector grammar, a compact blueprint digest inside data delimiters) and reads the answer (tolerant JSON extraction, schema validation, dry run). Pure text in, typed edits out: it never calls a provider and never sees credentials.",
+      "paths": [
+        "src/lib/blueprint-intent/**"
       ],
       "tags": [
         "runtime:server"
@@ -330,6 +370,11 @@
     },
     {
       "from": "api",
+      "to": "blueprint-intent",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
       "to": "chat-agent",
       "kind": "imports"
     },
@@ -350,6 +395,11 @@
     },
     {
       "from": "blueprint-client",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "blueprint-intent",
       "to": "blueprint-engine",
       "kind": "imports"
     },
@@ -418,9 +468,35 @@
       "reason": "Type-only: provider ids in saved model settings."
     },
     {
+      "from": "studio",
+      "to": "blueprint-client",
+      "kind": "imports"
+    },
+    {
+      "from": "studio",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "studio",
+      "to": "blueprint-ui",
+      "kind": "imports"
+    },
+    {
+      "from": "studio",
+      "to": "hooks",
+      "kind": "imports"
+    },
+    {
       "from": "tooling",
       "to": "blueprint-engine",
       "kind": "imports"
+    },
+    {
+      "from": "tooling",
+      "to": "cli",
+      "kind": "imports",
+      "reason": "Preview and maintenance scripts reuse the CLI's working-tree loader."
     },
     {
       "from": "web-shell",
@@ -431,6 +507,11 @@
     {
       "from": "web-shell",
       "to": "local-store",
+      "kind": "imports"
+    },
+    {
+      "from": "web-shell",
+      "to": "studio",
       "kind": "imports"
     },
     {

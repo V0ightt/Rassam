@@ -2,6 +2,7 @@
 
 import type { Blueprint, BlueprintIssue } from "@/blueprint/schema";
 import type { SerializedFileGraph } from "@/blueprint/snapshot";
+import { systemStatusSchema, type SystemStatus } from "@/blueprint/status";
 import type { ReachReport } from "@/blueprint/types";
 
 import { sanitizeLayout, type BlueprintLayout } from "./layout";
@@ -26,6 +27,8 @@ export interface GitHubBlueprintResponse {
   layout: BlueprintLayout | null;
   graph: SerializedFileGraph;
   reach: ReachReport;
+  /** Live status from `.rassam/status.json` (the `rassam-live` branch, else the loaded commit), when the repository publishes one. */
+  status: SystemStatus | null;
   stats: { filesFetched: number; bytes: number; treeEntries: number };
 }
 
@@ -65,6 +68,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalidResponse(requestId?: string): BlueprintApiError {
   return new BlueprintApiError("The server returned an unexpected blueprint response.", "INVALID_RESPONSE", 502, true, requestId);
+}
+
+function parseStatus(value: unknown): SystemStatus | null {
+  if (!isRecord(value)) return null;
+  const parsed = systemStatusSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Human-readable message for any error thrown by this module. */
@@ -142,6 +151,7 @@ export async function fetchGitHubBlueprint(
     layout: isRecord(body.layout) ? sanitizeLayout(body.layout) : null,
     graph: body.graph as unknown as SerializedFileGraph,
     reach: body.reach as unknown as ReachReport,
+    status: parseStatus(body.status),
     stats: { filesFetched: count(stats.filesFetched), bytes: count(stats.bytes), treeEntries: count(stats.treeEntries) },
   };
 }

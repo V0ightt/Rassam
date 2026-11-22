@@ -21,11 +21,14 @@ type Position = { x: number; y: number };
 
 export const edgeId = (from: string, to: string) => `${from}->${to}`;
 
-/** Top-to-bottom dagre layout for components that have no saved position. */
-export function autoLayout(view: WorkspaceGraphView): Record<string, Position> {
+/**
+ * Top-to-bottom dagre layout for components that have no saved position, with
+ * the lanes dagre reserved for edges that span several ranks.
+ */
+export function layoutWithRoutes(view: WorkspaceGraphView): { positions: Record<string, Position>; routes: Record<string, Position[]> } {
   const graph = new dagre.graphlib.Graph();
   graph.setDefaultEdgeLabel(() => ({}));
-  graph.setGraph({ rankdir: 'TB', nodesep: 70, ranksep: 110, marginx: 40, marginy: 40 });
+  graph.setGraph({ rankdir: 'TB', nodesep: 56, ranksep: 96, marginx: 40, marginy: 40 });
   const ids = new Set(view.components.map((component) => component.id));
   for (const id of ids) graph.setNode(id, { width: BLUEPRINT_NODE_WIDTH, height: BLUEPRINT_NODE_HEIGHT });
   for (const edge of view.edges) {
@@ -40,7 +43,19 @@ export function autoLayout(view: WorkspaceGraphView): Record<string, Position> {
       ? { x: node!.x! - BLUEPRINT_NODE_WIDTH / 2, y: node!.y! - BLUEPRINT_NODE_HEIGHT / 2 }
       : { x: (fallback % 4) * (BLUEPRINT_NODE_WIDTH + 60), y: Math.floor(fallback++ / 4) * (BLUEPRINT_NODE_HEIGHT + 80) };
   }
-  return positions;
+  const routes: Record<string, Position[]> = {};
+  for (const edge of graph.edges()) {
+    const points = (graph.edge(edge) as { points?: Position[] } | undefined)?.points ?? [];
+    // The first and last points sit on the node borders; only the bends in between matter.
+    const bends = points.slice(1, -1).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (bends.length > 1) routes[edgeId(edge.v, edge.w)] = bends.map((point) => ({ x: point.x, y: point.y }));
+  }
+  return { positions, routes };
+}
+
+/** Top-to-bottom dagre layout for components that have no saved position. */
+export function autoLayout(view: WorkspaceGraphView): Record<string, Position> {
+  return layoutWithRoutes(view).positions;
 }
 
 /** Transitive dependents of a component: id → how many steps away. */
@@ -113,7 +128,7 @@ export function useBlueprintCanvas({
     [view],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const auto = useMemo(() => autoLayout(view), [shapeKey]);
+  const { positions: auto, routes } = useMemo(() => layoutWithRoutes(view), [shapeKey]);
 
   const impact = useMemo(
     () => (question === 'impact' && selectedId && workspace ? impactDepths(workspace, view, selectedId) : null),
@@ -161,13 +176,16 @@ export function useBlueprintCanvas({
           ? (edge.to === selectedId || impact.has(edge.to)) && (edge.from === selectedId || impact.has(edge.from))
           : true;
         const dim = impact ? !inImpact : Boolean(secrets);
+        // A reserved lane only makes sense while both ends are where the layout put them.
+        const placed = (id: string) => !dragPositions[id] && !layout[id];
+        const waypoints = placed(edge.from) && placed(edge.to) ? routes[edgeId(edge.from, edge.to)] : undefined;
         return {
           id: edgeId(edge.from, edge.to),
           source: edge.from,
           target: edge.to,
           type: 'blueprint',
           focusable: false,
-          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_STATUS_STYLE[edge.status].stroke, width: 18, height: 18 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_STATUS_STYLE[edge.status].stroke, width: 16, height: 16 },
           zIndex: edge.status === 'forbidden' ? 2 : edge.status === 'undeclared' ? 1 : 0,
           data: {
             from: edge.from,
@@ -177,10 +195,11 @@ export function useBlueprintCanvas({
             status: edge.status,
             count: edge.count,
             dim,
+            ...(waypoints ? { waypoints } : {}),
           },
         };
       });
-  }, [blueprint, impact, secrets, selectedId, view]);
+  }, [blueprint, dragPositions, impact, layout, routes, secrets, selectedId, view]);
 
   const caption = useMemo(() => {
     if (question === 'impact') {

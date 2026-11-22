@@ -289,7 +289,7 @@ export default function IntentTab({ session }: { session: BlueprintSession }) {
               <li key={invariant.id}>
                 <button type="button" onClick={() => setEditing({ type: 'invariant', id: invariant.id })} aria-label={`Edit invariant ${invariant.id}`} className="w-full rounded-lg border border-slate-800 bg-slate-950/60 p-2 text-left hover:bg-slate-800/60">
                   <span className="block text-xs leading-5 text-slate-100">{invariant.statement}</span>
-                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                  <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
                     <ProvenanceBadge fact={invariant} />
                     <span>{scope(invariant.components)}</span>
                     <span className={invariant.check?.run || invariant.check?.tests?.length ? 'text-emerald-300' : 'text-amber-200'}>
@@ -319,10 +319,10 @@ export default function IntentTab({ session }: { session: BlueprintSession }) {
                 <button type="button" onClick={() => setEditing({ type: 'decision', id: decision.id })} aria-label={`Edit decision ${decision.id}`} className="w-full rounded-lg border border-slate-800 bg-slate-950/60 p-2 text-left hover:bg-slate-800/60">
                   <span className="flex items-start justify-between gap-2">
                     <span className="text-xs font-medium leading-5 text-slate-100">{decision.title}</span>
-                    <span className={cn('shrink-0 rounded border px-1.5 py-0.5 text-[10px]', STATUS_CLASS[decision.status])}>{decision.status}</span>
+                    <span className={cn('shrink-0 rounded border px-1.5 py-0.5 text-xs', STATUS_CLASS[decision.status])}>{decision.status}</span>
                   </span>
-                  <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-slate-400">{decision.decision}</span>
-                  <span className="mt-1 block text-[11px] text-slate-500">{decision.date ? `${decision.date} · ` : ''}{scope(decision.components)}</span>
+                  <span className="mt-0.5 line-clamp-2 block text-xs leading-4 text-slate-400">{decision.decision}</span>
+                  <span className="mt-1 block text-xs text-slate-500">{decision.date ? `${decision.date} · ` : ''}{scope(decision.components)}</span>
                 </button>
               </li>
             ))}

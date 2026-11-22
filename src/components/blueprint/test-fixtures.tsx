@@ -5,15 +5,22 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { vi } from 'vitest';
 
 import {
+  applyBlueprintEdits,
   blueprintSchema,
   createWorkspace,
+  diffArchitecture,
   parseBlueprint,
+  parseIntent,
+  suggestIntents,
+  summarizeBlueprintDelta,
   type Blueprint,
+  type BlueprintEdit,
+  type BlueprintEditInput,
   type BlueprintInput,
   type ReachReport,
   type SourceFile,
 } from '@/blueprint';
-import type { BlueprintSession } from './session';
+import type { BlueprintProposal, BlueprintReceipt, BlueprintSession, IntentState, LiveState } from './session';
 import { useBlueprintUi, type BlueprintUi } from './useBlueprintUi';
 
 export const FILES: SourceFile[] = [
@@ -93,6 +100,10 @@ export interface SessionSpies {
   setPosition: ReturnType<typeof vi.fn<BlueprintSession['setPosition']>>;
   loadFromGitHub: ReturnType<typeof vi.fn<BlueprintSession['loadFromGitHub']>>;
   openLocalFolder: ReturnType<typeof vi.fn<BlueprintSession['openLocalFolder']>>;
+  proposeIntent: ReturnType<typeof vi.fn<(instruction: string, options?: { selection?: string[] }) => void>>;
+  proposeEdits: ReturnType<typeof vi.fn<BlueprintSession['proposeEdits']>>;
+  applyProposal: ReturnType<typeof vi.fn<(proposal: BlueprintProposal) => void>>;
+  applyEditsNow: ReturnType<typeof vi.fn<BlueprintSession['applyEditsNow']>>;
 }
 
 export function makeSpies(): SessionSpies {
@@ -104,8 +115,14 @@ export function makeSpies(): SessionSpies {
     setPosition: vi.fn<BlueprintSession['setPosition']>(),
     loadFromGitHub: vi.fn<BlueprintSession['loadFromGitHub']>(async () => undefined),
     openLocalFolder: vi.fn<BlueprintSession['openLocalFolder']>(async () => undefined),
+    proposeIntent: vi.fn(),
+    proposeEdits: vi.fn<BlueprintSession['proposeEdits']>(),
+    applyProposal: vi.fn(),
+    applyEditsNow: vi.fn<BlueprintSession['applyEditsNow']>(),
   };
 }
+
+export const IDLE_LIVE: LiveState = { watching: false, checking: false, current: null, latest: null, behind: false, lastChange: null, history: [] };
 
 /** Build a ready session around a blueprint, evaluated by the real engine. */
 export function makeSession(blueprint: Blueprint | null, overrides: Partial<BlueprintSession> = {}): BlueprintSession {
@@ -127,6 +144,11 @@ export function makeSession(blueprint: Blueprint | null, overrides: Partial<Blue
     canSaveToDisk: false,
     canUndo: false,
     canRedo: false,
+    intent: { status: 'idle' },
+    suggestions: [],
+    live: IDLE_LIVE,
+    systemStatus: null,
+    receipts: [],
     loadFromGitHub: async () => undefined,
     openLocalFolder: async () => undefined,
     reopenLocalFolder: async () => false,
@@ -143,11 +165,44 @@ export function makeSession(blueprint: Blueprint | null, overrides: Partial<Blue
     copyToClipboard: async () => undefined,
     discardChanges: noop,
     close: noop,
+    proposeIntent: async () => undefined,
+    proposeEdits: noop,
+    chooseIntentOption: noop,
+    applyProposal: noop,
+    discardProposal: noop,
+    applyEditsNow: noop,
+    setWatching: noop,
+    syncToLatest: async () => undefined,
+    configureLive: noop,
     ...overrides,
   };
 }
 
-/** Stateful fake of `useBlueprint`: edits are validated and re-evaluated like the real hook. */
+/** A proposal for `edits` over `blueprint`, built the way the data layer builds one. */
+export function makeProposal(blueprint: Blueprint, edits: BlueprintEditInput[], instruction = 'test', source: BlueprintProposal['source'] = 'parser'): BlueprintProposal {
+  const before = createWorkspace(FILES, blueprint, { reach: REACH });
+  const result = applyBlueprintEdits(blueprint, edits);
+  const after = createWorkspace(FILES, result.blueprint, { reach: REACH });
+  return {
+    id: `proposal-${instruction}`,
+    instruction,
+    source,
+    edits: edits as BlueprintEdit[],
+    applied: result.applied,
+    interpretation: result.applied.map((edit) => edit.summary).join(' '),
+    preview: result.blueprint,
+    delta: summarizeBlueprintDelta(blueprint, result.blueprint),
+    previewReport: after.check(),
+    graphDiff: diffArchitecture(before.graphView(), after.graphView()),
+    weakens: result.applied.some((edit) => edit.weakens),
+  };
+}
+
+/**
+ * Stateful fake of `useBlueprint`: edits are validated and re-evaluated like
+ * the real hook, and instructions go through the engine's own parser, so the
+ * propose, apply, undo loop behaves as it does in the app.
+ */
 export function Harness({
   initial = makeBlueprint(),
   spies,
@@ -160,30 +215,97 @@ export function Harness({
   children: (session: BlueprintSession, ui: BlueprintUi) => ReactNode;
 }) {
   const [blueprint, setBlueprint] = useState(initial);
+  const [past, setPast] = useState<Blueprint[]>([]);
+  const [future, setFuture] = useState<Blueprint[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [intent, setIntent] = useState<IntentState>({ status: 'idle' });
+  const [receipts, setReceipts] = useState<BlueprintReceipt[]>([]);
   const ui = useBlueprintUi();
-  const session = useMemo(() => makeSession(blueprint, {
-    error,
-    update: (recipe, label) => {
+  const session = useMemo(() => {
+    const commit = (next: Blueprint, label: string, receipt: boolean) => {
       if (!blueprint) return;
-      const draft = structuredClone(blueprint);
-      const parsed = parseBlueprint(recipe(draft) ?? draft);
-      if (!parsed.ok) {
-        const message = `Change rejected: ${parsed.issues.map((issue) => issue.message).join('; ')}`;
-        spies.rejected(message);
-        setError(message);
-        return;
+      setPast((current) => [...current, blueprint]);
+      setFuture([]);
+      setBlueprint(next);
+      if (receipt) setReceipts((current) => [{ id: `receipt-${current.length + 1}`, label, at: '2026-11-22T10:00:00.000Z' }, ...current]);
+    };
+    const stage = (edits: BlueprintEditInput[], instruction: string, source: BlueprintProposal['source']) => {
+      if (!blueprint) return;
+      try {
+        setIntent({ status: 'proposed', proposal: makeProposal(blueprint, edits, instruction, source) });
+      } catch (failure) {
+        setIntent({ status: 'error', instruction, message: failure instanceof Error ? failure.message : 'failed' });
       }
-      spies.update(parsed.blueprint, label);
-      setError(null);
-      setBlueprint(parsed.blueprint);
-    },
-    verify: spies.verify,
-    adoptDraft: spies.adoptDraft,
-    setPosition: spies.setPosition,
-    loadFromGitHub: spies.loadFromGitHub,
-    openLocalFolder: spies.openLocalFolder,
-    ...overrides,
-  }), [blueprint, error, overrides, spies]);
+    };
+    return makeSession(blueprint, {
+      error,
+      intent,
+      receipts,
+      suggestions: blueprint ? suggestIntents(blueprint, createWorkspace(FILES, blueprint).graphView()) : [],
+      canUndo: past.length > 0,
+      canRedo: future.length > 0,
+      update: (recipe, label) => {
+        if (!blueprint) return;
+        const draft = structuredClone(blueprint);
+        const parsed = parseBlueprint(recipe(draft) ?? draft);
+        if (!parsed.ok) {
+          const message = `Change rejected: ${parsed.issues.map((issue) => issue.message).join('; ')}`;
+          spies.rejected(message);
+          setError(message);
+          return;
+        }
+        spies.update(parsed.blueprint, label);
+        setError(null);
+        commit(parsed.blueprint, label ?? '', false);
+      },
+      undo: () => {
+        const previous = past.at(-1);
+        if (!previous || !blueprint) return;
+        setPast(past.slice(0, -1));
+        setFuture([blueprint, ...future]);
+        setBlueprint(previous);
+      },
+      redo: () => {
+        const [next, ...rest] = future;
+        if (!next || !blueprint) return;
+        setFuture(rest);
+        setPast([...past, blueprint]);
+        setBlueprint(next);
+      },
+      proposeIntent: async (instruction, options) => {
+        spies.proposeIntent(instruction, options);
+        if (!blueprint) return;
+        const result = parseIntent(instruction, blueprint);
+        if (result.status === 'ok') stage(result.edits, instruction, 'parser');
+        else if (result.status === 'ambiguous') setIntent({ status: 'ambiguous', instruction, message: result.message, options: result.options });
+        else setIntent({ status: 'unknown', instruction, message: result.message, examples: result.examples });
+      },
+      proposeEdits: (edits, label) => {
+        spies.proposeEdits(edits, label);
+        stage(edits, label, 'manual');
+      },
+      chooseIntentOption: (index) => {
+        if (intent.status === 'ambiguous') stage(intent.options[index].edits, intent.instruction, 'parser');
+      },
+      applyProposal: () => {
+        if (intent.status !== 'proposed') return;
+        spies.applyProposal(intent.proposal);
+        commit(intent.proposal.preview, intent.proposal.applied.map((edit) => edit.summary).join(' '), true);
+        setIntent({ status: 'idle' });
+      },
+      discardProposal: () => setIntent({ status: 'idle' }),
+      applyEditsNow: (edits, label) => {
+        spies.applyEditsNow(edits, label);
+        if (!blueprint) return;
+        commit(applyBlueprintEdits(blueprint, edits).blueprint, label, true);
+      },
+      verify: spies.verify,
+      adoptDraft: spies.adoptDraft,
+      setPosition: spies.setPosition,
+      loadFromGitHub: spies.loadFromGitHub,
+      openLocalFolder: spies.openLocalFolder,
+      ...overrides,
+    });
+  }, [blueprint, error, future, intent, overrides, past, receipts, spies]);
   return <>{children(session, ui)}</>;
 }

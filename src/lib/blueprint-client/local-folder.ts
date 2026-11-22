@@ -8,6 +8,7 @@ import { MAX_ANALYZED_FILE_BYTES } from "@/blueprint/constants";
 import { compileGlob, type GlobMatcher } from "@/blueprint/glob";
 import { isIgnoredPath } from "@/blueprint/imports";
 import { BLUEPRINT_DIR, BLUEPRINT_LAYOUT_PATH, BLUEPRINT_PATH } from "@/blueprint/schema";
+import { STATUS_PATH } from "@/blueprint/status";
 import type { SourceFile } from "@/blueprint/types";
 
 import { deleteDirectoryHandle, loadDirectoryHandle, saveDirectoryHandle } from "./drafts";
@@ -87,6 +88,8 @@ export interface LocalSnapshot {
   blueprintText: string | null;
   /** Text of `.rassam/layout.json`, or null when the folder has none. */
   layoutText: string | null;
+  /** Text of `.rassam/status.json` (live status written by CI), or null when the folder has none. */
+  statusText: string | null;
   stats: { filesListed: number; filesRead: number; bytes: number };
 }
 
@@ -365,6 +368,7 @@ export async function readLocalSnapshot(
     files,
     blueprintText: blueprintFile?.content ?? null,
     layoutText: layoutFile?.content ?? null,
+    statusText: files.find((file) => file.path === STATUS_PATH)?.content ?? null,
     stats: { filesListed: listed.length, filesRead, bytes },
   };
 }

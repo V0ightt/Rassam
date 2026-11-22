@@ -71,6 +71,28 @@ export const componentKindSchema = z
   .trim()
   .regex(/^[a-z][a-z0-9-]{0,39}$/, "kind is a lowercase slug such as api, service, database or external-api");
 
+/**
+ * Where a component runs, so its live state can be probed. Each source is
+ * optional: an HTTP health check, a deployment environment or a CI workflow.
+ */
+export const componentRuntimeSchema = z
+  .object({
+    health: z
+      .object({
+        url: z.string().trim().max(500).regex(/^https?:\/\/\S+$/i,"health.url is an http(s) URL"),
+        method: z.enum(["GET", "HEAD"]).optional(),
+        /** Exact status to expect; any 2xx counts as healthy when omitted. */
+        expectStatus: z.number().int().min(100).max(599).optional(),
+        timeoutMs: z.number().int().min(100).max(30_000).optional(),
+      })
+      .strict()
+      .optional(),
+    deployment: z.object({ environment: z.string().trim().min(1).max(100) }).strict().optional(),
+    workflow: z.object({ file: z.string().trim().min(1).max(200) }).strict().optional(),
+  })
+  .strict();
+export type ComponentRuntime = z.infer<typeof componentRuntimeSchema>;
+
 export const componentSchema = z
   .object({
     id: blueprintIdSchema,
@@ -91,6 +113,8 @@ export const componentSchema = z
     tags: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
     owners: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
     assurance: assuranceSchema.optional(),
+    /** Where this component runs (health check, deployment, workflow) for live status. */
+    runtime: componentRuntimeSchema.optional(),
     provenance: provenanceSchema.optional(),
     verified: verificationSchema.optional(),
   })

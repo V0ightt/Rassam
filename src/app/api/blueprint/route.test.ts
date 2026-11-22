@@ -35,6 +35,9 @@ let repositoryFiles: Record<string, FixtureFile> = {};
 let visibility: "public" | "private" = "public";
 let blobRequests: string[] = [];
 let pathBySha = new Map<string, string>();
+/** Text of `.rassam/status.json` on the `rassam-live` branch, or null when the branch has none. */
+let liveBranchStatus: string | null = null;
+let statusRefs: Array<string | null> = [];
 
 function shaFor(index: number): string {
   return index.toString(16).padStart(40, "0");
@@ -62,6 +65,19 @@ const server = setupServer(
     });
     return HttpResponse.json({ sha: TREE, truncated: false, tree });
   }),
+  http.get("https://api.github.com/repos/:owner/:repo/contents/*", ({ request }) => {
+    statusRefs.push(new URL(request.url).searchParams.get("ref"));
+    if (liveBranchStatus === null) return HttpResponse.json({ message: "Not Found" }, { status: 404 });
+    return HttpResponse.json({
+      type: "file",
+      name: "status.json",
+      path: ".rassam/status.json",
+      sha: "c".repeat(40),
+      size: Buffer.byteLength(liveBranchStatus, "utf8"),
+      encoding: "base64",
+      content: Buffer.from(liveBranchStatus, "utf8").toString("base64"),
+    });
+  }),
   http.get("https://api.github.com/repos/:owner/:repo/git/blobs/:sha", ({ params }) => {
     const path = pathBySha.get(String(params.sha));
     if (!path) return HttpResponse.json({ message: "Not Found" }, { status: 404 });
@@ -82,6 +98,8 @@ afterEach(() => {
   repositoryFiles = {};
   visibility = "public";
   blobRequests = [];
+  liveBranchStatus = null;
+  statusRefs = [];
 });
 afterAll(() => server.close());
 
@@ -129,6 +147,31 @@ const SOURCES: Record<string, FixtureFile> = {
 };
 
 describe("POST /api/blueprint", () => {
+  it("returns live status from the rassam-live branch, else from the commit, else null", async () => {
+    const blueprintText = serializeBlueprint(validBlueprint());
+    const status = (state: string) => JSON.stringify({ version: 1, checkedAt: "2026-11-20T10:00:00Z", components: { app: { state, source: "health-check" } } });
+    repositoryFiles = { ...SOURCES, ".rassam/blueprint.json": { content: blueprintText } };
+
+    const none = await (await post({ owner: OWNER, repo: REPO, commitSha: COMMIT, sourceGrant: grant() })).json();
+    expect(none.status).toBeNull();
+    expect(statusRefs).toEqual(["rassam-live"]);
+
+    repositoryFiles[".rassam/status.json"] = { content: status("degraded") };
+    const fromCommit = await (await post({ owner: OWNER, repo: REPO, commitSha: COMMIT, sourceGrant: grant() })).json();
+    expect(fromCommit.status.components.app.state).toBe("degraded");
+
+    liveBranchStatus = status("up");
+    const fromBranch = await (await post({ owner: OWNER, repo: REPO, commitSha: COMMIT, sourceGrant: grant() })).json();
+    expect(fromBranch.status.components.app.state).toBe("up");
+
+    // An unreadable status file is ignored, never an error.
+    liveBranchStatus = "{ nope";
+    repositoryFiles[".rassam/status.json"] = { content: "also nope" };
+    const broken = await post({ owner: OWNER, repo: REPO, commitSha: COMMIT, sourceGrant: grant() });
+    expect(broken.status).toBe(200);
+    expect((await broken.json()).status).toBeNull();
+  });
+
   it("returns the repository blueprint, layout, graph and reach for a pinned commit", async () => {
     const blueprintText = serializeBlueprint(validBlueprint());
     repositoryFiles = {

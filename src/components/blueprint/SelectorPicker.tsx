@@ -46,8 +46,8 @@ export default function SelectorPicker({ legend, hint, components, value, onChan
 
   return (
     <fieldset className="rounded-md border border-slate-800 p-2">
-      <legend className="px-1 text-[11px] font-medium text-slate-300">{legend}</legend>
-      {hint && <p className="mb-1.5 text-[11px] leading-4 text-slate-500">{hint}</p>}
+      <legend className="px-1 text-xs font-medium text-slate-300">{legend}</legend>
+      {hint && <p className="mb-1.5 text-xs leading-4 text-slate-500">{hint}</p>}
 
       {components.length > 0 && (
         <div className="max-h-28 overflow-y-auto rounded border border-slate-800 bg-slate-950/60 p-1">
@@ -71,7 +71,7 @@ export default function SelectorPicker({ legend, hint, components, value, onChan
             const excluded = entry.startsWith('!');
             const label = excluded && names.has(entry.slice(1)) ? `not ${names.get(entry.slice(1))}` : entry;
             return (
-              <li key={entry} className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] ${excluded ? 'border-red-500/40 text-red-200' : 'border-slate-600 text-slate-200'}`}>
+              <li key={entry} className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-xs ${excluded ? 'border-red-500/40 text-red-200' : 'border-slate-600 text-slate-200'}`}>
                 {label}
                 <button type="button" aria-label={`Remove ${entry}`} onClick={() => onChange(value.filter((item) => item !== entry))} className="rounded text-slate-400 hover:text-slate-100">
                   <X size={10} aria-hidden="true" />

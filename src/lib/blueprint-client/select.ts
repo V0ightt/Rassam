@@ -6,6 +6,7 @@ import { MAX_ANALYZED_FILE_BYTES } from "@/blueprint/constants";
 import { isIgnoredPath, languageOf } from "@/blueprint/imports";
 import { isAgentConfigPath } from "@/blueprint/reach";
 import { BLUEPRINT_LAYOUT_PATH, BLUEPRINT_PATH } from "@/blueprint/schema";
+import { STATUS_PATH } from "@/blueprint/status";
 
 const MANIFEST_NAMES = new Set([
   "package.json",
@@ -33,7 +34,7 @@ export function isResolutionManifestPath(path: string): boolean {
 }
 
 export function isBlueprintFilePath(path: string): boolean {
-  return path === BLUEPRINT_PATH || path === BLUEPRINT_LAYOUT_PATH;
+  return path === BLUEPRINT_PATH || path === BLUEPRINT_LAYOUT_PATH || path === STATUS_PATH;
 }
 
 export type ContentCategory = "blueprint" | "source" | "agent-config" | "manifest";

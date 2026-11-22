@@ -46,11 +46,46 @@ export function basePathsFor(changes: readonly ChangedFile[]): string[] {
   return [...paths];
 }
 
-async function loadBaseBlueprint(root: string, sha: string): Promise<{ blueprint: Blueprint | null; state: "ok" | "missing" | "invalid" }> {
+export async function loadBaseBlueprint(root: string, sha: string): Promise<{ blueprint: Blueprint | null; state: "ok" | "missing" | "invalid" }> {
   const text = await readFileAtRef(root, sha, BLUEPRINT_PATH);
   if (text === null) return { blueprint: null, state: "missing" };
   const parsed = parseBlueprintText(text);
   return parsed.ok ? { blueprint: parsed.blueprint, state: "ok" } : { blueprint: null, state: "invalid" };
+}
+
+export interface BaseSnapshot {
+  /** The merge-base commit. */
+  sha: string;
+  /** The repository's files as they were at the merge-base, under their paths at that commit. */
+  files: SourceFile[];
+  blueprint: Blueprint | null;
+  blueprintState: "ok" | "missing" | "invalid";
+}
+
+/**
+ * The repository as it was at the merge-base with `base`: the working-tree
+ * snapshot with the change undone (renames back under their old paths) and
+ * the blueprint of that commit. Used to compare architectures, not to judge.
+ */
+export async function loadBaseSnapshot(context: RepoContext, base: string): Promise<BaseSnapshot> {
+  if (!context.isGit) throw new CliError("Comparing against a base ref needs a git repository");
+  const sha = await mergeBase(context.root, base);
+  const changes = await diffAgainst(context.root, sha);
+  const contents = await readFilesAtRef(context.root, sha, basePathsFor(changes));
+  const byPath = new Map(context.files.map((file) => [file.path, file]));
+  for (const change of changes) {
+    if (change.status === "added") {
+      byPath.delete(change.path);
+      continue;
+    }
+    const path = change.status === "renamed" ? change.previousPath ?? change.path : change.path;
+    if (change.status === "renamed") byPath.delete(change.path);
+    const content = contents.get(path);
+    byPath.set(path, { path, content: content ?? null, size: content === undefined ? undefined : Buffer.byteLength(content) });
+  }
+  const files = [...byPath.values()].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const blueprint = await loadBaseBlueprint(context.root, sha);
+  return { sha, files, blueprint: blueprint.blueprint, blueprintState: blueprint.state };
 }
 
 async function headIdentity(root: string, override: GateOptions["head"]): Promise<{ ref: string; sha?: string }> {

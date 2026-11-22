@@ -1,12 +1,13 @@
 // The MCP tools coding agents call before and after they change code.
-// Read tools answer from the working tree; the two write tools only ever
-// create files under .rassam/proposals and .rassam/escalations.
+// Read tools answer from the working tree (and .rassam/status.json); the two
+// write tools only ever create files under .rassam/proposals and .rassam/escalations.
 
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { verdict } from "../../blueprint/report";
 import { BLUEPRINT_ESCALATIONS_DIR, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR } from "../../blueprint/schema";
 import type { Blueprint } from "../../blueprint/schema";
+import { STATUS_PATH, isStale, summarizeStatus } from "../../blueprint/status";
 import type { CheckReport, Finding } from "../../blueprint/types";
 import { createWorkspace } from "../../blueprint/workspace";
 import type { Workspace } from "../../blueprint/workspace";
@@ -15,6 +16,7 @@ import type { RepoContext } from "../context";
 import { runGate } from "../gate";
 import { defaultBaseRef, headSha, repoRoot } from "../git";
 import { CliError } from "../io";
+import { compareArchitecture, readStatusFile } from "../live";
 import { toRepoPath } from "../repo-path";
 import { errorMessage, fileTimestamp, slugify } from "../util";
 import { ToolError } from "./protocol";
@@ -24,6 +26,7 @@ export const SERVER_INSTRUCTIONS = [
   "This repository has a human-owned architecture contract (.rassam/blueprint.json). Changes are checked against it in CI, judged by the base branch's copy, so editing the contract does not relax the rules for your change.",
   "Call explain_path before editing a file, check_dependency before adding an import, and check_changes before you finish.",
   "If the task cannot be done without breaking a rule, weakening a test or check, or editing the blueprint, stop and call report_conflict instead, then tell the user. Use propose_change to suggest a contract change for a human to review.",
+  "architecture_diff shows what your change did to the system design (components and dependencies added or removed); system_status shows what is running, when the repository records it.",
 ].join(" ");
 
 const USAGE_HINT =
@@ -38,6 +41,8 @@ const NO_ARGUMENTS: JsonObject = { type: "object", additionalProperties: false }
 const CACHE_TTL_MS = 2_000;
 const MAX_FINDINGS = 20;
 const MAX_LOCATIONS = 5;
+const MAX_DIFF_ENTRIES = 100;
+const STATUS_MAX_AGE_MINUTES = 30;
 
 export interface ToolDeps {
   root: string;
@@ -244,6 +249,91 @@ export function createTools(deps: ToolDeps): McpTool[] {
     };
   }
 
+  async function systemStatus(): Promise<ToolOutcome> {
+    const snap = await snapshot();
+    const blueprint = blueprintOf(snap);
+    const monitored = blueprint.components.filter((component) => component.runtime);
+    const file = await readStatusFile(deps.root);
+    if (file.state !== "ok") {
+      const note =
+        file.state === "invalid"
+          ? `${STATUS_PATH} is not a valid status file (${file.message}). Treat every component as unknown.`
+          : monitored.length
+            ? `No status has been recorded yet (${STATUS_PATH} is missing). A person or CI records it with "rassam status --write"; until then the state of every component is unknown.`
+            : "No component declares runtime in the blueprint, so nothing is monitored. This says nothing about whether the system is running.";
+      return {
+        structured: asJson({ available: false, monitored: monitored.length, summary: summarizeStatus(null, blueprint), components: monitored.map((component) => ({ id: component.id, name: component.name, state: "unknown" })), note }),
+      };
+    }
+    const { status } = file;
+    const current = now();
+    const stale = isStale(status, current, STATUS_MAX_AGE_MINUTES);
+    const checked = Date.parse(status.checkedAt);
+    const ageMinutes = Number.isFinite(checked) ? Math.max(0, Math.round((current.getTime() - checked) / 60_000)) : null;
+    const ids = [...new Set([...monitored.map((component) => component.id), ...Object.keys(status.components)])].sort();
+    const names = new Map(blueprint.components.map((component) => [component.id, component.name]));
+    return {
+      structured: asJson({
+        available: true,
+        checkedAt: status.checkedAt,
+        commit: status.commit,
+        ageMinutes,
+        stale,
+        monitored: monitored.length,
+        summary: summarizeStatus(status, blueprint),
+        components: ids.map((id) => {
+          const entry = status.components[id];
+          return { id, name: names.get(id) ?? id, state: entry?.state ?? "unknown", source: entry?.source, detail: entry?.detail, latencyMs: entry?.latencyMs, checkedAt: entry?.checkedAt };
+        }),
+        note: stale
+          ? `This status is ${ageMinutes === null ? "of unknown age" : `${ageMinutes} minutes old`}: treat every state as unknown until it is refreshed with "rassam status --write".`
+          : "Recorded by the last probe run. It can be minutes old; it is not a live reading.",
+      }),
+    };
+  }
+
+  async function architectureDiff(args: JsonObject): Promise<ToolOutcome> {
+    invalidate();
+    const snap = await snapshot();
+    blueprintOf(snap);
+    if (!snap.context.isGit) throw new ToolError("This directory is not a git repository, so there is no base to compare the architecture with.");
+    const requested = typeof args.base === "string" && args.base.trim() ? args.base.trim() : undefined;
+    const base = requested ?? (await defaultBaseRef(deps.root)) ?? undefined;
+    if (!base) throw new ToolError("No base branch found (origin/main, main, ...). Pass base, e.g. HEAD~1 or origin/main.");
+    let comparison;
+    try {
+      comparison = await compareArchitecture(snap.context, base, snap.workspace.graphView());
+    } catch (error) {
+      if (error instanceof CliError) throw new ToolError(`${error.message}${error.hint ? ` ${error.hint}` : ""}`);
+      throw error;
+    }
+    const { diff } = comparison;
+    if (!diff) {
+      return {
+        structured: asJson({
+          base: { ref: base, sha: comparison.sha },
+          comparable: false,
+          changed: false,
+          summary: `The blueprint at the base commit is ${comparison.baseBlueprint}, so there is no earlier architecture to compare with.`,
+        }),
+      };
+    }
+    const cut = <T>(items: T[]): T[] => items.slice(0, MAX_DIFF_ENTRIES);
+    const more = [diff.components.added, diff.components.removed, diff.edges.added, diff.edges.removed, diff.edges.statusChanged].reduce((sum, items) => sum + Math.max(0, items.length - MAX_DIFF_ENTRIES), 0);
+    return {
+      structured: asJson({
+        base: { ref: base, sha: comparison.sha },
+        comparable: true,
+        changed: diff.changed,
+        summary: diff.changed ? `Since ${base}: ${diff.summary}.` : `No architecture changes since ${base}.`,
+        components: { added: cut(diff.components.added), removed: cut(diff.components.removed) },
+        edges: { added: cut(diff.edges.added), removed: cut(diff.edges.removed), statusChanged: cut(diff.edges.statusChanged) },
+        moreEntries: more || undefined,
+        note: "Uncommitted and untracked files are included. An edge that became undeclared or forbidden is a violation: run check_changes for the findings.",
+      }),
+    };
+  }
+
   async function listDecisions(args: JsonObject): Promise<ToolOutcome> {
     const snap = await snapshot();
     const blueprint = blueprintOf(snap);
@@ -354,6 +444,24 @@ export function createTools(deps: ToolDeps): McpTool[] {
       inputSchema: objectSchema({ component: text("Only decisions that apply to this component id", 80) }),
       annotations: READ_ONLY,
       handler: listDecisions,
+    },
+    {
+      name: "architecture_diff",
+      title: "What my change did to the architecture",
+      description:
+        "Structural diff of the system design: which components and dependencies the working tree added, removed or changed status (declared, undeclared, forbidden, no longer observed) compared with base (default: the repository's default branch), plus one sentence summarizing it. Use it to tell the user what your change did to the architecture. It reports structure only; check_changes reports violations.",
+      inputSchema: objectSchema({ base: text("Git ref to compare with, e.g. origin/main or HEAD~1", 200) }),
+      annotations: READ_ONLY,
+      handler: architectureDiff,
+    },
+    {
+      name: "system_status",
+      title: "What is running",
+      description:
+        "Runtime status recorded in .rassam/status.json by \"rassam status --write\" (usually in CI): overall summary and, per component that declares runtime, its state (up, degraded, down, unknown), the signal it came from (health check, deployment, workflow) and when it was checked. Includes how old the data is and whether it is stale. Read-only: it never probes anything itself.",
+      inputSchema: NO_ARGUMENTS,
+      annotations: READ_ONLY,
+      handler: systemStatus,
     },
     {
       name: "propose_change",

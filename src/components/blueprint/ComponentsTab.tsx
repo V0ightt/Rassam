@@ -252,13 +252,13 @@ function ComponentEditor({
             : <VerifyControl targetLabel={component.name} verified={component.verified} onVerify={onVerify} />}
 
           {summary && (summary.dependsOn.length > 0 || summary.dependents.length > 0) && (
-            <p className="text-[11px] leading-4 text-slate-400">
+            <p className="text-xs leading-4 text-slate-400">
               Depends on {summary.dependsOn.length} · used by {summary.dependents.length} · {summary.rules.length} {summary.rules.length === 1 ? 'rule' : 'rules'}
             </p>
           )}
 
           {confirmDelete && impact ? (
-            <div role="alertdialog" aria-label={`Delete ${component.name}`} className="space-y-2 rounded-md border border-red-500/40 bg-red-500/5 p-2 text-[11px] leading-4 text-red-100">
+            <div role="alertdialog" aria-label={`Delete ${component.name}`} className="space-y-2 rounded-md border border-red-500/40 bg-red-500/5 p-2 text-xs leading-4 text-red-100">
               <p>
                 Delete <strong>{component.name}</strong>? This also removes {impact.dependencies} declared {impact.dependencies === 1 ? 'dependency' : 'dependencies'}
                 {impact.rulesDropped.length > 0 && <>, drops {impact.rulesDropped.length === 1 ? 'rule' : 'rules'} {impact.rulesDropped.join(', ')}</>}
@@ -328,7 +328,7 @@ export default function ComponentsTab({ session, ui }: { session: BlueprintSessi
   return (
     <div className="space-y-3 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] leading-4 text-slate-400">
+        <p className="text-xs leading-4 text-slate-400">
           {blueprint.components.length} {blueprint.components.length === 1 ? 'component' : 'components'}
           {withoutIntent > 0 && <span className="text-amber-200"> · {withoutIntent} without intent</span>}
         </p>
@@ -358,20 +358,20 @@ export default function ComponentsTab({ session, ui }: { session: BlueprintSessi
                       <span className="truncate text-xs font-medium text-slate-100">{component.name}</span>
                       <ProvenanceBadge fact={component} />
                     </span>
-                    <span className="mt-0.5 block text-[11px] text-slate-500">
+                    <span className="mt-0.5 block text-xs text-slate-500">
                       {component.kind} · {component.external ? 'external' : `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`}
                     </span>
                   </span>
                 </button>
                 <div className="px-2 pb-2 pl-[31px]">
                   {intent ? (
-                    <p className="line-clamp-2 text-[11px] leading-4 text-slate-300">{intent}</p>
+                    <p className="line-clamp-2 text-xs leading-4 text-slate-300">{intent}</p>
                   ) : (
                     <button
                       type="button"
                       onClick={() => ui.selectComponent(component.id, { focusIntent: true })}
                       aria-label={`Write intent for ${component.name}`}
-                      className="inline-flex min-h-7 items-center gap-1.5 rounded-md border border-amber-400/60 bg-amber-400/10 px-2.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-400/20"
+                      className="inline-flex min-h-7 items-center gap-1.5 rounded-md border border-amber-400/60 bg-amber-400/10 px-2.5 text-xs font-semibold text-amber-100 hover:bg-amber-400/20"
                     >
                       <PencilLine size={12} aria-hidden="true" /> Write intent
                     </button>

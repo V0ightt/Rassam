@@ -109,7 +109,8 @@ export interface BlueprintOverview {
 export type GraphEdgeStatus = "declared" | "undeclared" | "forbidden" | "missing";
 
 export interface WorkspaceGraphView {
-  components: Array<{ id: string; name: string; kind?: string; external?: boolean; findings?: number }>;
+  /** `files` is the number of files the component owns in the analyzed snapshot. */
+  components: Array<{ id: string; name: string; kind?: string; external?: boolean; findings?: number; files?: number }>;
   edges: Array<{ from: string; to: string; status: GraphEdgeStatus; count?: number }>;
 }
 
@@ -467,6 +468,7 @@ export function createWorkspace(files: SourceFile[], blueprint: Blueprint | null
         kind: component.kind,
         external: Boolean(component.external),
         findings: findingCounts.get(component.id) ?? 0,
+        files: membership.componentFiles.get(component.id)?.length ?? 0,
       })),
       edges,
     };

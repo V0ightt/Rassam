@@ -42,3 +42,7 @@ next-env.d.ts
 
 # local caches (repository mirrors, tool caches)
 /.cache/
+
+# playwright output
+/test-results/
+/playwright-report/

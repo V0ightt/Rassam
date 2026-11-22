@@ -271,7 +271,7 @@ function RuleEditor({
                 onChange={(next) => set('layers', form.layers.map((item, position) => (position === index ? next : item)))}
               />
               {form.layers.length > 2 && (
-                <button type="button" className="text-[11px] text-slate-400 hover:text-red-200" onClick={() => set('layers', form.layers.filter((_, position) => position !== index))}>
+                <button type="button" className="text-xs text-slate-400 hover:text-red-200" onClick={() => set('layers', form.layers.filter((_, position) => position !== index))}>
                   Remove layer {index + 1}
                 </button>
               )}
@@ -382,7 +382,7 @@ export default function RulesTab({ session, ui }: { session: BlueprintSession; u
   return (
     <div className="space-y-3 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-slate-400">{blueprint.rules.length} {blueprint.rules.length === 1 ? 'rule' : 'rules'}</p>
+        <p className="text-xs text-slate-400">{blueprint.rules.length} {blueprint.rules.length === 1 ? 'rule' : 'rules'}</p>
         <button type="button" className={secondaryButtonClass} onClick={() => setCreating(true)}>
           <Plus size={13} aria-hidden="true" /> Add rule
         </button>
@@ -402,13 +402,13 @@ export default function RulesTab({ session, ui }: { session: BlueprintSession; u
                 <span className="flex flex-wrap items-center gap-1.5">
                   <SeverityBadge severity={ruleSeverity(rule)} />
                   <ProvenanceBadge fact={rule} />
-                  <code className="truncate font-mono text-[10px] text-slate-500">{rule.id}</code>
+                  <code className="truncate font-mono text-xs text-slate-500">{rule.id}</code>
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-slate-100">{summarizeRule(rule)}</span>
                 {rule.reason?.trim() ? (
-                  <span className="mt-1 block border-l-2 border-cyan-400/60 pl-2 text-[11px] italic leading-4 text-slate-300">“{rule.reason}”</span>
+                  <span className="mt-1 block border-l-2 border-cyan-400/60 pl-2 text-xs italic leading-4 text-slate-300">“{rule.reason}”</span>
                 ) : (
-                  <span className="mt-1 block text-[11px] font-medium text-amber-200">No reason yet. Say why this rule exists.</span>
+                  <span className="mt-1 block text-xs font-medium text-amber-200">No reason yet. Say why this rule exists.</span>
                 )}
               </button>
             </li>

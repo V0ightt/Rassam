@@ -196,7 +196,7 @@ test('the canvas model answers the three questions', () => {
 test('the inspector summarises a component and makes writing intent the main action', async () => {
   const user = userEvent.setup();
   const session = makeSession(makeBlueprint());
-  const onWriteIntent = vi.fn();
+  const onSaveIntent = vi.fn();
   const onOpenEdge = vi.fn();
   render(
     <BlueprintInspector
@@ -205,13 +205,16 @@ test('the inspector summarises a component and makes writing intent the main act
       edgeStatus={() => null}
       onSelectComponent={() => undefined}
       onOpenEdge={onOpenEdge}
-      onWriteIntent={onWriteIntent}
+      onSaveIntent={onSaveIntent}
       onClose={() => undefined}
     />,
   );
   const panel = screen.getByRole('complementary', { name: 'API details' });
+  // Writing intent happens in place: the main action opens the field, saving reports the text.
   await user.click(within(panel).getByRole('button', { name: 'Write intent' }));
-  assert.equal(onWriteIntent.mock.calls.length, 1);
+  await user.type(within(panel).getByRole('textbox', { name: 'Intent of API' }), 'Handles requests.');
+  await user.click(within(panel).getByRole('button', { name: 'Save intent' }));
+  assert.deepEqual(onSaveIntent.mock.calls, [['Handles requests.']]);
 
   const dependsOn = within(panel).getByRole('region', { name: 'Depends on' });
   await user.click(within(dependsOn).getByRole('button', { name: /API to Billing: undeclared/ }));
@@ -220,20 +223,45 @@ test('the inspector summarises a component and makes writing intent the main act
   assert.ok(within(panel).getAllByText('src/api/handler.ts', { selector: 'code' }).length > 0, 'files are named even when they cannot be opened');
 });
 
-test('without a blueprint the canvas explains how to get one and leaves map shortcuts alone', async () => {
-  const user = userEvent.setup();
+test('without a blueprint the canvas draws nothing and leaves map shortcuts alone', () => {
+  // How to open a source is the start screen's job (see studio/Studio.test.tsx).
   const spies = makeSpies();
-  const onRevealPanel = vi.fn();
   const { container } = render(
     <Harness spies={spies} initial={null}>
-      {(session, ui) => <BlueprintCanvas session={session} ui={ui} onRevealPanel={onRevealPanel} />}
+      {(session, ui) => <BlueprintCanvas session={session} ui={ui} />}
     </Harness>,
   );
-  assert.ok(screen.getByRole('heading', { name: 'No blueprint is open' }));
+  assert.equal(container.querySelector('[data-canvas-shortcuts="on"]'), null);
+  assert.equal(screen.queryByRole('heading'), null);
+});
+
+test('an empty blueprint says what to do first, with map shortcuts off', () => {
+  const spies = makeSpies();
+  const empty = makeBlueprint({ version: '0.1', system: { name: 'Empty' }, components: [], dependencies: [], rules: [], invariants: [], decisions: [] });
+  const { container } = render(
+    <Harness spies={spies} initial={empty}>
+      {(session, ui) => <BlueprintCanvas session={session} ui={ui} />}
+    </Harness>,
+  );
+  assert.ok(screen.getByRole('heading', { name: 'This blueprint has no components yet' }));
   assert.equal(container.querySelector('[data-canvas-shortcuts="on"]'), null);
   assert.ok(container.querySelector('[data-canvas-shortcuts="off"]'));
-  await user.click(screen.getByRole('button', { name: 'Open Blueprint panel' }));
-  assert.equal(onRevealPanel.mock.calls.length, 1);
-  await user.click(screen.getByRole('button', { name: 'Open local folder' }));
-  assert.equal(spies.openLocalFolder.mock.calls.length, 1);
+});
+
+test('a ruling drawn on the Studio canvas is staged as a proposal instead of applied', async () => {
+  const user = userEvent.setup();
+  const spies = makeSpies();
+  const onPropose = vi.fn();
+  const onClose = vi.fn();
+  render(
+    <Harness spies={spies}>
+      {(session, ui) => <EdgePrompt target={{ from: 'api', to: 'db', status: 'new' }} session={session} ui={ui} onClose={onClose} onPropose={onPropose} />}
+    </Harness>,
+  );
+  await user.click(screen.getByRole('button', { name: 'Declare dependency' }));
+  assert.deepEqual(onPropose.mock.calls[0], [[{ op: 'declare_dependency', from: 'api', to: 'db' }], 'Declare API → Database']);
+  await user.click(screen.getByRole('button', { name: 'Forbid dependency' }));
+  assert.deepEqual(onPropose.mock.calls[1], [[{ op: 'forbid_dependency', from: 'api', to: 'db' }], 'Forbid API → Database']);
+  assert.equal(spies.update.mock.calls.length, 0, 'nothing is applied until the preview is accepted');
+  assert.equal(onClose.mock.calls.length, 2);
 });

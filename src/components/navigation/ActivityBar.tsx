@@ -1,18 +1,17 @@
 'use client';
 
 import { memo, type ReactNode } from 'react';
+import Link from 'next/link';
 import { FolderOpen, Files, Settings, Menu, FileCode, ExternalLink, GitBranch, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ActivityPanel = 'projects' | 'explorer' | 'blueprint' | 'settings' | null;
+export type ActivityPanel = 'projects' | 'explorer' | 'settings' | null;
 
 interface ActivityBarProps {
   activePanel: ActivityPanel;
   onPanelChange: (panel: ActivityPanel) => void;
   projectCount?: number;
   cachedFileCount?: number;
-  /** Errors and warnings in the open blueprint's check report. */
-  blueprintAttentionCount?: number;
   /** Repo info shown at the bottom of the bar */
   repoDetails?: { owner: string; repo: string; fileCount?: number } | null;
   repoUrl?: string;
@@ -23,12 +22,11 @@ interface ActivityBarProps {
 const items: { id: ActivityPanel; icon: typeof FolderOpen; label: string }[] = [
   { id: 'projects', icon: FolderOpen, label: 'Projects' },
   { id: 'explorer', icon: Files, label: 'Explorer' },
-  { id: 'blueprint', icon: ShieldCheck, label: 'Blueprint' },
   { id: 'settings', icon: Settings, label: 'Settings' },
 ];
 
 function ActivityBar({
-  activePanel, onPanelChange, projectCount, cachedFileCount, blueprintAttentionCount,
+  activePanel, onPanelChange, projectCount, cachedFileCount,
   repoDetails, repoUrl, exportSlot,
 }: ActivityBarProps) {
   return (
@@ -74,12 +72,6 @@ function ActivityBar({
                 {projectCount}
               </span>
             )}
-            {/* Badge for blueprint findings that need a ruling */}
-            {id === 'blueprint' && blueprintAttentionCount != null && blueprintAttentionCount > 0 && (
-              <span className="absolute top-1 right-1.5 min-w-[14px] h-[14px] bg-amber-500 text-slate-950 text-[8px] font-semibold rounded-full flex items-center justify-center px-0.5 leading-none">
-                {blueprintAttentionCount > 99 ? '99+' : blueprintAttentionCount}
-              </span>
-            )}
             {/* Badge for cached files */}
             {id === 'explorer' && cachedFileCount != null && cachedFileCount > 0 && (
               <span className="absolute top-1 right-1.5 min-w-[14px] h-[14px] bg-green-500 text-white text-[8px] rounded-full flex items-center justify-center px-0.5 leading-none">
@@ -89,6 +81,16 @@ function ActivityBar({
           </button>
         );
       })}
+
+      {/* The blueprint lives in the Studio now */}
+      <Link
+        href="/"
+        className="relative w-full flex items-center justify-center py-2.5 text-slate-500 hover:text-slate-300 transition-colors"
+        title="Studio: blueprint and live system design"
+        aria-label="Open the Studio (blueprint)"
+      >
+        <ShieldCheck size={20} />
+      </Link>
 
       {/* ── Spacer ── */}
       <div className="flex-1" />
