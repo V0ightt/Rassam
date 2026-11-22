@@ -41,6 +41,13 @@ jobs:
   browser-smoke:
     runs-on: ubuntu-latest
     needs: quality
+    # The production server fails closed without signing secrets. These are
+    # throwaway values for the smoke test only; real deployments set their own.
+    env:
+      RASSAM_DEPLOYMENT_PROFILE: local
+      APP_ORIGIN: http://127.0.0.1:3000
+      SESSION_SIGNING_SECRET: ci-smoke-session-secret-not-used-anywhere-else-0001
+      SOURCE_GRANT_SECRET: ci-smoke-source-grant-secret-not-used-anywhere-else-02
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -846,6 +846,9 @@ export function useProjects(params: UseProjectsParams) {
                     activeProjectIdRef.current = newProject.id;
                     setProjects(nextProjects);
                     activateProject(newProject);
+                    // Persist now rather than after the debounce: a reload right
+                    // after importing must not lose the new project.
+                    void flushProject(newProject.id).catch(() => undefined);
                     setShowCreateProjectModal(false);
                     setShowProjectList(false);
                     setError(null);
@@ -857,7 +860,7 @@ export function useProjects(params: UseProjectsParams) {
             reader.onerror = () => setImportError('Failed to read the file.');
             reader.readAsText(file);
         },
-        [activateProject, flushActiveProject, waitForStorageInitialization],
+        [activateProject, flushActiveProject, flushProject, waitForStorageInitialization],
     );
 
     const handleCreateEmptyProject = useCallback(async () => {
