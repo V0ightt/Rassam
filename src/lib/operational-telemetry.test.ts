@@ -15,7 +15,7 @@ function compileTimePrivacyBoundary() {
   const forbidden: OperationalEventInput = {
     event: "request.completed",
     requestId: "00000000-0000-4000-8000-000000000001",
-    route: "/api/chat",
+    route: "/api/blueprint",
     method: "POST",
     status: 200,
     outcome: "success",
@@ -34,7 +34,7 @@ describe("operational telemetry privacy boundary", () => {
     const emitted = emitOperationalEvent({
       event: "upstream.completed",
       requestId: "00000000-0000-4000-8000-000000000001",
-      route: "/api/chat",
+      route: "/api/blueprint",
       upstream: "openai",
       operation: "chat",
       outcome: "success",
@@ -68,7 +68,7 @@ describe("operational telemetry privacy boundary", () => {
     const unsafe = {
       event: "request.completed",
       requestId: "00000000-0000-4000-8000-000000000001",
-      route: "/api/chat",
+      route: "/api/blueprint",
       method: "POST",
       status: 200,
       outcome: "success",
@@ -89,7 +89,7 @@ describe("operational telemetry privacy boundary", () => {
     const invalidModel = {
       event: "upstream.completed",
       requestId: "00000000-0000-4000-8000-000000000001",
-      route: "/api/chat",
+      route: "/api/blueprint",
       upstream: "openai",
       operation: "chat",
       outcome: "success",

@@ -9,7 +9,7 @@ Read this before making changes. Rassam is checked against its own architecture 
 1. **The blueprint** (`.rassam/blueprint.json`, spec in `docs/blueprint-spec.md`, schema in `src/blueprint/schema.ts`): components and the files they own, human-written intent, declared dependencies, rules, invariants, decisions and sign-offs.
 2. **The engine** (`src/blueprint/`): import graph, component membership, rule evaluation, the change gate, reach analysis and report rendering. It must stay isomorphic: no `node:` imports, no DOM, no React/Next, no imports from the rest of the app. Only `zod`.
 3. **The Node host** (`src/cli/`): the `rassam` CLI, git and GitHub Actions integration, and the dual-era MCP server. Bundled to `action/dist/rassam.mjs` (`npm run build:cli`; CI checks the bundle is fresh).
-4. **The web workbench** (Next.js app): the Blueprint view (`src/components/blueprint/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `POST /api/blueprint`) and the original Map view with evidence inspector and the Rassam chat.
+4. **The Studio** (Next.js app at `/`): one screen that answers "is the project on track?" for a local folder or a public GitHub repository (`src/components/studio/`, `src/components/blueprint/`, `src/components/ui/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `src/lib/blueprint-intent/`, `src/app/api/blueprint/**`, `src/app/api/live/**`), plus a settings page for the optional model.
 
 ### Engine module map (`src/blueprint/`)
 
@@ -42,276 +42,69 @@ Read this before making changes. Rassam is checked against its own architecture 
 
 ---
 
-# Map workspace (original view)
+# The Studio (web app)
 
-The sections below describe the original map workspace, which remains available as the **Map** view.
+## Tech stack
 
-## Tech Stack
+-   **Framework**: Next.js 16 (App Router), React 19, TypeScript
+-   **Styling**: Tailwind CSS v4 with design tokens in `src/app/globals.css` (dark and light themes, iris accent)
+-   **Canvas**: React Flow, with dagre for components that have no saved position
+-   **Browser storage**: Dexie (IndexedDB database `rassam-blueprints`) for drafts, layout and folder handles; localStorage for preferences
+-   **GitHub**: Octokit, public repositories only, always at a pinned commit
+-   **AI (optional)**: provider adapters for DeepSeek, OpenAI, Anthropic, Google and Ollama, used only by "tell Rassam what to change" when the built-in parser does not understand a request
 
--   **Framework**: Next.js 16 (App Router)
--   **Language**: TypeScript
--   **Styling**: Tailwind CSS v4 (Dark Theme with Cyan accents)
--   **Visualization**: React Flow (Graph/Node rendering)
--   **Layout Engine**: Dagre (Auto-layout with improved spacing for system design)
--   **AI**: LLM provider abstraction (DeepSeek, OpenAI, Anthropic, Google, Ollama) via adapters
--   **GitHub API**: Octokit
--   **Markdown**: React Markdown + React Syntax Highlighter
--   **Export**: html-to-image
--   **Storage**: IndexedDB (file content cache per project via `file-store.ts`)
+## How a session flows
 
-## Architecture & Data Flow
+1.  **Open a source** (`StartScreen.tsx`, `useSourceActions.ts`): paste a GitHub URL, open a local folder, or try the bundled sample (`sample.ts`).
+    -   GitHub: `POST /api/blueprint/open` resolves the repository to a pinned commit and returns a signed source grant; `POST /api/blueprint` downloads that commit, builds the engine's file graph and returns a compact snapshot plus the repository's `.rassam/blueprint.json` (or nothing, and the browser derives a draft).
+    -   Local folder: `src/lib/blueprint-client/local-folder.ts` reads the folder through the File System Access API; analysis runs in `src/workers/blueprint-analysis.worker.ts`. Files never leave the machine.
+2.  **Check** (`src/hooks/useBlueprint.ts`): the hook owns the session. It runs the engine against the draft on every edit, so findings, health and reach update instantly.
+3.  **Read** (`Studio.tsx`): five persistent elements only: source pill, health pill, canvas, intent bar, zoom cluster. Sheets (`AttentionSheet.tsx`, `SourceSheet.tsx`) and the inspector open on demand.
+4.  **Change**: the intent bar parses the sentence in the browser with the deterministic parser (`src/blueprint/intent.ts`). Only when the parser does not understand, and a model is selected in Settings, `POST /api/blueprint/edit` asks that exact provider and model (`src/lib/blueprint-intent/`: prompt building, tolerant JSON extraction, schema validation, dry run). Every change becomes a **proposal** drawn on the canvas (`ProposalCard.tsx`); nothing touches the draft until the person applies it, and every applied change is one undo step.
+5.  **Save**: local folders are written back into the repository (`.rassam/blueprint.json`, layout in a separate file); GitHub projects download the file.
+6.  **Stay live**: `POST /api/blueprint/commits` feeds the commit timeline and the optional watch; `/api/live/{owner}/{repo}/badge.svg` and `system.svg` serve the README badge and diagram.
 
-1.  **User Input**: User enters a GitHub URL on the client (`src/app/page.tsx`) or via Projects sidebar.
-  -   New project creation supports **three modes** from Projects sidebar `+`: 
-    - **From GitHub URL** (repo analysis + auto-generated nodes/edges)
-    - **Empty Project** (blank editable canvas for custom architecture design)
-    - **From JSON File** (import a previously exported JSON to create a new project)
-  -   The top-center URL input bar and Visualize button have been removed in favor of the Projects sidebar workflow.
-2.  **API Request**: Application sends POST request to `/api/repo`.
-  -   Settings UI sends GET request to `/api/settings/models` for provider/model availability and validation status.
-  -   File Explorer sends POST to `/api/files` to fetch individual file contents from GitHub.
-3.  **Data Fetching** (`src/lib/github.ts`):
-    -   Fetches the recursive file tree using GitHub API.
-    -   Filters for relevant file types (blobs).
-    -   Supports fetching file content (used by chat for README.md and specific file queries).
-4.  **AI Analysis** (`src/lib/ai.ts`):
-  -   Sends the file list to the selected LLM provider adapter.
-    -   Prompt asks strictly for a JSON output containing `nodes` (with category, complexity, dependencies) and `edges` (with type, direction, and strength).
-    -   Supports system design categories for architectural diagrams.
-5.  **Graph Layout** (`src/app/api/repo/route.ts`):
-    -   Receives AI JSON.
-    -   Uses `dagre` to calculate X/Y coordinates for all nodes to ensure a clean flowchart.
-6.  **Rendering**:
-    -   `ReactFlow` renders the graph using node types from `NodeTypes.tsx`.
-    -   Custom edges from `CustomEdge.tsx` provide styled connections.
-    -   Custom FlowControls (no legacy +/- buttons).
-7.  **Interaction**:
-    -   The left side has a **VS Code-style Activity Bar** (`ActivityBar.tsx`) with icons for Projects, File Explorer, and Settings. This bar is **permanent on all pages** (main canvas and settings). Clicking an icon toggles the corresponding panel; on the settings page, clicking Projects or Explorer navigates back to the main page.
-    -   The opened left-side Activity panel (Projects/File Explorer) is **resizable by dragging** its vertical divider.
-    -   The Activity Bar bottom section displays:
-        -   **Export/Import** button (compact icon) for PNG, SVG, JSON export and JSON import
-        -   **Repo stats**: project name, file count, and GitHub link (when a repo-based project is active)
-    -   Clicking a node sets it as `selectedNode`.
-    -   **Multi-select**: Hold **Shift** and click nodes to add/remove from selection, or **Shift+drag** on the canvas to rubber-band select multiple nodes. The batch toolbar appears when 2+ nodes are selected, enabling bulk delete and category changes.
-    -   **Clipboard**: **Ctrl+C** copies selected node(s) (and edges fully within the selection) to an in-memory clipboard. **Ctrl+V** pastes them at a +60px offset with new IDs.
-    -   **Undo / Redo**: **Ctrl+Z** undoes the last canvas change (up to 10 steps). **Ctrl+Shift+Z** or **Ctrl+Y** redoes. Any new edit clears the redo (future) stack.
-    -   **Inline editing**: **Double-click** a node's label or description to edit it in-place. Press **Enter** to commit, **Escape** to cancel.
-    -   Canvas sync is **automatic**. A canonical snapshot of current flowchart state (nodes, edges, relationships, positions, selected node, layout direction) is refreshed after canvas edits and selection changes.
-    -   Chat prefers the latest synced snapshot, but automatically switches to live canvas context whenever the canvas has changed more recently than the last completed auto-sync.
-    -   Undo/redo restores also trigger auto-sync, so chat context follows history changes without extra user action.
-    -   `EnhancedChatbot.tsx` (Rassam) in the sidebar receives the `selectedNode` data as context.
-    -   Chat includes selected provider/model plus generation settings (max tokens, temperature).
-    -   Chat sends **full conversation history** (up to last 20 messages) with each request, giving the LLM multi-turn memory for follow-up questions.
-    -   Chat API (`/api/chat`) fetches README.md and file content, validates model/provider availability, sanitizes conversation history, receives up to **2000** available blob paths from the active project, and runs the chat agent loop.
-    -   Chat now supports **two modes**: `ask` (read + session inspection tools only) and `agent` (read + session + canvas write/write_batch tools).
-    -   Tool calls are streamed as structured NDJSON events (`status`, `text`, `write`, `error`, `done`), and the client renders tool progress inline in the assistant reply.
-    -   `write` tool events mutate the live React Flow canvas client-side and the synced AI snapshot is refreshed automatically shortly after the canvas settles.
-    -   Agent-mode **write-intent** turns are transactional: if planner + fallback/repair apply zero successful writes, the turn emits an explicit failure and does not degrade into a normal assistant explanation.
-    -   Successful agent-mode mutation turns end with a **deterministic operation summary** generated from applied canvas writes, not a second open-ended LLM completion.
-    -   Chat message updates are **session-scoped**: an in-flight streamed reply keeps writing to the originating project/chat session even if the user switches to another chat before the stream finishes.
-    -   Before sending a chat request, the client collects **cached file contents** (from IndexedDB) relevant to the selected node and the user's query, and sends them as `cachedFiles` in the payload.
-    -   The API route prefers cached file contents over GitHub fetches for README.md and specific file queries, and file resolution now supports exact path, case-insensitive path, unique basename, and unique suffix/contains matches. Ambiguous matches return candidates instead of guessing.
-    -   The AI system prompt includes a `CACHED FILE CONTENTS` section when cached files are available, enabling deeper code-aware answers.
-    -   Large file context is summarized in a file-type-aware way instead of prefix-only truncation. HTML summaries keep title, DOM ids/classes, inline scripts, event-listener hints, and head/tail excerpts so bottom-of-file scripts remain visible to the agent.
-    -   The frontend reads the stream incrementally and updates the chat UI in real time, providing a typewriter-style experience.
-    -   **Streaming cancellation**: An `AbortController` backs every chat request. While streaming, the Send button becomes a red **Stop** button (`Square` icon) that aborts the fetch—partially streamed content is kept in the chat.
-
-## Key Directories & Files
+## Key directories and files
 
 ### `src/app`
--   `page.tsx`: Thin orchestration shell. Wires together extracted hooks (`useProjects`, `useCanvasHistory`, `useClipboard`, `useCanvasShortcuts`, `useResizablePane`, `useFileExplorer`, `useEditorTabs`) and the ReactFlow canvas. Wrapped in `ReactFlowProvider` and `ErrorBoundary`.
-  -   Owns only React Flow core state (`useNodesState`, `useEdgesState`), local canvas UI state (selected nodes, minimap, snap-to-grid, layout direction), Activity Bar panel state, editor tab state, and canvas-specific handlers (node CRUD, search, layout change).
-  -   Tracks `canvasLastModifiedAt` so chat can prefer live canvas context whenever the user or agent has modified the canvas since the last completed auto-sync.
-  -   All project/chat lifecycle, persistence, history, clipboard, keyboard shortcuts, pane resizing, file explorer, and editor tabs are delegated to hooks.
-  -   The top-center floating header (URL input, Visualize button) and repo info badge have been removed. Export/import and repo stats are now in the ActivityBar bottom section.
-  -   A **TabBar** is always visible above the main content area. Canvas is the default tab; clicking files in the explorer opens them in new tabs with syntax-highlighted code.
-  -   Chat visibility is controlled from a **Chat** button in the TabBar (top-right). Closing chat hides the entire right pane (no collapsed mini sidebar).
--   `settings/page.tsx`: Global AI settings page. Manages enabled models, selected chat model, max output tokens, and temperature.
--   `globals.css`: Global styles, custom scrollbar, React Flow customizations.
--   `api/repo/route.ts`: Orchestrates fetching, analyzing, and layouting. Returns file tree alongside nodes/edges. Supports PUT for re-layout.
--   `api/chat/route.ts`: Streaming endpoint for the chatbot. Detects file queries, validates the selected mode/provider, uses `cachedFiles` plus `availableFiles` from client when available, resolves filenames against project blob paths, falls back to GitHub when needed, and returns NDJSON chat events for streamed text, tool status, and live canvas write operations.
--   `api/files/route.ts`: POST endpoint that fetches a single file's content from GitHub via Octokit. Used by the File Explorer to populate the IndexedDB cache.
--   `api/settings/models/route.ts`: Returns provider metadata and live availability checks used by Settings and chat selector.
-
-### `src/lib`
--   `ai.ts`: Core AI logic. Contains `analyzeRepoStructure` for node generation, `chatStreamWithContext` for streaming chat responses, and `buildSystemMessage` helper to construct the system prompt (shared between streaming and non-streaming paths). Accepts optional `cachedFiles` to enrich system prompt with file contents from the local store, and uses file-type-aware summaries for large non-README file context.
--   `chat-agent.ts`: Chat agent orchestration for ask/agent modes. Plans tool calls, executes `read`, `session`, `write`, and `write_batch` tools, maintains per-turn working canvas state, emits structured stream events consumed by the chat UI, and treats explicit write-intent turns as transactional mutation turns. Supports up to 25 planning steps per turn with up to 3 retries per step for write-needed scenarios. `write_batch` accepts an array of operations (nodes first, then edges), executes them in order, and auto-layouts all nodes using dagre. Planner/fallback calls request structured JSON where supported, run a single repair pass for invalid write-plan output, and end successful mutation turns with deterministic summaries.
--   `github.ts`: Octokit client. Handles `getRepoStructure` and `getFileContent`. Uses `GITHUB_TOKEN` env var for authenticated requests (validates token format before use).
--   `file-store.ts`: IndexedDB wrapper for per-project file content caching. Provides `cacheFile`, `getCachedFile`, `getCachedFiles`, `getCachedPaths`, and `clearProjectFiles`.
--   `import.ts`: JSON import utility. `parseAndValidateImportJson()` validates exported JSON, regenerates node/edge IDs to avoid collisions, applies defaults for missing fields, and derives project metadata.
--   `model-settings.ts`: Client-side settings schema + localStorage persistence helpers for model enablement and generation controls.
--   `llm/catalog.ts`: Provider catalog metadata, model lists, API key checks, and live provider validation helpers.
--   `llm/providers/OpenAICompatibleAdapter.ts`: Abstract base class for OpenAI-compatible LLM adapters. DeepSeek, Google, and Ollama adapters extend this to eliminate duplication.
--   `utils.ts`: `cn` helper for Tailwind class merging.
-
-### `src/types`
--   `index.ts`: TypeScript type definitions for `NodeCategory`, `NodeData`, `EdgeData`, `ChatMessage`, etc.
-
-### `src/hooks`
--   `useProjects.ts`: All project CRUD, chat-session management, canvas-sync snapshots, localStorage persistence, and create-project modal UI state. Stores file tree per project when created from GitHub. Returns a `proj` object consumed by `page.tsx`.
--   `useCanvasHistory.ts`: Undo/redo stack (up to 10 snapshots). Returns `saveToHistory`, `handleUndo`, `handleRedo`, `canUndo`, `canRedo`.
--   `useClipboard.ts`: Copy/paste of nodes (and their internal edges) with fresh-ID generation on paste.
--   `useCanvasShortcuts.ts`: Single `useEffect` registering all global keyboard shortcuts. Uses a ref to always read latest handler values without re-attaching listeners.
--   `useResizablePane.ts`: Mouse-drag resizable sidebar width with localStorage persistence.
--   `useFileExplorer.ts`: Manages file fetching, caching state, and batch fetch-all. Tracks `cachedPaths`, `fetchingPaths`, and provides `fetchFile` / `fetchAll` callbacks.
--   `useEditorTabs.ts`: Manages open file tabs state. Tracks open tabs, active tab, file contents (loaded from IndexedDB or fetched from GitHub API). Deduplicates in-flight file fetches and supports `openFile(filePath, prefetchedContent?)` so explorer-prefetched content opens without duplicate network work. Provides `openFile`, `selectTab`, `closeTab`, `closeAllTabs`. Canvas is always the first tab and cannot be closed.
+-   `page.tsx`: mounts the Studio client-side. Thin wiring only.
+-   `settings/page.tsx`: provider and model selection for the optional model path. Reads `GET /api/settings/models`; "Test model" posts the exact selection.
+-   `layout.tsx`, `globals.css`: fonts, theme boot script, design tokens.
+-   `api/blueprint/**`: `open`, the snapshot route, `commits`, `edit`. `api/live/**`: badge and system-design SVGs. `api/settings/models`, `api/health`, `api/readiness`.
+-   Every route validates its body with zod (`src/lib/api-request.ts`, `src/lib/contracts.ts`), goes through `guardApiRequest` in `src/lib/request-security.ts`, and answers errors with the JSON envelope from `src/lib/api-error.ts`.
 
 ### `src/components`
--   `ErrorBoundary.tsx`: React class-based error boundary wrapping the main app. Prevents component crashes from blanking the entire page.
+-   `studio/`: the screen itself (see the flow above). `commands.ts` is the ">" command list of the intent bar; `health.ts` and `proposal.ts` are pure helpers.
+-   `blueprint/`: the canvas (`BlueprintCanvas.tsx`, `BlueprintNode.tsx`, `BlueprintEdge.tsx`, `useBlueprintCanvas.ts`), the inspector, and the manual editors behind progressive disclosure (`ComponentsTab`, `RulesTab`, `IntentTab`, `ReachTab`, `AttentionTab`). `kinds.ts` maps well-known component kinds to an icon and colour. `session.ts` is the contract these components code against; `useBlueprint` implements it.
+-   `ui/`: the design system (buttons, sheets, popovers, pills, status glyphs, toasts, theme). It depends on nothing else in the app. Status is never shown by colour alone.
 
-### `src/components/projects`
--   `ProjectSidebar.tsx`: Sidebar listing all projects with switch, delete, and create-new actions. Rendered inside the Activity Bar panel container.
--   `CreateProjectModal.tsx`: Modal with three tabs (GitHub URL, Empty Project, JSON Import) for creating new projects.
+### `src/hooks`
+-   `useBlueprint.ts`: session state: source, draft, history, proposals, receipts, live status, sync.
 
-### `src/components/canvas`
--   `NodeTypes.tsx`: Defines `EnhancedNode`, `CompactNode`, `GroupNode` with category-based styling. Supports both code and system design categories. `EnhancedNode` supports **double-click inline editing** of label and description via the `InlineEdit` component.
--   `NodeEditContext.tsx`: React context that provides `onUpdateNode` callback to node components, enabling inline editing without prop drilling.
--   `CustomEdge.tsx`: Custom edge component with draggable labels (uses ref to avoid stale closures), direction toggle (one-way/two-way arrows), delete button, and type-based coloring.
--   `ExportPanel.tsx`: Export functionality for PNG, SVG, JSON. Import JSON from dropdown (creates new project via `onImportProject` callback). Uses shared `exportAsImage` helper internally. Supports a `compact` prop for icon-only rendering with rightward dropdown (used in ActivityBar).
--   `EditToolbar.tsx`: Add, edit, delete nodes with modal forms. Undo/Redo buttons. Categories are grouped into "Code" and "System" sections.
-  -   Supports **multi-select batch operations**: when 2+ nodes are selected, shows a batch toolbar with "Delete N Nodes" and "Change Category" (applies chosen category to all selected nodes).
--   `FlowControls.tsx`: Search, zoom, layout options, minimap toggle, keyboard shortcuts panel.
-  -   Includes manual canvas **Sync** trigger to refresh AI context snapshot.
+### `src/lib`
+-   `blueprint-client/`: browser host for the engine (API clients, local folder access, drafts, layout, worker bridge).
+-   `blueprint-intent/`: prompt and answer handling for the model path. Pure text in, typed edits out; it never calls a provider.
+-   `github.ts`, `source-grant.ts`: the only code that talks to GitHub and holds `GITHUB_TOKEN`; signed grants bind repository and commit.
+-   `llm/`: provider catalog, registry and adapters. `chat-runtime.ts` resolves exactly the requested provider and model, with no silent fallback.
+-   `model-settings.ts`: the saved provider/model choice in localStorage. No credentials.
+-   `request-security.ts`, `api-error.ts`, `api-request.ts`, `operational-telemetry.ts`, `src/proxy.ts`: rate limits, sessions, origin checks, error envelope, privacy-bounded telemetry.
 
-### `src/components/navigation`
--   `ActivityBar.tsx`: VS Code-style vertical activity bar on the far left, **permanent across all pages**. Icons for Projects, File Explorer, and Settings. Bottom section shows Export button (compact ExportPanel), repo stats (project name, file count), and GitHub link. On the settings page, clicking non-settings icons navigates back to `/`.
+## Common tasks
 
-### `src/components/editor`
--   `TabBar.tsx`: VS Code-style tab bar for switching between the canvas and open file viewers. Tabs show file icons with extension-based colors, close buttons, and a "Close All" action. The Canvas tab is always present and cannot be closed. Exports `EditorTab` interface and `CANVAS_TAB` constant.
--   `FileViewer.tsx`: Read-only code viewer that keeps syntax highlighting enabled for supported languages regardless of file size. Uses virtualized line numbers and chunked highlighted rendering to keep scrolling smooth on large files while preserving highlighting. Detects language from file extension. Shows file path, language, and file size in a status bar. Displays loading and empty states.
+### Teaching the intent bar a new sentence
+-   Add the phrase to the deterministic parser in `src/blueprint/intent.ts` and its tests. Prefer this over prompt changes: the common commands must work with no model.
+-   A new edit operation goes into `src/blueprint/edits.ts`; keep `EDIT_OP_CATALOGUE` in `src/lib/blueprint-intent/prompt.ts` in step (a test enforces it).
 
-### `src/components/explorer`
--   `FileExplorer.tsx`: VS Code-style tree view showing the repository file structure. Folders expand/collapse; clicking a file fetches its content from GitHub, stores it in IndexedDB, **and opens it in a new editor tab**. Shows cached status (green checkmark), search/filter, expand/collapse all, and "Fetch All" bulk download. Includes `buildFileTree()` utility to convert flat path lists into a nested tree.
+### Adding a component kind
+-   Add the icon and colour to `src/components/blueprint/kinds.ts`. Kinds are free-form slugs; unknown ones fall back to the default.
 
-### `src/components/sidebar`
--   `EnhancedChatbot.tsx`: The sidebar component. Handles chat history, loading states, quick actions, and markdown rendering.
-  -   Header controls are icon-only actions for chat history, new chat, settings, close, plus an ask/agent mode toggle.
-  -   Sends `canvasContext` payload to `/api/chat`, preferring synced context unless the live canvas has been modified more recently. Also sends `availableFiles` derived from the active project's blob paths.
-  -   Before each request, collects relevant cached file contents from IndexedDB (selected node files, files mentioned in the query, key files like README.md) and sends them as `cachedFiles`.
-  -   Reads the NDJSON streaming response via `ReadableStream` / `TextDecoder`, updating the assistant message in real time and applying streamed canvas write operations.
-  -   Starts a single history transaction before the first streamed agent write so multi-step write batches undo as one canvas change.
-  -   Includes both node-level context and graph-level relationships to improve architectural responses.
--   `MarkdownRenderer.tsx`: Custom markdown renderer with syntax highlighting and file path detection.
+### Adding an LLM provider
+1.  If OpenAI-compatible: extend `OpenAICompatibleAdapter` from `src/lib/llm/providers/OpenAICompatibleAdapter.ts`. Override only `providerId`, `defaultModel`, `apiKey`, and `baseURL`.
+2.  Otherwise implement the `LLMProvider` interface from `src/lib/llm/types.ts` directly (see `AnthropicAdapter.ts`).
+3.  Register the adapter in `src/lib/llm/registry.ts` and add its metadata to `src/lib/llm/catalog.ts`.
 
-## Data Models
-
-### Node Data (React Flow `data` prop)
-```typescript
-interface NodeData {
-  label: string;           // e.g., "Authentication"
-  description: string;     // e.g., "Login and Register logic"
-  files: string[];         // Array of file paths belonging to this node
-  category: NodeCategory;  // e.g., "api", "component", "database"
-  complexity?: 'low' | 'medium' | 'high';
-  linesOfCode?: number;
-  dependencies?: string[];
-  exports?: string[];
-  isExpanded?: boolean;
-}
-```
-
-### Synced Canvas Snapshot (AI Context)
-```typescript
-interface CanvasSyncSnapshot {
-  syncedAt: string;
-  project: {
-    id: string;
-    name: string;
-    source: 'github' | 'empty' | 'imported';
-    repo?: string;
-  };
-  layoutDirection: 'TB' | 'LR';
-  selectedNodeId?: string | null;
-  selectedNodeLabel?: string | null;
-  nodes: Array<{
-    id: string;
-    label: string;
-    description?: string;
-    category?: NodeCategory;
-    files?: string[];
-    complexity?: 'low' | 'medium' | 'high';
-    dependencies?: string[];
-    exports?: string[];
-    position: { x: number; y: number };
-  }>;
-  edges: Array<{
-    id: string;
-    source: string;
-    target: string;
-    label?: string;
-    type?: string;
-    strength?: 'weak' | 'normal' | 'strong';
-    direction?: 'one-way' | 'two-way';
-  }>;
-}
-```
-
-### Node Categories
-```typescript
-type NodeCategory = 
-  // Code-based categories
-  | 'api' | 'component' | 'config' | 'database' | 'auth'
-  | 'utility' | 'test' | 'style' | 'asset' | 'documentation'
-  | 'core' | 'service' | 'hook' | 'context' | 'middleware'
-  | 'model' | 'route'
-  // System design categories
-  | 'cache' | 'queue' | 'load-balancer' | 'gateway' | 'storage'
-  | 'cdn' | 'proxy' | 'firewall' | 'external-api' | 'message-broker'
-  | 'container' | 'serverless' | 'client'
-  | 'default';
-```
-
-### Edge Data
-```typescript
-interface EdgeData {
-  label?: string;
-  type?: 'dependency' | 'import' | 'calls' | 'extends' | 'implements' | 'sends' | 'receives' | 'reads' | 'writes';
-  strength?: 'weak' | 'normal' | 'strong';
-  direction?: 'one-way' | 'two-way'; // Arrow direction - bidirectional for read/write operations
-  labelOffset?: { x: number; y: number }; // Stored label position for draggable labels
-}
-```
-
-## Common Tasks & Instructions
-
-### Modifying the AI Logic
--   Edit the prompt in `src/lib/ai.ts` in the `analyzeRepoStructure` function.
--   Ensure the prompt explicitly enforces JSON format with the expected schema.
--   Use `detectCategory` and `estimateComplexity` helpers for post-processing.
--   Provider selection is env-driven via `LLM_PROVIDER` (deepseek, openai, anthropic, google, ollama).
-
-### Adding New Node Categories
-1.  Add the category to `NodeCategory` type in `src/types/index.ts`.
-2.  Add icon mapping in `categoryIcons` in `NodeTypes.tsx`.
-3.  Add color mapping in `categoryColors` in `NodeTypes.tsx`.
-4.  Update the minimap colors in `FlowControls.tsx` (`minimapCategoryStroke` record).
-5.  Add the category to the `categories` array in `EditToolbar.tsx` (with `group: 'Code'` or `'System'`).
-6.  Update the `VALID_NODE_CATEGORIES` array and AI prompt in `ai.ts`.
-
-### Adding New Node Types
-1.  Create a new component in `src/components/canvas/NodeTypes.tsx`.
-2.  Export it in the `nodeTypes` object.
-3.  Update the API generation logic if the new node type requires different data.
-
-### Adding New LLM Providers
-1.  If OpenAI-compatible: extend `OpenAICompatibleAdapter` from `src/lib/llm/providers/OpenAICompatibleAdapter.ts`. Override only `providerId`, `defaultModel`, `apiKey`, and `baseURL`. The `chatStream()` method is inherited automatically.
-2.  If non-OpenAI-compatible: implement `LLMAdapter` interface directly (see `AnthropicAdapter.ts`). Must implement `chatStream()` returning `AsyncIterable<string>`.
-3.  Register the adapter in `src/lib/llm/registry.ts`.
-4.  Add provider metadata to `src/lib/llm/catalog.ts`.
-
-### Enhancing the Chatbot
--   Modify the system prompt in `buildSystemMessage()` in `src/lib/ai.ts` (shared by both streaming and non-streaming paths).
--   Add new quick actions in `EnhancedChatbot.tsx`.
--   Extend `MarkdownRenderer.tsx` for new formatting needs.
--   Keep `canvasContext` + `allNodesContext` payload contract aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
--   Keep model settings payload (`providerId`, `model`, `maxTokens`, `temperature`) aligned between `EnhancedChatbot.tsx` and `/api/chat` route.
--   The `LLMProvider` interface requires three methods: `generateStructure`, `chat`, and `chatStream` (returns `AsyncIterable<string>`).
--   `ChatInput` accepts an optional `history?: ChatHistoryMessage[]` array. All adapters thread history between the system prompt and the latest user message.
--   The API route sanitizes history (validates shape, caps at 20 messages) before forwarding.
-
-### Adding Export Formats
--   Extend `ExportPanel.tsx` with new export options.
--   Use appropriate libraries for the format (e.g., `html-to-image` for images).
+### Adding an API route
+-   Validate the body with zod, call `guardApiRequest` with a quota scope, return errors through `toSafeApiError`, and add the route under the `api` component's rules (it already owns `src/app/api/**`).
 
 ## Environment Variables
 Ensure these are set in `.env.local` for local development:
@@ -320,8 +113,9 @@ Ensure these are set in `.env.local` for local development:
 -   `ANTHROPIC_API_KEY`: Required when using the Anthropic provider.
 -   `GOOGLE_API_KEY`: Required when using the Google provider.
 -   `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`.
--   `OLLAMA_API_KEY`: Required for enabling Ollama through Settings validation.
--   `GITHUB_TOKEN`: Recommended to avoid rate limits on repo fetching.
+-   `OLLAMA_API_KEY`: Optional; set only when the Ollama endpoint requires it.
+-   `GITHUB_TOKEN`: Recommended to avoid rate limits when opening repositories. Hosted deployments must use a public-repository-only token.
+-   `SOURCE_GRANT_SECRET`, `SESSION_SIGNING_SECRET`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`: required by the public production profile (see `docs/deployment.md`).
 
 <!-- BEGIN:nextjs-agent-rules -->
 

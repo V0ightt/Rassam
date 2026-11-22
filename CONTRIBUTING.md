@@ -23,10 +23,10 @@ Run `npm run test:e2e` for user-flow or browser-facing changes.
 ## Engineering expectations
 
 - Preserve public-repository-only access rules and pinned revisions.
-- Add runtime validation at every browser, GitHub, provider, import, and storage boundary.
-- Keep graph changes project-scoped, revisioned, atomic, persistent, and undoable.
+- Add runtime validation at every browser, GitHub, provider, and storage boundary.
+- Keep blueprint changes previewed, atomic, and undoable.
 - Treat repository content as untrusted input.
-- Do not log source, prompts, chat text, repository URLs, filenames, or credentials.
+- Do not log source, prompts, instructions, repository URLs, filenames, or credentials.
 - Include loading, empty, error, cancellation, keyboard, and reduced-motion behavior for UI changes.
 - Add tests at the lowest useful level and an E2E scenario for critical workflows.
 

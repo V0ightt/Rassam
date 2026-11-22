@@ -1,5 +1,5 @@
 // Browser persistence for blueprint editing sessions. Uses its own Dexie
-// database so it can never interfere with the project store. Every function
+// database, separate from every other key the app stores. Every function
 // fails soft: without IndexedDB (private windows, SSR, tests) drafts are
 // simply not persisted.
 

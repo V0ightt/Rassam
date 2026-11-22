@@ -2,30 +2,30 @@
 
 ## Supported 1.0 profile
 
-The hosted profile is anonymous and public-repository-only. Projects and cached source stay in the browser. The server performs ephemeral GitHub and AI requests.
+The hosted profile is anonymous and public-repository-only. Blueprint drafts and preferences stay in the browser. The server performs ephemeral GitHub requests and, only when a user selects a model for "tell Rassam what to change", ephemeral AI requests.
 
 Production must provide:
 
-- A strong `SOURCE_GRANT_SECRET`
-- A durable Redis-compatible rate-limit store
-- At least one explicitly configured AI provider if chat or enrichment is enabled
+- A strong `SOURCE_GRANT_SECRET` and `SESSION_SIGNING_SECRET`
+- A durable Redis-compatible rate-limit store (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`)
+- At least one explicitly configured AI provider if the model path of the intent bar is offered
 - A GitHub token with public-repository access only, or no GitHub token
 - HTTPS and the security headers emitted by the application
 
-Readiness must fail when the public profile lacks the source-grant secret or durable limiter. Never deploy with a shared token that can read private repositories.
+Readiness must fail when the public profile lacks the signing secrets or the durable limiter. Never deploy with a shared token that can read private repositories.
 
-The application defaults to 1,000 analyses and 5,000 chat turns per deployment per day, with four concurrent analyses and twenty concurrent chat turns. Override these fail-closed circuit breakers with `RASSAM_DAILY_ANALYSIS_LIMIT`, `RASSAM_ANALYSIS_CONCURRENCY`, `RASSAM_DAILY_CHAT_LIMIT`, and `RASSAM_CHAT_CONCURRENCY` only after measuring a beta workload. These ceilings are cost controls, not billing estimates.
+Every API route is rate limited per anonymous session and per IP address; the limits are set next to each route in `src/app/api/`. They are cost controls, not billing estimates.
 
 ## Operational checks
 
 - `npm ci`
 - `npm run check`
 - Health and readiness endpoints
-- Rate-limit and spend circuit breakers
+- Rate limits
 - Redacted logs and metrics
 - Dependency and secret scanning
 
-Provider outages must not prevent deterministic repository analysis. Users should receive an actionable error and retain their current local project.
+Provider outages must not prevent opening a repository, checking it or editing the blueprint by hand or through the deterministic parser. Users should receive an actionable error and keep their current draft.
 
 Operational telemetry and incident procedures are documented in:
 

@@ -24,11 +24,10 @@
       "id": "web-shell",
       "name": "Web shell",
       "kind": "route",
-      "intent": "Next.js pages that mount the workbench and settings. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tested.",
+      "intent": "Next.js pages that mount the Studio and the settings page. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tested.",
       "paths": [
         "src/app/layout.tsx",
-        "src/app/settings/**",
-        "src/app/map/**"
+        "src/app/settings/**"
       ],
       "tags": [
         "runtime:browser"
@@ -44,36 +43,6 @@
       ],
       "tags": [
         "runtime:server"
-      ]
-    },
-    {
-      "id": "workbench-shell",
-      "name": "Workbench shell",
-      "kind": "component",
-      "paths": [
-        "src/components/workspace/**"
-      ],
-      "tags": [
-        "runtime:browser"
-      ],
-      "intent": "Composes the workbench: wires the Map and Blueprint features, panels and hooks together. Thin wiring only; feature logic lives in feature components and hooks. Features never import the shell."
-    },
-    {
-      "id": "workbench-ui",
-      "name": "Workbench UI",
-      "kind": "component",
-      "intent": "The VS Code-style workbench: map canvas, explorer, editor tabs, evidence inspector and the Rassam chat panel. Renders state owned by hooks; AI output reaches the canvas only as a validated patch the user applies.",
-      "paths": [
-        "src/components/**"
-      ],
-      "exclude": [
-        "src/components/blueprint/**",
-        "src/components/workspace/**",
-        "src/components/studio/**",
-        "src/components/ui/**"
-      ],
-      "tags": [
-        "runtime:browser"
       ]
     },
     {
@@ -118,7 +87,7 @@
       "id": "hooks",
       "name": "State hooks",
       "kind": "hook",
-      "intent": "Client state and lifecycles (projects, history, clipboard, editor tabs, blueprint sessions). Hooks own state; components render it.",
+      "intent": "Client state and lifecycles for blueprint sessions: loading a source, drafts, proposals, history and live status. Hooks own state; components render it.",
       "paths": [
         "src/hooks/**"
       ],
@@ -141,38 +110,14 @@
     },
     {
       "id": "local-store",
-      "name": "Local store",
+      "name": "Settings store",
       "kind": "storage",
-      "intent": "Local-first persistence of projects, graphs, chats and cached source in IndexedDB and localStorage, plus import and export. Exports never contain credentials.",
+      "intent": "Browser-side persistence of the chosen provider, model and generation settings in localStorage. It stores choices and cached availability, never credentials.",
       "paths": [
-        "src/lib/project-store.ts",
-        "src/lib/file-store.ts",
-        "src/lib/project-export.ts",
-        "src/lib/project-revision-channel.ts",
-        "src/lib/model-settings.ts",
-        "src/lib/import.ts"
+        "src/lib/model-settings.ts"
       ],
       "tags": [
         "runtime:browser"
-      ]
-    },
-    {
-      "id": "chat-agent",
-      "name": "Chat agent",
-      "kind": "service",
-      "intent": "Server-side ask/agent orchestration over the selected model: plans tool calls, reads cited source, and validates canvas changes as complete, revisioned patches (canvas-patch). It never mutates the live graph itself.",
-      "paths": [
-        "src/lib/ai.ts",
-        "src/lib/chat-agent.ts",
-        "src/lib/chat-runtime.ts",
-        "src/lib/chat-source.ts",
-        "src/lib/chat-stream.ts",
-        "src/lib/chat-tools.ts",
-        "src/lib/chat-file-summary.ts",
-        "src/lib/canvas-patch.ts"
-      ],
-      "tags": [
-        "runtime:server"
       ]
     },
     {
@@ -188,23 +133,10 @@
       ]
     },
     {
-      "id": "analysis",
-      "name": "Repository analysis",
-      "kind": "core",
-      "intent": "Deterministic map building from source evidence (static analysis is the only source of edges), with optional AI enrichment of names and descriptions for verified components.",
-      "paths": [
-        "src/lib/repository-analysis.ts",
-        "src/lib/repository-enrichment.ts"
-      ],
-      "tags": [
-        "runtime:server"
-      ]
-    },
-    {
       "id": "github-gateway",
       "name": "GitHub gateway",
       "kind": "gateway",
-      "intent": "The only code that talks to GitHub and holds GITHUB_TOKEN. Binds repository identity and commit with signed source grants so clients cannot request content they were not granted.",
+      "intent": "The only code that talks to GitHub and holds GITHUB_TOKEN. Resolves public repositories to a pinned commit and binds repository identity and commit with signed source grants so clients cannot request content they were not granted.",
       "paths": [
         "src/lib/github.ts",
         "src/lib/source-grant.ts"
@@ -233,9 +165,10 @@
       "id": "llm-providers",
       "name": "LLM providers",
       "kind": "service",
-      "intent": "Adapters over model providers behind one interface. The only code that reads provider API keys.",
+      "intent": "Adapters over model providers behind one interface, and the resolver that turns a requested provider and model into exactly that configured runtime, with no silent fallback. The only code that reads provider API keys.",
       "paths": [
-        "src/lib/llm/**"
+        "src/lib/llm/**",
+        "src/lib/chat-runtime.ts"
       ],
       "tags": [
         "runtime:server"
@@ -245,11 +178,9 @@
       "id": "shared",
       "name": "Shared library",
       "kind": "utility",
-      "intent": "Runtime-neutral code shared by browser and server: zod contracts, types, canvas normalization, source-sensitivity policy, patch application, search and small utilities. Nothing here may need Node or server credentials.",
+      "intent": "Runtime-neutral code shared by browser and server: zod request contracts and limits, version constants and small utilities. Nothing here may need Node or server credentials.",
       "paths": [
-        "src/lib/*",
-        "src/types/**",
-        "src/workers/**"
+        "src/lib/*"
       ],
       "public": true
     },
@@ -325,39 +256,6 @@
   ],
   "dependencies": [
     {
-      "from": "analysis",
-      "to": "blueprint-engine",
-      "kind": "imports",
-      "reason": "The map analyzer shares the engine's import graph so the map and the gate agree on every edge."
-    },
-    {
-      "from": "analysis",
-      "to": "chat-agent",
-      "kind": "imports",
-      "reason": "Enrichment reuses the chat runtime's provider selection."
-    },
-    {
-      "from": "analysis",
-      "to": "github-gateway",
-      "kind": "imports"
-    },
-    {
-      "from": "analysis",
-      "to": "llm-providers",
-      "kind": "imports",
-      "reason": "Optional AI enrichment of verified components."
-    },
-    {
-      "from": "analysis",
-      "to": "server-platform",
-      "kind": "imports"
-    },
-    {
-      "from": "api",
-      "to": "analysis",
-      "kind": "imports"
-    },
-    {
       "from": "api",
       "to": "blueprint-client",
       "kind": "imports",
@@ -371,11 +269,6 @@
     {
       "from": "api",
       "to": "blueprint-intent",
-      "kind": "imports"
-    },
-    {
-      "from": "api",
-      "to": "chat-agent",
       "kind": "imports"
     },
     {
@@ -415,28 +308,6 @@
       "reason": "The panel and canvas consume the useBlueprint session."
     },
     {
-      "from": "blueprint-ui",
-      "to": "workbench-ui",
-      "kind": "imports",
-      "reason": "Reuses the category icon and color mapping from the map canvas."
-    },
-    {
-      "from": "chat-agent",
-      "to": "github-gateway",
-      "kind": "imports",
-      "reason": "Chat reads source only through signed source grants."
-    },
-    {
-      "from": "chat-agent",
-      "to": "llm-providers",
-      "kind": "imports"
-    },
-    {
-      "from": "chat-agent",
-      "to": "server-platform",
-      "kind": "imports"
-    },
-    {
       "from": "cli",
       "to": "blueprint-engine",
       "kind": "imports"
@@ -460,6 +331,12 @@
       "from": "hooks",
       "to": "local-store",
       "kind": "imports"
+    },
+    {
+      "from": "llm-providers",
+      "to": "server-platform",
+      "kind": "imports",
+      "reason": "The runtime resolver reports unsupported or unconfigured selections through the shared error envelope."
     },
     {
       "from": "local-store",
@@ -513,52 +390,6 @@
       "from": "web-shell",
       "to": "studio",
       "kind": "imports"
-    },
-    {
-      "from": "web-shell",
-      "to": "workbench-shell",
-      "kind": "imports"
-    },
-    {
-      "from": "web-shell",
-      "to": "workbench-ui",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-shell",
-      "to": "blueprint-ui",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-shell",
-      "to": "hooks",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-shell",
-      "to": "local-store",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-shell",
-      "to": "workbench-ui",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-ui",
-      "to": "hooks",
-      "kind": "imports"
-    },
-    {
-      "from": "workbench-ui",
-      "to": "llm-providers",
-      "kind": "imports",
-      "reason": "Type-only: provider ids in the chat panel."
-    },
-    {
-      "from": "workbench-ui",
-      "to": "local-store",
-      "kind": "imports"
     }
   ],
   "rules": [
@@ -591,9 +422,7 @@
       "to": [
         "github-gateway",
         "llm-providers",
-        "chat-agent",
         "server-platform",
-        "analysis",
         "package:node:*",
         "package:octokit",
         "package:openai"
@@ -648,11 +477,9 @@
       "from": "shared",
       "to": [
         "package:node:*",
-        "chat-agent",
         "github-gateway",
         "llm-providers",
-        "server-platform",
-        "analysis"
+        "server-platform"
       ],
       "includeTypeOnly": false
     },
@@ -713,34 +540,37 @@
     },
     {
       "id": "ai-changes-are-proposals",
-      "statement": "AI output never mutates the live graph or the blueprint directly; it is a validated, revisioned proposal a human applies.",
+      "statement": "AI output never mutates the blueprint directly; it becomes a validated, dry-run proposal that a human previews and applies, and agent proposals from the CLI are written to files for review.",
       "components": [
-        "chat-agent",
-        "workbench-ui",
+        "blueprint-intent",
+        "hooks",
+        "studio",
         "cli"
       ],
       "check": {
-        "run": "npx vitest run src/lib/apply-canvas-patch.test.ts src/lib/canvas-patch.test.ts",
+        "run": "npx vitest run src/lib/blueprint-intent/blueprint-intent.test.ts src/hooks/useBlueprint.intent.test.tsx",
         "tests": [
-          "src/lib/apply-canvas-patch.test.ts",
-          "src/lib/canvas-patch.test.ts"
+          "src/lib/blueprint-intent/blueprint-intent.test.ts",
+          "src/hooks/useBlueprint.intent.test.tsx"
         ]
       }
     },
     {
       "id": "credentials-never-leave-server",
-      "statement": "Provider keys and the GitHub token never reach the browser, exports, reports or logs; secrets in reports are always redacted.",
+      "statement": "Provider keys and the GitHub token never reach the browser, reports or logs; secrets in reports are always redacted.",
       "components": [
         "github-gateway",
         "llm-providers",
+        "server-platform",
         "local-store",
         "blueprint-engine"
       ],
       "check": {
-        "run": "npx vitest run src/lib/project-export.test.ts src/blueprint/reach.test.ts",
+        "run": "npx vitest run src/blueprint/reach.test.ts src/lib/operational-telemetry.test.ts src/app/api/health/route.test.ts",
         "tests": [
-          "src/lib/project-export.test.ts",
-          "src/blueprint/reach.test.ts"
+          "src/blueprint/reach.test.ts",
+          "src/lib/operational-telemetry.test.ts",
+          "src/app/api/health/route.test.ts"
         ]
       }
     }
@@ -783,8 +613,7 @@
       "status": "accepted",
       "date": "2026-11-21",
       "components": [
-        "blueprint-engine",
-        "analysis"
+        "blueprint-engine"
       ],
       "context": "LLMs are weakest at recovering relationships between modules, and LLM-written context files did not improve agent outcomes while adding cost.",
       "decision": "Dependencies come from deterministic import analysis with file:line evidence. Models may draft names and intent, which stay unverified until a human accepts them.",
@@ -815,6 +644,21 @@
       "context": "Documentation is used when it lives where the work happens, and hand-made diagrams rot when they live elsewhere.",
       "decision": "The blueprint is a plain JSON file in the repository, versioned with the code. The browser edits it through the File System Access API or exports it; nothing depends on a hosted service.",
       "consequences": "Blueprint changes go through normal code review. Canvas layout is kept in a separate file so contract diffs stay clean."
+    },
+    {
+      "id": "ADR-006",
+      "title": "Remove the classic map workspace",
+      "status": "accepted",
+      "date": "2026-11-23",
+      "components": [
+        "studio",
+        "blueprint-ui",
+        "web-shell",
+        "api"
+      ],
+      "context": "ADR-001 made the map canvas secondary. The Studio now covers opening a repository or folder, the live system design and editing the contract, while the classic map (repository-to-diagram analysis, file explorer and viewer, evidence inspector, chat agent, project store and export) duplicated surface area, dependencies and security boundary for a product Rassam no longer is.",
+      "decision": "Delete the /map route and everything only it used: the workbench shell and UI, the chat agent, the deterministic map analyzer and its AI enrichment, the local project store and export format, and the /api/chat, /api/files, /api/repo and /api/source-grant routes. The product is the Studio, the engine, the CLI and MCP server, and the settings page.",
+      "consequences": "The components workbench-shell, workbench-ui, chat-agent and analysis leave the contract; local-store shrinks to saved model settings. Projects saved by the classic map stay in the browser's storage but are no longer read. Model access remains only for the optional \"tell Rassam what to change\" path."
     }
   ]
 }

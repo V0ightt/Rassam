@@ -37,7 +37,7 @@ afterEach(() => {
 
 const noCommands: CommandContext = {
   watching: false, canUndo: true, canRedo: false, canSave: false, theme: 'dark',
-  openSettings: vi.fn(), openClassicMap: vi.fn(), toggleWatch: vi.fn(), fitView: vi.fn(), undo: vi.fn(), redo: vi.fn(),
+  openSettings: vi.fn(), toggleWatch: vi.fn(), fitView: vi.fn(), undo: vi.fn(), redo: vi.fn(),
   save: vi.fn(), switchTheme: vi.fn(), openAttention: vi.fn(), openSource: vi.fn(), toggleOutline: vi.fn(), openManual: vi.fn(),
 };
 
@@ -206,7 +206,7 @@ test('typing ">" turns the bar into a command palette', async () => {
   const { input, spies } = renderBar({ commands: context });
   await user.type(input, '>');
   const list = screen.getByRole('listbox', { name: 'Commands' });
-  for (const name of ['Open settings', 'Open classic map', 'Watch for new commits', 'Fit view', 'Undo', 'Redo', 'Download blueprint.json', 'Switch to light theme']) {
+  for (const name of ['Open settings', 'Watch for new commits', 'Fit view', 'Undo', 'Redo', 'Download blueprint.json', 'Switch to light theme']) {
     assert.ok(within(list).getByRole('option', { name: new RegExp(`^${name}`) }), name);
   }
   assert.equal(within(list).getByRole('option', { name: /^Redo/ }).getAttribute('aria-disabled'), 'true');
@@ -405,7 +405,6 @@ test('the source sheet offers Sync when behind, toggles watching and lists the c
   const timeline = within(sheet).getByRole('list', { name: 'Commit timeline' });
   assert.ok(within(timeline).getByText('Tighten billing'));
   assert.ok(within(timeline).getByText('1 dependency became declared'));
-  assert.equal(within(sheet).getByRole('link', { name: 'Classic map' }).getAttribute('href'), '/map');
   assert.equal(within(sheet).getByRole('link', { name: 'Settings' }).getAttribute('href'), '/settings');
   assert.ok(within(sheet).queryByRole('button', { name: 'Save to folder' }) === null, 'saving to disk is only for local folders');
   assert.ok(within(sheet).getByRole('button', { name: 'Download' }));

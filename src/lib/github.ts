@@ -3,10 +3,8 @@ import { Octokit } from "octokit";
 import { ApiError } from "./api-error";
 import {
   MAX_REPOSITORY_TREE_ENTRIES,
-  MAX_VIEWER_FILE_BYTES,
   githubCoordinatesSchema,
   type RepositorySnapshot,
-  type SourceGrantPayload,
 } from "./contracts";
 
 const githubToken = process.env.GITHUB_TOKEN?.trim();
@@ -51,16 +49,6 @@ export interface PublicRepository {
 }
 
 type RepositoryDetails = PublicRepository["details"];
-
-export interface PinnedFile {
-  path: string;
-  blobSha: string;
-  commitSha: string;
-  size: number;
-  content: string | null;
-  binary: boolean;
-  encoding: "utf-8" | "binary";
-}
 
 interface GitHubErrorShape {
   status?: number;
@@ -132,23 +120,6 @@ export function parseGitHubRepositoryUrl(value: string): { owner: string; repo: 
     throw new ApiError("INVALID_GITHUB_URL", 400, "Enter a valid GitHub owner and repository name");
   }
   return result.data;
-}
-
-export function normalizeRepositoryPath(value: string): string {
-  if (
-    !value
-    || value.length > 4_096
-    || value.includes("\\")
-    || value.includes("\0")
-    || value.startsWith("/")
-  ) {
-    throw new ApiError("INVALID_FILE_PATH", 400, "File path is invalid");
-  }
-  const segments = value.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
-    throw new ApiError("INVALID_FILE_PATH", 400, "File path is invalid");
-  }
-  return segments.join("/");
 }
 
 function normalizeTreeItem(
@@ -316,10 +287,6 @@ export async function resolvePublicRepositoryRevision(
   };
 }
 
-export async function getRepoStructure(owner: string, repo: string, ref?: string): Promise<RepoNode[]> {
-  return (await getPublicRepository(owner, repo, ref)).nodes;
-}
-
 async function fetchBlobBytes(
   owner: string,
   repo: string,
@@ -355,67 +322,6 @@ function decodeText(bytes: Buffer): string | null {
   }
 }
 
-export async function getPinnedFile(
-  grant: SourceGrantPayload,
-  path: string,
-  options: { expectedBlobSha?: string; maxBytes?: number; signal?: AbortSignal } = {},
-): Promise<PinnedFile> {
-  const normalizedPath = normalizeRepositoryPath(path);
-  const maxBytes = Math.min(MAX_VIEWER_FILE_BYTES, options.maxBytes ?? MAX_VIEWER_FILE_BYTES);
-
-  // A grant proves the repository was public when issued. Recheck visibility
-  // at read time so a repository made private during the grant TTL cannot be
-  // accessed with a server credential that still has private scope.
-  try {
-    const repository = await octokit.rest.repos.get({
-      owner: grant.owner,
-      repo: grant.repo,
-      request: { signal: options.signal },
-    });
-    if (repository.data.private || repository.data.visibility !== "public") {
-      throw new ApiError("REPOSITORY_PRIVATE", 403, "Private repositories are not supported");
-    }
-  } catch (error) {
-    throw mapGitHubError(error, "REPOSITORY_NOT_FOUND");
-  }
-
-  let contentEntry;
-  try {
-    contentEntry = await octokit.rest.repos.getContent({
-      owner: grant.owner,
-      repo: grant.repo,
-      path: normalizedPath,
-      ref: grant.commitSha,
-      request: { signal: options.signal },
-    });
-  } catch (error) {
-    throw mapGitHubError(error, "FILE_NOT_FOUND");
-  }
-
-  if (Array.isArray(contentEntry.data) || !("sha" in contentEntry.data)) {
-    throw new ApiError("FILE_NOT_FOUND", 404, "File was not found at the pinned revision");
-  }
-  const blobSha = contentEntry.data.sha;
-  if (!/^[a-f0-9]{40}$/i.test(blobSha)) {
-    throw new ApiError("GITHUB_UNAVAILABLE", 502, "GitHub returned an invalid file revision", true);
-  }
-  if (options.expectedBlobSha && options.expectedBlobSha.toLowerCase() !== blobSha.toLowerCase()) {
-    throw new ApiError("FILE_REVISION_MISMATCH", 409, "File revision does not match the analyzed repository");
-  }
-
-  const bytes = await fetchBlobBytes(grant.owner, grant.repo, blobSha, maxBytes, options.signal);
-  const content = decodeText(bytes);
-  return {
-    path: normalizedPath,
-    blobSha,
-    commitSha: grant.commitSha,
-    size: bytes.length,
-    content,
-    binary: content === null,
-    encoding: content === null ? "binary" : "utf-8",
-  };
-}
-
 export async function getBlobText(
   owner: string,
   repo: string,
@@ -425,32 +331,4 @@ export async function getBlobText(
 ): Promise<string | null> {
   const bytes = await fetchBlobBytes(owner, repo, blobSha, maxBytes, signal);
   return decodeText(bytes);
-}
-
-// Compatibility helper for chat while it migrates to SourceGrant. It still
-// verifies public visibility and pins the selected ref before reading.
-export async function getFileContent(
-  owner: string,
-  repo: string,
-  path: string,
-  ref?: string,
-): Promise<string | null> {
-  const repository = await resolvePublicRepositoryRevision(owner, repo, ref);
-  const grant: SourceGrantPayload = {
-    version: 1,
-    owner: repository.snapshot.owner,
-    repo: repository.snapshot.repo,
-    commitSha: repository.snapshot.commitSha,
-    treeSha: repository.snapshot.treeSha,
-    issuedAt: 0,
-    expiresAt: Number.MAX_SAFE_INTEGER,
-  };
-  try {
-    return (await getPinnedFile(grant, path)).content;
-  } catch (error) {
-    if (error instanceof ApiError && ["FILE_NOT_FOUND", "FILE_BINARY", "FILE_TOO_LARGE"].includes(error.code)) {
-      return null;
-    }
-    throw error;
-  }
 }

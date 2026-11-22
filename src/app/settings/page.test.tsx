@@ -8,12 +8,8 @@ import { axe } from "vitest-axe";
 
 import SettingsPage from "./page";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.ComponentProps<"a">) => <a href={String(href)} {...props}>{children}</a>,
-}));
-vi.mock("@/components/navigation/ActivityBar", () => ({
-  default: () => <nav aria-label="Activity bar" />,
 }));
 
 const providerResponse = {

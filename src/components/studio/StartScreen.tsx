@@ -1,7 +1,6 @@
 'use client';
 
 import { useId, useState, useSyncExternalStore } from 'react';
-import Link from 'next/link';
 import { ArrowRight, FolderOpen, Play, RotateCcw } from 'lucide-react';
 
 import type { BlueprintSession } from '@/components/blueprint/session';
@@ -114,11 +113,6 @@ export default function StartScreen({
             </p>
           )}
         </div>
-
-        <p className="mt-10 text-small text-fg-3">
-          Looking for the evidence-linked map and chat?{' '}
-          <Link href="/map" className="text-accent-text underline decoration-transparent underline-offset-2 hover:decoration-current">Open the classic map</Link>
-        </p>
       </div>
     </main>
   );
