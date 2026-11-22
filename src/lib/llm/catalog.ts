@@ -1,5 +1,5 @@
 import { getProvider, listProviders, normalizeProviderId } from "./registry";
-import { LLMProviderId } from "./types";
+import { LLMProviderId, type ChatInput } from "./types";
 
 export interface ProviderAvailability {
   id: LLMProviderId;
@@ -10,6 +10,18 @@ export interface ProviderAvailability {
   validated: boolean;
   available: boolean;
   reason?: string;
+  capabilities: ProviderCapabilities;
+}
+
+export interface ProviderCapabilities {
+  streaming: boolean;
+  structuredOutput: boolean;
+  nativeToolCalling: boolean;
+  modelListing: boolean;
+  apiKeyRequired: boolean;
+  usageMetadata: boolean;
+  finishMetadata: boolean;
+  maxOutputTokens: number;
 }
 
 interface ProviderCatalogConfig {
@@ -19,6 +31,8 @@ interface ProviderCatalogConfig {
   modelsEnv: string;
   defaultModels: string[];
 }
+
+export type ProviderEnvironment = Readonly<Record<string, string | undefined>>;
 
 const providerCatalog: Record<LLMProviderId, ProviderCatalogConfig> = {
   deepseek: {
@@ -33,21 +47,21 @@ const providerCatalog: Record<LLMProviderId, ProviderCatalogConfig> = {
     envKey: "OPENAI_API_KEY",
     modelEnv: "OPENAI_MODEL",
     modelsEnv: "OPENAI_MODELS",
-    defaultModels: ["gpt-5-nano", "gpt-5-mini"],
+    defaultModels: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4-nano", "gpt-5-nano", "gpt-5-mini"],
   },
   anthropic: {
     label: "Anthropic",
     envKey: "ANTHROPIC_API_KEY",
     modelEnv: "ANTHROPIC_MODEL",
     modelsEnv: "ANTHROPIC_MODELS",
-    defaultModels: ["claude-haiku-4-5", "claude-3-7-sonnet-latest"],
+    defaultModels: ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"],
   },
   google: {
     label: "Google",
     envKey: "GOOGLE_API_KEY",
     modelEnv: "GOOGLE_MODEL",
     modelsEnv: "GOOGLE_MODELS",
-    defaultModels: ["gemini-1.5-flash", "gemini-1.5-pro"],
+    defaultModels: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"],
   },
   ollama: {
     label: "Ollama",
@@ -57,10 +71,6 @@ const providerCatalog: Record<LLMProviderId, ProviderCatalogConfig> = {
     defaultModels: ["llama3.1", "qwen2.5", "mistral"],
   },
 };
-
-function compactMessage(message: string): string {
-  return message.split("\n").map((line) => line.trim()).filter(Boolean)[0] || "Validation failed";
-}
 
 function isEmptyResponseValidationError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -94,17 +104,6 @@ function isPlaceholderApiKey(value: string): boolean {
   );
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    const id = setTimeout(() => {
-      clearTimeout(id);
-      reject(new Error("Validation timed out"));
-    }, timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]);
-}
-
 export function getProviderConfig(id: LLMProviderId): ProviderCatalogConfig {
   return providerCatalog[id];
 }
@@ -117,7 +116,7 @@ export function getProviderEnvKey(id: LLMProviderId): string {
   return providerCatalog[id].envKey;
 }
 
-export function getProviderModels(id: LLMProviderId, env: NodeJS.ProcessEnv = process.env): string[] {
+export function getProviderModels(id: LLMProviderId, env: ProviderEnvironment = process.env): string[] {
   const config = providerCatalog[id];
   const modelFromEnv = (env[config.modelEnv] || "").trim();
   const envModels = parseModels(env[config.modelsEnv]);
@@ -129,18 +128,36 @@ export function getProviderModels(id: LLMProviderId, env: NodeJS.ProcessEnv = pr
   ].filter(Boolean));
 }
 
-export function hasConfiguredApiKey(id: LLMProviderId, env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasConfiguredApiKey(id: LLMProviderId, env: ProviderEnvironment = process.env): boolean {
   const envKey = providerCatalog[id].envKey;
   const keyValue = env[envKey];
   if (!keyValue) return false;
   return !isPlaceholderApiKey(keyValue);
 }
 
+function getOllamaBaseUrlStatus(env: ProviderEnvironment = process.env): { ok: boolean; reason?: string } {
+  const raw = env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434/v1";
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      return { ok: false, reason: "OLLAMA_BASE_URL must use HTTP or HTTPS without embedded credentials" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "OLLAMA_BASE_URL must be a valid URL" };
+  }
+}
+
 export async function validateProviderConnection(
   id: LLMProviderId,
-  model?: string,
+  model: string,
+  signal?: AbortSignal,
+  onUsage?: ChatInput["onUsage"],
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (!hasConfiguredApiKey(id)) {
+  if (id === "ollama") {
+    const baseUrlStatus = getOllamaBaseUrlStatus();
+    if (!baseUrlStatus.ok) return baseUrlStatus;
+  } else if (!hasConfiguredApiKey(id)) {
     return {
       ok: false,
       reason: `Missing or invalid ${getProviderEnvKey(id)} in .env.local`,
@@ -149,71 +166,79 @@ export async function validateProviderConnection(
 
   const provider = getProvider(id);
   const models = getProviderModels(id);
-  const selectedModel = (model || "").trim();
-  const candidateModels = unique([
-    selectedModel,
-    ...models,
-  ].filter(Boolean));
-  const modelsToCheck = candidateModels.length > 0 ? candidateModels : [undefined];
-
-  let lastReason: string | undefined;
-
-  for (const modelToCheck of modelsToCheck) {
-    try {
-      await withTimeout(
-        provider.chat({
-          system: "You are a health check assistant. Reply with OK.",
-          message: "OK",
-          temperature: 1,
-          maxTokens: 64,
-          model: modelToCheck,
-        }),
-        10000,
-      );
-
-      return { ok: true };
-    } catch (error) {
-      if (isEmptyResponseValidationError(error)) {
-        return { ok: true };
-      }
-      lastReason = compactMessage(error instanceof Error ? error.message : "Validation failed");
-    }
+  const selectedModel = model.trim();
+  if (!selectedModel || !models.includes(selectedModel)) {
+    return { ok: false, reason: "Selected model is not in the configured model catalog" };
   }
 
-  return {
-    ok: false,
-    reason: lastReason || "Validation failed",
+  const timeoutSignal = AbortSignal.timeout(10_000);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  try {
+    await provider.chat({
+      system: "You are a health check assistant. Reply with OK.",
+      message: "OK",
+      temperature: 0,
+      maxTokens: 64,
+      model: selectedModel,
+      signal: combinedSignal,
+      onUsage,
+    });
+    return { ok: true };
+  } catch (error) {
+    if (isEmptyResponseValidationError(error)) return { ok: true };
+    return { ok: false, reason: "The selected model could not be validated" };
+  }
+}
+
+export function getProviderMetadata(
+  id: LLMProviderId,
+  env: ProviderEnvironment = process.env,
+): ProviderAvailability {
+  const hasApiKey = hasConfiguredApiKey(id, env);
+  const ollamaStatus = id === "ollama" ? getOllamaBaseUrlStatus(env) : null;
+  const configured = id === "ollama" ? ollamaStatus!.ok : hasApiKey;
+  const capabilities: ProviderCapabilities = {
+    streaming: true,
+    structuredOutput: id === "openai" || id === "deepseek",
+    nativeToolCalling: false,
+    modelListing: false,
+    apiKeyRequired: id !== "ollama",
+    usageMetadata: true,
+    finishMetadata: true,
+    maxOutputTokens: 8_192,
   };
+  return {
+    id,
+    label: getProviderLabel(id),
+    envKey: getProviderEnvKey(id),
+    models: getProviderModels(id, env),
+    hasApiKey,
+    validated: false,
+    available: configured,
+    capabilities,
+    ...(!configured
+      ? { reason: ollamaStatus?.reason || `Missing or invalid ${getProviderEnvKey(id)} in .env.local` }
+      : {}),
+  };
+}
+
+export function getAllProviderMetadata(): ProviderAvailability[] {
+  return listProviders().map((providerId) => getProviderMetadata(providerId));
 }
 
 export async function getProviderAvailability(
   id: LLMProviderId,
   model?: string,
 ): Promise<ProviderAvailability> {
-  const hasApiKey = hasConfiguredApiKey(id);
-  const models = getProviderModels(id);
+  const metadata = getProviderMetadata(id);
+  if (!metadata.available) return metadata;
 
-  if (!hasApiKey) {
-    return {
-      id,
-      label: getProviderLabel(id),
-      envKey: getProviderEnvKey(id),
-      models,
-      hasApiKey: false,
-      validated: false,
-      available: false,
-      reason: `Missing or invalid ${getProviderEnvKey(id)} in .env.local`,
-    };
-  }
-
-  const validation = await validateProviderConnection(id, model);
+  const selectedModel = model?.trim() || metadata.models[0];
+  if (!selectedModel) return { ...metadata, available: false, reason: "No model is configured" };
+  const validation = await validateProviderConnection(id, selectedModel);
 
   return {
-    id,
-    label: getProviderLabel(id),
-    envKey: getProviderEnvKey(id),
-    models,
-    hasApiKey,
+    ...metadata,
     validated: validation.ok,
     available: validation.ok,
     reason: validation.reason,
@@ -221,9 +246,9 @@ export async function getProviderAvailability(
 }
 
 export async function getAllProviderAvailability(): Promise<ProviderAvailability[]> {
-  const providerIds = listProviders();
-  const results = await Promise.all(providerIds.map((providerId) => getProviderAvailability(providerId)));
-  return results;
+  // Kept as a compatibility name. Bulk metadata reads must never perform
+  // provider completions; exact live validation is user-triggered per model.
+  return getAllProviderMetadata();
 }
 
 export function isValidProviderId(id?: string | null): id is LLMProviderId {

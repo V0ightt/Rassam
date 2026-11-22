@@ -6,10 +6,10 @@ import {
   EdgeLabelRenderer,
   EdgeProps,
   getSmoothStepPath,
-  useReactFlow,
 } from 'reactflow';
 import { X, MessageSquare, GripVertical, ArrowLeftRight, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useEdgeEdit } from '@/components/canvas/EdgeEditContext';
 
 // Edge color mapping - memoized outside component
 const edgeColors: Record<string, string> = {
@@ -24,6 +24,7 @@ const edgeColors: Record<string, string> = {
   writes: '#f97316', // orange
   default: '#64748b', // slate
 };
+const defaultLabelOffset = { x: 0, y: -30 };
 
 // Custom edge with label and delete button - optimized with memo
 const CustomEdge = memo(function CustomEdge({
@@ -35,34 +36,19 @@ const CustomEdge = memo(function CustomEdge({
   sourcePosition,
   targetPosition,
   style = {},
-  markerEnd,
   data,
   selected,
 }: EdgeProps) {
-  const { setEdges } = useReactFlow();
+  const { onUpdateEdge, onDeleteEdge } = useEdgeEdit();
   const [isDraggingLabel, setIsDraggingLabel] = useState(false);
-  const [labelOffset, setLabelOffset] = useState({ x: 0, y: -30 }); // Default: above the line
+  const [dragLabelOffset, setDragLabelOffset] = useState(defaultLabelOffset);
   const [isEditing, setIsEditing] = useState(false);
-  const [labelText, setLabelText] = useState(data?.label || '');
+  const [labelText, setLabelText] = useState('');
   const dragStartRef = useRef({ x: 0, y: 0 });
-  const labelOffsetRef = useRef(labelOffset); // Track latest offset for mouseup closure
+  const labelOffsetRef = useRef(defaultLabelOffset);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Keep ref in sync with state
-  useEffect(() => {
-    labelOffsetRef.current = labelOffset;
-  }, [labelOffset]);
-  
-  // Use stored offset from data if available
-  useEffect(() => {
-    if (data?.labelOffset) {
-      setLabelOffset(data.labelOffset);
-    }
-  }, [data?.labelOffset]);
-  
-  useEffect(() => {
-    setLabelText(data?.label || '');
-  }, [data?.label]);
+  const persistedLabelOffset = data?.labelOffset ?? defaultLabelOffset;
+  const labelOffset = isDraggingLabel ? dragLabelOffset : persistedLabelOffset;
   
   const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
@@ -76,8 +62,8 @@ const CustomEdge = memo(function CustomEdge({
 
   const onEdgeDelete = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
-    setEdges((edges) => edges.filter((edge) => edge.id !== id));
-  }, [id, setEdges]);
+    onDeleteEdge(id);
+  }, [id, onDeleteEdge]);
 
   const edgeColor = edgeColors[data?.type || 'default'] || edgeColors.default;
   const strokeWidth = data?.strength === 'strong' ? 3 : data?.strength === 'weak' ? 1 : 2;
@@ -87,21 +73,22 @@ const CustomEdge = memo(function CustomEdge({
   const onToggleDirection = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
     const newDirection = isTwoWay ? 'one-way' : 'two-way';
-    setEdges((edges) => edges.map((edge) =>
-      edge.id === id
-        ? { ...edge, data: { ...edge.data, direction: newDirection } }
-        : edge
-    ));
-  }, [id, isTwoWay, setEdges]);
+    onUpdateEdge(id, { direction: newDirection });
+  }, [id, isTwoWay, onUpdateEdge]);
   
   // Handle label dragging
   const handleLabelMouseDown = useCallback((e: React.MouseEvent) => {
     if (isEditing) return;
     e.stopPropagation();
     e.preventDefault();
+    setDragLabelOffset(persistedLabelOffset);
+    labelOffsetRef.current = persistedLabelOffset;
     setIsDraggingLabel(true);
-    dragStartRef.current = { x: e.clientX - labelOffset.x, y: e.clientY - labelOffset.y };
-  }, [labelOffset, isEditing]);
+    dragStartRef.current = {
+      x: e.clientX - persistedLabelOffset.x,
+      y: e.clientY - persistedLabelOffset.y,
+    };
+  }, [persistedLabelOffset, isEditing]);
   
   useEffect(() => {
     if (!isDraggingLabel) return;
@@ -111,17 +98,14 @@ const CustomEdge = memo(function CustomEdge({
         x: e.clientX - dragStartRef.current.x,
         y: e.clientY - dragStartRef.current.y,
       };
-      setLabelOffset(newOffset);
+      labelOffsetRef.current = newOffset;
+      setDragLabelOffset(newOffset);
     };
     
     const handleMouseUp = () => {
       setIsDraggingLabel(false);
       // Save the latest offset via ref to avoid stale closure
-      setEdges((edges) => edges.map((edge) => 
-        edge.id === id 
-          ? { ...edge, data: { ...edge.data, labelOffset: labelOffsetRef.current } }
-          : edge
-      ));
+      onUpdateEdge(id, { labelOffset: labelOffsetRef.current });
     };
     
     document.addEventListener('mousemove', handleMouseMove);
@@ -131,23 +115,20 @@ const CustomEdge = memo(function CustomEdge({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDraggingLabel, id, setEdges, labelOffset]);
+  }, [isDraggingLabel, id, onUpdateEdge]);
   
   // Handle adding/editing comment
   const handleAddComment = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    setLabelText(data?.label || '');
     setIsEditing(true);
     setTimeout(() => inputRef.current?.focus(), 0);
-  }, []);
+  }, [data?.label]);
   
   const handleSaveComment = useCallback(() => {
     setIsEditing(false);
-    setEdges((edges) => edges.map((edge) => 
-      edge.id === id 
-        ? { ...edge, data: { ...edge.data, label: labelText } }
-        : edge
-    ));
-  }, [id, labelText, setEdges]);
+    onUpdateEdge(id, { label: labelText });
+  }, [id, labelText, onUpdateEdge]);
   
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -245,29 +226,32 @@ const CustomEdge = memo(function CustomEdge({
             <div className="flex items-center gap-1 justify-center">
               {!data?.label && !isEditing && (
                 <button
-                  className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-slate-200 shadow-lg transition-all"
+                  className="flex size-8 items-center justify-center rounded-full bg-slate-800/90 text-slate-300 shadow-lg transition-colors hover:bg-slate-700"
                   onClick={handleAddComment}
                   title="Add comment"
+                  aria-label="Add connection label"
                 >
                   <MessageSquare size={12} />
                 </button>
               )}
               <button
                 className={cn(
-                  "flex items-center justify-center w-6 h-6 rounded-full shadow-lg transition-all",
+                  "flex size-8 items-center justify-center rounded-full shadow-lg transition-colors",
                   isTwoWay
                     ? "bg-cyan-500/80 hover:bg-cyan-500 text-white"
                     : "bg-slate-800/90 hover:bg-slate-700 text-slate-400 hover:text-slate-200"
                 )}
                 onClick={onToggleDirection}
                 title={isTwoWay ? 'Switch to one-way' : 'Switch to two-way'}
+                aria-label={isTwoWay ? 'Change connection to one-way' : 'Change connection to two-way'}
               >
                 {isTwoWay ? <ArrowLeftRight size={12} /> : <ArrowRight size={12} />}
               </button>
               <button
-                className="flex items-center justify-center w-6 h-6 rounded-full bg-red-500/80 hover:bg-red-500 text-white shadow-lg transition-all"
+                className="flex size-8 items-center justify-center rounded-full bg-red-600/90 text-white shadow-lg transition-colors hover:bg-red-500"
                 onClick={onEdgeDelete}
                 title="Delete connection"
+                aria-label="Delete connection"
               >
                 <X size={12} />
               </button>

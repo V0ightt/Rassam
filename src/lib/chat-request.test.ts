@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import type { CanvasSyncSnapshot, RepoFileEntry } from "@/types";
 import { buildAvailableFiles, selectCanvasContextForChat } from "./chat-request";
@@ -7,6 +7,7 @@ import { buildAvailableFiles, selectCanvasContextForChat } from "./chat-request"
 function createSnapshot(overrides: Partial<CanvasSyncSnapshot>): CanvasSyncSnapshot {
   return {
     syncedAt: "2026-03-19T08:00:00.000Z",
+    graphRevision: 0,
     project: {
       id: "project-1",
       name: "Repo",

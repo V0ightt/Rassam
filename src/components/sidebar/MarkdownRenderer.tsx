@@ -1,17 +1,26 @@
 'use client';
 
-import React, { useState, memo } from 'react';
+import React, { createContext, useContext, useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check, FileCode, ExternalLink } from 'lucide-react';
+import { SourceLocationLink } from '@/components/evidence/SourceLocationLink';
+import {
+  parseSourceLocation,
+  type SourceLocationNavigationHandler,
+} from '@/lib/source-location';
 import { cn } from '@/lib/utils';
 
-interface MarkdownRendererProps {
+export interface MarkdownRendererProps {
   content: string;
   className?: string;
+  /** Makes repository `path:line` code spans open the pinned source viewer. */
+  onNavigateToSource?: SourceLocationNavigationHandler;
 }
+
+const InsideMarkdownLinkContext = createContext(false);
 
 // Custom code block component with copy functionality
 const CodeBlock = ({ 
@@ -82,27 +91,34 @@ const CodeBlock = ({
 };
 
 // Inline code component
-const InlineCode = ({ children }: { children: React.ReactNode }) => (
-  <code className="px-1.5 py-0.5 bg-slate-800 rounded text-cyan-300 text-xs font-mono border border-slate-700/50">
-    {children}
-  </code>
-);
+const InlineCode = ({
+  children,
+  onNavigateToSource,
+}: {
+  children: React.ReactNode;
+  onNavigateToSource?: SourceLocationNavigationHandler;
+}) => {
+  const insideLink = useContext(InsideMarkdownLinkContext);
+  const text = String(children);
+  const location = parseSourceLocation(text);
 
-// File path component
-const FilePath = ({ path }: { path: string }) => (
-  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-900/30 border border-amber-700/30 rounded text-amber-300 text-xs font-mono">
-    <FileCode size={10} />
-    {path}
-  </span>
-);
+  if (location) {
+    return (
+      <SourceLocationLink
+        location={location}
+        onNavigate={insideLink ? undefined : onNavigateToSource}
+      />
+    );
+  }
 
-export default memo(function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
-  // Pre-process content to detect file paths (only paths with directory separators)
-  const processedContent = content.replace(
-    /`((?:[a-zA-Z0-9_\-]+\/)+[a-zA-Z0-9_\-]+\.(ts|tsx|js|jsx|css|json|md|py|go|rs|java|c|cpp|h|hpp))`/g,
-    '**FILE:$1**'
+  return (
+    <code className="rounded border border-slate-700/50 bg-slate-800 px-1.5 py-0.5 font-mono text-xs text-cyan-300">
+      {children}
+    </code>
   );
+};
 
+export default memo(function MarkdownRenderer({ content, className, onNavigateToSource }: MarkdownRendererProps) {
   return (
     <div className={cn("prose prose-invert prose-sm max-w-none", className)}>
       <ReactMarkdown
@@ -110,11 +126,12 @@ export default memo(function MarkdownRenderer({ content, className }: MarkdownRe
         components={{
           // Code blocks
           code({ node, className, children, ...props }) {
+            void node;
             const match = /language-(\w+)/.exec(className || '');
             const isInline = !match && !className;
             
             if (isInline) {
-              return <InlineCode {...props}>{children}</InlineCode>;
+              return <InlineCode {...props} onNavigateToSource={onNavigateToSource}>{children}</InlineCode>;
             }
             
             return (
@@ -127,41 +144,28 @@ export default memo(function MarkdownRenderer({ content, className }: MarkdownRe
           // Links
           a({ href, children, ...props }) {
             return (
-              <a 
-                href={href} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 underline underline-offset-2"
-                {...props}
-              >
-                {children}
-                <ExternalLink size={10} />
-              </a>
+              <InsideMarkdownLinkContext.Provider value>
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 underline underline-offset-2"
+                  {...props}
+                >
+                  {children}
+                  <ExternalLink size={10} aria-hidden="true" />
+                </a>
+              </InsideMarkdownLinkContext.Provider>
             );
           },
           
           // Paragraphs
           p({ children, ...props }) {
-            // Check for file path markers
-            if (typeof children === 'string' && children.includes('**FILE:')) {
-              const parts = children.split(/\*\*FILE:([^*]+)\*\*/);
-              return (
-                <p className="text-slate-300 leading-relaxed my-1" {...props}>
-                  {parts.map((part, i) => 
-                    i % 2 === 1 ? <FilePath key={i} path={part} /> : part
-                  )}
-                </p>
-              );
-            }
             return <p className="text-slate-300 leading-relaxed my-1" {...props}>{children}</p>;
           },
           
-          // Strong/bold - handle file paths
+          // Strong/bold
           strong({ children, ...props }) {
-            const text = String(children);
-            if (text.startsWith('FILE:')) {
-              return <FilePath path={text.replace('FILE:', '')} />;
-            }
             return <strong className="text-slate-100 font-semibold" {...props}>{children}</strong>;
           },
           
@@ -219,7 +223,7 @@ export default memo(function MarkdownRenderer({ content, className }: MarkdownRe
           },
         }}
       >
-        {processedContent}
+        {content}
       </ReactMarkdown>
     </div>
   );

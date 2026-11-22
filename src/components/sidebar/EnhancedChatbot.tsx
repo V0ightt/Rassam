@@ -1,52 +1,67 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import Link from 'next/link';
-import { 
-  Send, 
-  Bot, 
-  User, 
-  Sparkles, 
-  FileCode, 
-  Folder, 
-  Trash2, 
-  RefreshCw,
-  Copy,
-  Check,
-  Lightbulb,
-  Code,
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import {
+  Bot,
   Bug,
+  Check,
+  ChevronDown,
+  Code,
+  Copy,
+  FileCode,
   FileQuestion,
-  Plus,
-  MessageSquare,
-  Terminal,
-  Settings,
-  Package,
+  Folder,
   History,
+  Lightbulb,
+  MessageSquare,
+  Package,
+  Plus,
+  RefreshCw,
+  Send,
+  Settings,
+  Sparkles,
+  Square,
+  Terminal,
+  Trash2,
+  User,
   X,
-  Square
 } from 'lucide-react';
+import type { Edge, Node } from 'reactflow';
+
 import { selectCanvasContextForChat } from '@/lib/chat-request';
+import { ChatStreamV2Decoder } from '@/lib/chat-stream-client';
+import type { CanvasPatchContract } from '@/lib/contracts';
 import { cn } from '@/lib/utils';
-import MarkdownRenderer from './MarkdownRenderer';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Edge, Node } from 'reactflow';
-import { CanvasSyncSnapshot, ChatSession, ChatMessage, EdgeData, NodeData } from '@/types';
-import type { ChatCanvasWriteOperation, ChatMode } from '@/types';
-import { LLMProviderId } from '@/lib/llm';
+import type { SourceLocationNavigationHandler } from '@/lib/source-location';
+import { isSensitiveSourcePath } from '@/lib/source-policy';
+import type { LLMProviderId } from '@/lib/llm';
 import {
   loadModelSettings,
   MODEL_SETTINGS_STORAGE_KEY,
-  ModelSettings,
-  ProviderStatusResponse,
+  type ModelSettings,
+  type ProviderStatusResponse,
   saveModelSettings,
   sanitizeModelSettings,
 } from '@/lib/model-settings';
+import type {
+  CanvasSyncSnapshot,
+  ChatMessage,
+  ChatMode,
+  ChatSession,
+  EdgeData,
+  NodeData,
+  RepoDetails,
+} from '@/types';
+
+import MarkdownRenderer from './MarkdownRenderer';
 
 interface ChatbotProps {
   projectId: string | null;
+  graphRevision: number;
   selectedNode: Node<NodeData> | null;
-  repoDetails?: { owner: string; repo: string } | null;
+  repoDetails?: RepoDetails | null;
   getCanvasState?: () => { nodes: Node[]; edges: Edge[] };
   projectName?: string;
   layoutDirection?: 'TB' | 'LR';
@@ -58,53 +73,59 @@ interface ChatbotProps {
   onCreateNewChat: () => void;
   onSwitchChat: (sessionId: string) => void;
   onDeleteChat: (sessionId: string) => void;
-  /** Returns cached file contents for the given paths (from IndexedDB). */
   getCachedFiles?: (paths: string[]) => Promise<Record<string, string>>;
-  /** All file paths that are cached for the current project. */
   cachedFilePaths?: Set<string>;
   availableFiles?: string[];
-  onBeginCanvasWriteTransaction?: () => void;
-  onApplyCanvasWrite?: (operation: ChatCanvasWriteOperation) => void;
-  onEndCanvasWriteTransaction?: () => void;
+  onApplyCanvasPatch?: (patch: CanvasPatchContract) => { ok: boolean; message: string };
+  onNavigateToSource?: SourceLocationNavigationHandler;
   onClose?: () => void;
 }
 
-type ChatStreamEvent =
-  | { type: 'status'; text: string }
-  | { type: 'text'; text: string }
-  | { type: 'write'; operation: ChatCanvasWriteOperation; text?: string }
-  | { type: 'error'; text: string }
-  | { type: 'done' };
+interface PendingProposal {
+  patch: CanvasPatchContract;
+  projectId: string;
+  sessionId: string;
+}
 
 const CHAT_MODE_STORAGE_KEY = 'repoAgent_chatMode';
+const SOURCE_CONSENT_STORAGE_KEY = 'rassam.external-source-consent.v1';
 
-// Quick action prompts
 const quickActions = [
-  { icon: Lightbulb, label: 'Explain this', prompt: 'Explain what this component does and how it works' },
-  { icon: Code, label: 'Show usage', prompt: 'Show me how to use this component with a code example' },
-  { icon: Bug, label: 'Find issues', prompt: 'What potential issues or improvements do you see in this code?' },
-  { icon: FileQuestion, label: 'Dependencies', prompt: 'What are the dependencies and how does this connect to other parts?' },
+  { icon: Lightbulb, label: 'Explain this', prompt: 'Explain what this component does and cite the source evidence.' },
+  { icon: Code, label: 'Show usage', prompt: 'Show how this component is used, with source citations.' },
+  { icon: Bug, label: 'Find issues', prompt: 'What potential issues do you see? Separate evidence from inference.' },
+  { icon: FileQuestion, label: 'Dependencies', prompt: 'Trace this component’s dependencies and cite each relationship.' },
 ];
 
-// Global quick actions when no node is selected
 const globalQuickActions = [
-  { icon: Terminal, label: 'How to run', prompt: 'How do I run this project locally? Give me step-by-step instructions.' },
-  { icon: Package, label: 'Dependencies', prompt: 'What are the main dependencies and technologies used in this project?' },
-  { icon: Settings, label: 'Architecture', prompt: 'Explain the overall architecture and structure of this project.' },
-  { icon: Code, label: 'Key features', prompt: 'What are the key features and main functionality of this project?' },
+  { icon: Terminal, label: 'How to run', prompt: 'How do I run this project locally? Cite the relevant files.' },
+  { icon: Package, label: 'Dependencies', prompt: 'What are the main dependencies and where are they declared?' },
+  { icon: Settings, label: 'Architecture', prompt: 'Explain the architecture using verified graph and source evidence.' },
+  { icon: Code, label: 'Key features', prompt: 'What are the key features? Distinguish evidence from inference.' },
 ];
 
 const defaultMessages: ChatMessage[] = [{
-  id: '1',
-  role: 'assistant', 
-  content: "👋 Hi! I'm **Rassam**, your AI assistant for understanding code and flowcharts.\n\n**Quick tips:**\n- Create a project from GitHub URL or start with an empty canvas\n- Click on any node to ask questions about it\n- Use the canvas **Sync** button before chat for the latest graph context\n\nLet's explore your architecture together!",
-  timestamp: new Date()
+  id: 'rassam-welcome',
+  role: 'assistant',
+  content: "Hi! I’m **Rassam**. Select a component or relationship, then ask me to explain it from the pinned source evidence.",
+  timestamp: new Date(0),
 }];
 
-export default memo(function EnhancedChatbot({ 
+function messageId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function proposalKey(projectId: string | null, sessionId: string | null): string {
+  return `${projectId ?? 'none'}:${sessionId ?? 'none'}`;
+}
+
+export default memo(function EnhancedChatbot({
   projectId,
-  selectedNode, 
-  repoDetails, 
+  graphRevision,
+  selectedNode,
+  repoDetails,
   getCanvasState,
   projectName,
   layoutDirection = 'TB',
@@ -119,13 +140,12 @@ export default memo(function EnhancedChatbot({
   getCachedFiles,
   cachedFilePaths,
   availableFiles,
-  onBeginCanvasWriteTransaction,
-  onApplyCanvasWrite,
-  onEndCanvasWriteTransaction,
+  onApplyCanvasPatch,
+  onNavigateToSource,
   onClose,
 }: ChatbotProps) {
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [input, setInput] = useState('');
+  const [activeRequestKey, setActiveRequestKey] = useState<string | null>(null);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showChatHistory, setShowChatHistory] = useState(false);
@@ -133,52 +153,74 @@ export default memo(function EnhancedChatbot({
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>('ask');
+  const [sourceConsent, setSourceConsent] = useState(false);
+  const [pendingProposals, setPendingProposals] = useState<Record<string, PendingProposal>>({});
+  const [proposalMessage, setProposalMessage] = useState<string | null>(null);
+  const [toolEvents, setToolEvents] = useState<Record<string, string[]>>({});
+  const [showNewResponse, setShowNewResponse] = useState(false);
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nearBottomRef = useRef(true);
 
-  // Get current messages from active chat session
-  const activeSession = chatSessions.find(s => s.id === activeChatSessionId);
-  const messages = activeSession?.messages || defaultMessages;
+  const activeSession = chatSessions.find((session) => session.id === activeChatSessionId);
+  const messages = activeSession?.messages ?? defaultMessages;
+  const currentKey = proposalKey(projectId, activeChatSessionId);
+  const pendingProposal = pendingProposals[currentKey];
+  const currentToolEvents = toolEvents[currentKey] ?? [];
+  const loading = activeRequestKey !== null;
+  const loadingCurrentSession = activeRequestKey === currentKey;
 
-  const updateTargetSessionMessages = useCallback(
-    (sessionId: string | null, nextMessages: ChatMessage[]) => {
-      if (!projectId || !sessionId) return false;
-      onUpdateMessages(projectId, sessionId, nextMessages);
-      return true;
-    },
-    [onUpdateMessages, projectId],
-  );
+  const messageVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 116,
+    overscan: 6,
+    getItemKey: (index) => messages[index]?.id ?? index,
+  });
+
+  const scrollToLatest = useCallback(() => {
+    if (messages.length === 0) return;
+    messageVirtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+    setShowNewResponse(false);
+  }, [messageVirtualizer, messages.length]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (nearBottomRef.current) {
+      requestAnimationFrame(scrollToLatest);
+    } else if (messages.length > 0) {
+      setShowNewResponse(true);
     }
-  }, [messages]);
+  }, [messages, scrollToLatest]);
 
-  // Show quick actions when node selection changes (without spamming chat)
   useEffect(() => {
-    if (selectedNode) {
-      setShowQuickActions(true);
-    }
+    if (!selectedNode) return;
+    setShowQuickActions(true);
   }, [selectedNode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(CHAT_MODE_STORAGE_KEY);
-    if (stored === 'agent' || stored === 'ask') {
-      setChatMode(stored);
-    }
+    const storedMode = window.localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+    if (storedMode === 'ask' || storedMode === 'agent') setChatMode(storedMode);
+    setSourceConsent(window.localStorage.getItem(SOURCE_CONSENT_STORAGE_KEY) === 'accepted');
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode);
+    if (typeof window !== 'undefined') window.localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode);
   }, [chatMode]);
 
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [input]);
+
   const syncSettings = useCallback((statusPayload: ProviderStatusResponse) => {
-    const loaded = loadModelSettings();
-    const sanitized = sanitizeModelSettings(loaded, statusPayload);
+    const sanitized = sanitizeModelSettings(loadModelSettings(), statusPayload);
     setModelSettings(sanitized);
     saveModelSettings(sanitized);
   }, []);
@@ -187,724 +229,530 @@ export default memo(function EnhancedChatbot({
     try {
       const response = await fetch('/api/settings/models', { cache: 'no-store' });
       const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload?.error || 'Failed to load model settings');
-      }
-
+      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.error ?? 'Failed to load model metadata');
       const statusPayload = payload as ProviderStatusResponse;
       setProviderStatus(statusPayload);
       syncSettings(statusPayload);
       setModelError(null);
     } catch (error) {
-      setModelError(error instanceof Error ? error.message : 'Could not load model settings');
+      setModelError(error instanceof Error ? error.message : 'Could not load model metadata');
       setModelSettings(loadModelSettings());
     }
   }, [syncSettings]);
 
   useEffect(() => {
-    fetchModelStatus();
+    void fetchModelStatus();
   }, [fetchModelStatus]);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== MODEL_SETTINGS_STORAGE_KEY) return;
-      const loaded = loadModelSettings();
-      const sanitized = sanitizeModelSettings(loaded, providerStatus);
-      setModelSettings(sanitized);
+      setModelSettings(sanitizeModelSettings(loadModelSettings(), providerStatus));
     };
-
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
   }, [providerStatus]);
 
-  const enabledModelOptions = React.useMemo(() => {
+  const enabledModelOptions = useMemo(() => {
     if (!providerStatus || !modelSettings) return [] as Array<{ providerId: LLMProviderId; model: string; label: string }>;
+    return providerStatus.providers.flatMap((provider) => {
+      if (!provider.available) return [];
+      return (modelSettings.enabledModels[provider.id] ?? [])
+        .filter((model) => provider.models.includes(model))
+        .map((model) => ({ providerId: provider.id, model, label: `${provider.label} · ${model}` }));
+    });
+  }, [modelSettings, providerStatus]);
 
-    const options: Array<{ providerId: LLMProviderId; model: string; label: string }> = [];
-    for (const provider of providerStatus.providers) {
-      if (!provider.available) continue;
-      const enabledModels = modelSettings.enabledModels[provider.id] || [];
-      for (const model of enabledModels) {
-        if (!provider.models.includes(model)) continue;
-        options.push({
-          providerId: provider.id,
-          model,
-          label: `${provider.label} • ${model}`,
-        });
-      }
-    }
-
-    return options;
-  }, [providerStatus, modelSettings]);
-
-  const activeModelValue = modelSettings?.selectedProvider && modelSettings?.selectedModel
+  const activeModelValue = modelSettings?.selectedProvider && modelSettings.selectedModel
     ? `${modelSettings.selectedProvider}::${modelSettings.selectedModel}`
     : '';
-
   const activeModelLabel = enabledModelOptions.find(
     (option) => `${option.providerId}::${option.model}` === activeModelValue,
-  )?.label || 'No enabled model';
+  )?.label ?? 'No enabled model';
 
   const updateSelectedModel = useCallback((value: string) => {
     if (!modelSettings) return;
-
-    const [providerIdRaw, ...rest] = value.split('::');
-    const selectedModel = rest.join('::').trim();
-    const providerId = providerIdRaw as LLMProviderId;
-
-    const next: ModelSettings = {
+    const [providerIdRaw, ...modelParts] = value.split('::');
+    const next = sanitizeModelSettings({
       ...modelSettings,
-      selectedProvider: providerId,
-      selectedModel,
-    };
-    const sanitized = sanitizeModelSettings(next, providerStatus);
-    setModelSettings(sanitized);
-    saveModelSettings(sanitized);
+      selectedProvider: providerIdRaw as LLMProviderId,
+      selectedModel: modelParts.join('::'),
+    }, providerStatus);
+    setModelSettings(next);
+    saveModelSettings(next);
   }, [modelSettings, providerStatus]);
 
-  const appendToolStatus = useCallback((content: string, status: string) => {
-    return `${content}${content ? '\n\n' : ''}> [tool] ${status}`;
-  }, []);
+  const sanitizeHistoryContent = useCallback((content: string) => (
+    content.replace(/^> \[tool\].*$/gm, '').replace(/\n{3,}/g, '\n\n').trim()
+  ), []);
 
-  const sanitizeHistoryContent = useCallback((content: string) => {
-    return content.replace(/^> \[tool\].*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
-  }, []);
+  const buildLiveCanvasContext = useCallback((): CanvasSyncSnapshot => {
+    const canvasState = getCanvasState?.();
+    const canvasNodes = canvasState?.nodes ?? [];
+    const canvasEdges = canvasState?.edges ?? [];
+    const activeSelection = selectedNode
+      ? canvasNodes.find((node) => node.id === selectedNode.id) ?? null
+      : null;
 
-  const applyStreamEvent = useCallback((
-    event: ChatStreamEvent,
-    currentContent: string,
-  ) => {
-    if (event.type === 'status') {
-      return appendToolStatus(currentContent, event.text);
-    }
-
-    if (event.type === 'text') {
-      return `${currentContent}${event.text}`;
-    }
-
-    if (event.type === 'write') {
-      onApplyCanvasWrite?.(event.operation);
-      return event.text ? appendToolStatus(currentContent, event.text) : currentContent;
-    }
-
-    if (event.type === 'error') {
-      return `${currentContent}${currentContent ? '\n\n' : ''}❌ ${event.text}`;
-    }
-
-    return currentContent;
-  }, [appendToolStatus, onApplyCanvasWrite]);
-
-  const handleSend = async (messageText?: string) => {
-    const text = messageText || input;
-    if (!text.trim()) return;
-
-    const targetSessionId = activeSession?.id || activeChatSessionId;
-    if (!projectId || !targetSessionId) return;
-
-    if (!modelSettings || enabledModelOptions.length === 0) {
-      const unavailableMsg: ChatMessage = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: '❌ No enabled AI model is available. Open Settings and enable a validated model first.',
-        timestamp: new Date(),
-      };
-      updateTargetSessionMessages(targetSessionId, [...messages, unavailableMsg]);
-      return;
-    }
-
-    const selectedOption = enabledModelOptions.find(
-      (option) => option.providerId === modelSettings.selectedProvider && option.model === modelSettings.selectedModel,
-    );
-
-    if (!selectedOption) {
-      const invalidSelectionMsg: ChatMessage = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: '❌ Your selected model is no longer valid. Please update it in Settings.',
-        timestamp: new Date(),
-      };
-      updateTargetSessionMessages(targetSessionId, [...messages, invalidSelectionMsg]);
-      return;
-    }
-
-    const userMsg: ChatMessage = { 
-      id: Date.now().toString(),
-      role: 'user', 
-      content: text,
-      timestamp: new Date()
+    return {
+      syncedAt: liveCanvasLastModifiedAt ?? new Date().toISOString(),
+      graphRevision,
+      project: {
+        id: projectId ?? 'live-canvas',
+        name: projectName ?? (repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : 'Untitled Project'),
+        source: repoDetails ? 'github' : 'empty',
+        repo: repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : undefined,
+      },
+      layoutDirection,
+      selectedNodeId: activeSelection?.id ?? null,
+      selectedNodeLabel: activeSelection?.data?.label ?? null,
+      nodes: canvasNodes.map((node) => ({
+        id: node.id,
+        label: node.data?.label,
+        description: node.data?.description,
+        category: node.data?.category,
+        files: node.data?.files,
+        complexity: node.data?.complexity,
+        dependencies: node.data?.dependencies,
+        exports: node.data?.exports,
+        evidence: node.data?.evidence,
+        confidence: node.data?.confidence,
+        analysisLevel: node.data?.analysisLevel,
+        position: node.position,
+      })),
+      edges: canvasEdges.map((edge) => {
+        const data = edge.data as EdgeData | undefined;
+        return {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          label: data?.label ?? (typeof edge.label === 'string' ? edge.label : undefined),
+          type: data?.type ?? edge.type,
+          strength: data?.strength,
+          direction: data?.direction,
+          evidence: data?.evidence,
+          confidence: data?.confidence,
+        };
+      }),
     };
-    
-    const updatedMessages = [...messages, userMsg];
-    updateTargetSessionMessages(targetSessionId, updatedMessages);
-    setInput("");
-    setLoading(true);
+  }, [getCanvasState, graphRevision, layoutDirection, liveCanvasLastModifiedAt, projectId, projectName, repoDetails, selectedNode]);
+
+  const gatherCachedFiles = useCallback(async (text: string) => {
+    if (!getCachedFiles || !cachedFilePaths?.size) return undefined;
+    const relevantPaths = new Set<string>();
+    for (const path of selectedNode?.data.files ?? []) {
+      if (cachedFilePaths.has(path) && !isSensitiveSourcePath(path)) relevantPaths.add(path);
+    }
+    const lowerText = text.toLowerCase();
+    for (const path of cachedFilePaths) {
+      if (isSensitiveSourcePath(path)) continue;
+      const fileName = path.split('/').pop()?.toLowerCase() ?? '';
+      if ((fileName && lowerText.includes(fileName)) || text.includes(path)) relevantPaths.add(path);
+    }
+    for (const keyPath of ['README.md', 'readme.md', 'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod']) {
+      if (cachedFilePaths.has(keyPath) && !isSensitiveSourcePath(keyPath)) relevantPaths.add(keyPath);
+    }
+    const paths = [...relevantPaths].slice(0, 15);
+    if (!paths.length) return undefined;
+    try {
+      return await getCachedFiles(paths);
+    } catch {
+      return undefined;
+    }
+  }, [cachedFilePaths, getCachedFiles, selectedNode]);
+
+  const handleSend = useCallback(async (messageText?: string) => {
+    const text = (messageText ?? input).trim();
+    const targetProjectId = projectId;
+    const targetSessionId = activeSession?.id ?? activeChatSessionId;
+    if (!text || !targetProjectId || !targetSessionId || loading) return;
+
+    const targetKey = proposalKey(targetProjectId, targetSessionId);
+    const selectedOption = enabledModelOptions.find(
+      (option) => option.providerId === modelSettings?.selectedProvider && option.model === modelSettings.selectedModel,
+    );
+    if (!selectedOption || !modelSettings) {
+      onUpdateMessages(targetProjectId, targetSessionId, [...messages, {
+        id: messageId(), role: 'assistant',
+        content: 'No enabled AI model is selected. Open Settings, enable a model, and use Test Model if needed.',
+        timestamp: new Date(),
+      }]);
+      return;
+    }
+    if (repoDetails && !sourceConsent) {
+      setModelError('Acknowledge source sharing before sending repository context to an external provider.');
+      return;
+    }
+
+    const userMessage: ChatMessage = { id: messageId(), role: 'user', content: text, timestamp: new Date() };
+    const assistantMessageId = messageId();
+    const assistantMessage: ChatMessage = { id: assistantMessageId, role: 'assistant', content: '', timestamp: new Date() };
+    const requestMessages = [...messages, userMessage, assistantMessage];
+    onUpdateMessages(targetProjectId, targetSessionId, requestMessages);
+    setInput('');
     setShowQuickActions(false);
-    let writeTransactionStarted = false;
+    setProposalMessage(null);
+    setToolEvents((current) => ({ ...current, [targetKey]: [] }));
+    setPendingProposals((current) => {
+      const next = { ...current };
+      delete next[targetKey];
+      return next;
+    });
+    setActiveRequestKey(targetKey);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    let streamedContent = '';
+    let receivedPatch: CanvasPatchContract | null = null;
+    let updateTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastUpdateAt = 0;
+
+    const persistAssistant = (force = false) => {
+      const persist = () => {
+        lastUpdateAt = performance.now();
+        onUpdateMessages(targetProjectId, targetSessionId, requestMessages.map((message) => (
+          message.id === assistantMessageId ? { ...message, content: streamedContent } : message
+        )));
+      };
+      const remaining = 34 - (performance.now() - lastUpdateAt);
+      if (force || remaining <= 0) {
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = null;
+        persist();
+      } else if (!updateTimer) {
+        updateTimer = setTimeout(() => {
+          updateTimer = null;
+          persist();
+        }, remaining);
+      }
+    };
 
     try {
-      const liveCanvasContext: CanvasSyncSnapshot = {
-        syncedAt: liveCanvasLastModifiedAt || new Date().toISOString(),
-        project: {
-          id: 'live-canvas',
-          name: projectName || (repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : 'Untitled Project'),
-          source: repoDetails ? 'github' : 'empty',
-          repo: repoDetails ? `${repoDetails.owner}/${repoDetails.repo}` : undefined,
-        },
-        layoutDirection,
-        selectedNodeId: selectedNode?.id || null,
-        selectedNodeLabel: selectedNode?.data?.label || null,
-        nodes: (getCanvasState?.().nodes || []).map(n => ({
-          id: n.id,
-          label: n.data?.label,
-          category: n.data?.category,
-          description: n.data?.description,
-          files: n.data?.files,
-          complexity: n.data?.complexity,
-          dependencies: n.data?.dependencies,
-          exports: n.data?.exports,
-          position: n.position,
-        })),
-        edges: (getCanvasState?.().edges || []).map(e => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          label: (e.data as EdgeData)?.label || (typeof e.label === 'string' ? e.label : undefined),
-          type: (e.data as EdgeData)?.type || e.type,
-          strength: (e.data as EdgeData)?.strength,
-          direction: (e.data as EdgeData)?.direction,
-        })),
-      };
-
+      const liveCanvasContext = buildLiveCanvasContext();
       const canvasContext = selectCanvasContextForChat(
         liveCanvasContext,
         syncedCanvasContext,
         liveCanvasLastModifiedAt,
       );
-
-      // Create AbortController for this request
-      const abortController = new AbortController();
-      abortControllerRef.current = abortController;
-
-      // ── Gather relevant cached files for AI context ──────────
-      let cachedFileContents: Record<string, string> | undefined;
-      if (getCachedFiles && cachedFilePaths && cachedFilePaths.size > 0) {
-        // Collect file paths from the selected node + any file paths mentioned in the message
-        const relevantPaths = new Set<string>();
-
-        // Files from selected node
-        if (selectedNode?.data?.files) {
-          for (const f of selectedNode.data.files as string[]) {
-            if (cachedFilePaths.has(f)) relevantPaths.add(f);
-          }
-        }
-
-        // Files mentioned in the message text
-        for (const fp of cachedFilePaths) {
-          const fileName = fp.split('/').pop()?.toLowerCase() || '';
-          if (text.toLowerCase().includes(fileName) || text.includes(fp)) {
-            relevantPaths.add(fp);
-          }
-        }
-
-        // Also include key files like README, package.json if cached
-        const keyFiles = ['README.md', 'readme.md', 'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod'];
-        for (const kf of keyFiles) {
-          if (cachedFilePaths.has(kf)) relevantPaths.add(kf);
-        }
-
-        // Cap at 15 files to avoid overwhelming context
-        const pathsArray = Array.from(relevantPaths).slice(0, 15);
-        if (pathsArray.length > 0) {
-          try {
-            cachedFileContents = await getCachedFiles(pathsArray);
-          } catch {
-            // ignore – will fall back to GitHub fetching
-          }
-        }
-      }
-
-      const res = await fetch('/api/chat', {
+      const cachedFiles = await gatherCachedFiles(text);
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
         body: JSON.stringify({
+          protocolVersion: 2,
           message: text,
           chatMode,
-          repoDetails: repoDetails,
+          baseGraphRevision: graphRevision,
+          repoDetails: repoDetails ?? null,
           canvasContext,
           availableFiles,
-          cachedFiles: cachedFileContents,
+          cachedFiles,
           modelSettings: {
             providerId: selectedOption.providerId,
             model: selectedOption.model,
             maxTokens: modelSettings.maxOutputTokens,
             temperature: modelSettings.temperature,
           },
-          // Send conversation history (prior messages, excluding the just-added user message)
           history: messages
-            .filter(m => m.role === 'user' || m.role === 'assistant')
-            .map(m => ({ role: m.role, content: sanitizeHistoryContent(m.content) })),
-        })
+            .filter((message) => message.role === 'user' || message.role === 'assistant')
+            .map((message) => ({ role: message.role, content: sanitizeHistoryContent(message.content) })),
+        }),
       });
 
-      if (!res.ok) {
-        // Non-streaming error responses come back as JSON
-        let errorMessage = 'Failed to process chat message';
+      if (!response.ok) {
+        let errorMessage = 'Rassam could not process this request.';
         try {
-          const data = await res.json();
-          errorMessage = data?.reply || data?.error || errorMessage;
+          const payload = await response.json();
+          errorMessage = payload?.error?.message ?? payload?.reply ?? payload?.error ?? errorMessage;
         } catch {
-          // body isn't JSON
+          // Preserve the safe generic message for non-JSON failures.
         }
         throw new Error(errorMessage);
       }
 
-      // Stream the response
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error('No response body');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('The chat response did not contain a stream.');
+      const decoder = new ChatStreamV2Decoder();
 
-      const decoder = new TextDecoder();
-      const assistantMsgId = (Date.now() + 1).toString();
-      let streamedContent = '';
-      let buffer = '';
-
-      const assistantMsg: ChatMessage = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date()
+      const processEvents = (events: ReturnType<ChatStreamV2Decoder['push']>) => {
+        for (const event of events) {
+          if (event.type === 'status') {
+            setToolEvents((current) => ({
+              ...current,
+              [targetKey]: [...(current[targetKey] ?? []), event.text].slice(-30),
+            }));
+          } else if (event.type === 'text') {
+            streamedContent += event.text;
+            persistAssistant();
+          } else if (event.type === 'error') {
+            streamedContent += `${streamedContent ? '\n\n' : ''}Error: ${event.text}`;
+            persistAssistant();
+          } else if (event.type === 'canvas_patch') {
+            receivedPatch = event.patch;
+            streamedContent += `${streamedContent ? '\n\n' : ''}${event.text ?? 'A validated canvas proposal is ready for review.'}`;
+            persistAssistant();
+          }
+        }
       };
-
-      const messagesWithAssistant = [...updatedMessages, assistantMsg];
-      updateTargetSessionMessages(targetSessionId, messagesWithAssistant);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-
-          let event: ChatStreamEvent | null = null;
-          try {
-            event = JSON.parse(line) as ChatStreamEvent;
-          } catch {
-            event = { type: 'text', text: line };
-          }
-
-          if (event.type === 'write' && !writeTransactionStarted) {
-            onBeginCanvasWriteTransaction?.();
-            writeTransactionStarted = true;
-          }
-          streamedContent = applyStreamEvent(event, streamedContent);
-          const updated = messagesWithAssistant.map(m =>
-            m.id === assistantMsgId ? { ...m, content: streamedContent } : m
-          );
-          updateTargetSessionMessages(targetSessionId, updated);
-        }
+        processEvents(decoder.push(value));
       }
-
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer) as ChatStreamEvent;
-          if (event.type === 'write' && !writeTransactionStarted) {
-            onBeginCanvasWriteTransaction?.();
-            writeTransactionStarted = true;
-          }
-          streamedContent = applyStreamEvent(event, streamedContent);
-        } catch {
-          streamedContent += buffer;
-        }
-
-        const updated = messagesWithAssistant.map(m =>
-          m.id === assistantMsgId ? { ...m, content: streamedContent } : m
-        );
-        updateTargetSessionMessages(targetSessionId, updated);
-      }
+      processEvents(decoder.finish());
 
       if (!streamedContent.trim()) {
-        const updated = messagesWithAssistant.map(m =>
-          m.id === assistantMsgId
-            ? { ...m, content: "Sorry, I couldn't process that request." }
-            : m
-        );
-        updateTargetSessionMessages(targetSessionId, updated);
+        streamedContent = receivedPatch
+          ? 'A validated canvas proposal is ready for review.'
+          : 'Rassam completed the request without returning an answer.';
+      }
+      persistAssistant(true);
+      if (receivedPatch) {
+        setPendingProposals((current) => ({
+          ...current,
+          [targetKey]: { patch: receivedPatch!, projectId: targetProjectId, sessionId: targetSessionId },
+        }));
       }
     } catch (error) {
-      // Don't show error message if the user intentionally cancelled
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        // Stream was cancelled by the user – keep whatever was streamed so far
-        return;
-      }
-      const errorMsg: ChatMessage = { 
-        id: (Date.now() + 1).toString(),
-        role: 'assistant', 
-        content: `❌ ${error instanceof Error ? error.message : 'Error communicating with AI. Please try again.'}`,
-        timestamp: new Date()
-      };
-      updateTargetSessionMessages(targetSessionId, [...updatedMessages, errorMsg]);
+      const cancelled = error instanceof DOMException && error.name === 'AbortError';
+      streamedContent += `${streamedContent ? '\n\n' : ''}${cancelled
+        ? '_Response stopped. No canvas changes were applied._'
+        : `Error: ${error instanceof Error ? error.message : 'Could not communicate with the selected model.'}`}`;
+      persistAssistant(true);
     } finally {
-      if (writeTransactionStarted) {
-        onEndCanvasWriteTransaction?.();
-      }
+      if (updateTimer) clearTimeout(updateTimer);
       abortControllerRef.current = null;
-      setLoading(false);
+      setActiveRequestKey((current) => current === targetKey ? null : current);
     }
-  };
+  }, [activeChatSessionId, activeSession?.id, availableFiles, buildLiveCanvasContext, chatMode, enabledModelOptions, gatherCachedFiles, graphRevision, input, liveCanvasLastModifiedAt, loading, messages, modelSettings, onUpdateMessages, projectId, repoDetails, sanitizeHistoryContent, sourceConsent, syncedCanvasContext]);
 
-  const handleStop = useCallback(() => {
-    abortControllerRef.current?.abort();
+  const applyProposal = useCallback(() => {
+    if (!pendingProposal || !onApplyCanvasPatch) return;
+    if (pendingProposal.patch.baseGraphRevision !== graphRevision) {
+      setProposalMessage('The canvas changed after this proposal was created. Discard it and regenerate the proposal.');
+      return;
+    }
+    const result = onApplyCanvasPatch(pendingProposal.patch);
+    setProposalMessage(result.message);
+    if (!result.ok) return;
+
+    const session = chatSessions.find((candidate) => candidate.id === pendingProposal.sessionId);
+    if (session) {
+      onUpdateMessages(pendingProposal.projectId, pendingProposal.sessionId, [...session.messages, {
+        id: messageId(),
+        role: 'assistant',
+        content: `Applied: ${pendingProposal.patch.summary}`,
+        timestamp: new Date(),
+      }]);
+    }
+    setPendingProposals((current) => {
+      const next = { ...current };
+      delete next[currentKey];
+      return next;
+    });
+  }, [chatSessions, currentKey, graphRevision, onApplyCanvasPatch, onUpdateMessages, pendingProposal]);
+
+  const discardProposal = useCallback(() => {
+    setPendingProposals((current) => {
+      const next = { ...current };
+      delete next[currentKey];
+      return next;
+    });
+    setProposalMessage('Proposal discarded. The canvas was not changed.');
+  }, [currentKey]);
+
+  const copyMessage = useCallback(async (id: string, content: string) => {
+    await navigator.clipboard.writeText(content);
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId(null), 2_000);
   }, []);
 
-  const copyMessage = useCallback((id: string, content: string) => {
-    navigator.clipboard.writeText(content);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const setConsent = useCallback((accepted: boolean) => {
+    setSourceConsent(accepted);
+    setModelError(null);
+    if (typeof window !== 'undefined') {
+      if (accepted) window.localStorage.setItem(SOURCE_CONSENT_STORAGE_KEY, 'accepted');
+      else window.localStorage.removeItem(SOURCE_CONSENT_STORAGE_KEY);
+    }
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 border-l border-slate-800">
-      {/* Header */}
-      <div className="p-4 border-b border-slate-800 bg-gradient-to-r from-slate-900 to-slate-900/50">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-100 flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-cyan-500/20">
-              <Bot size={16} className="text-cyan-400"/> 
-            </div>
-            Rassam Chat
-            <span className="text-[10px] px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-full">AI</span>
-          </h3>
+    <section className="flex h-full min-h-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--surface-base)]" aria-label="Rassam assistant">
+      <header className="border-b border-[var(--border-subtle)] p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            <span className="grid h-7 w-7 place-items-center rounded-md bg-cyan-500/15 text-cyan-300"><Bot size={16} aria-hidden="true" /></span>
+            Rassam
+            <span className="rounded border border-cyan-500/30 px-1.5 py-0.5 text-[10px] font-medium text-cyan-300">AI</span>
+          </h2>
           <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setShowChatHistory(!showChatHistory)}
-              className={cn(
-                "p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors",
-                showChatHistory && "bg-blue-500/20 text-blue-400"
-              )}
-              title="Chat history"
-            >
-              <History size={14} />
-            </button>
-            <button 
-              onClick={onCreateNewChat}
-              className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors"
-              title="New chat"
-            >
-              <Plus size={14} />
-            </button>
-            <Link
-              href="/settings"
-              className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors"
-              title="Settings"
-            >
-              <Settings size={14} />
-            </Link>
-            {onClose && (
-              <button
-                onClick={onClose}
-                className="p-1.5 text-slate-500 hover:text-red-300 hover:bg-slate-800 rounded-lg transition-colors"
-                title="Close chat"
-              >
-                <X size={14} />
-              </button>
-            )}
+            <button type="button" aria-label="Toggle chat history" aria-expanded={showChatHistory} onClick={() => setShowChatHistory((value) => !value)} className="icon-button"><History size={16} /></button>
+            <button type="button" aria-label="Start a new chat" onClick={onCreateNewChat} className="icon-button"><Plus size={16} /></button>
+            <Link href="/settings" aria-label="Open AI settings" className="icon-button"><Settings size={16} /></Link>
+            {onClose && <button type="button" aria-label="Close Rassam panel" onClick={onClose} className="icon-button"><X size={16} /></button>}
           </div>
         </div>
-        
-        {/* Chat History Dropdown */}
-        <AnimatePresence>
-          {showChatHistory && chatSessions.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mt-3 border border-slate-700 rounded-lg overflow-hidden"
-            >
-              <div className="max-h-48 overflow-y-auto custom-scrollbar">
-                {chatSessions.map((session) => (
-                  <div
-                    key={session.id}
-                    className={cn(
-                      "flex items-center justify-between px-3 py-2 cursor-pointer transition-all group",
-                      session.id === activeChatSessionId
-                        ? "bg-blue-500/20 border-l-2 border-blue-500"
-                        : "hover:bg-slate-800 border-l-2 border-transparent"
-                    )}
-                    onClick={() => {
-                      onSwitchChat(session.id);
-                      setShowChatHistory(false);
-                    }}
-                  >
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <MessageSquare size={12} className={session.id === activeChatSessionId ? "text-blue-400" : "text-slate-500"} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-slate-300 truncate">{session.title}</div>
-                        <div className="text-[10px] text-slate-600">
-                          {session.messages.length} messages • {new Date(session.updatedAt).toLocaleDateString()}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm('Delete this chat?')) {
-                          onDeleteChat(session.id);
-                        }
-                      }}
-                      className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                    >
-                      <Trash2 size={12} />
+
+        {showChatHistory && (
+          <div className="mt-3 max-h-52 overflow-y-auto rounded-md border border-[var(--border)]" role="list" aria-label="Chat sessions">
+            {chatSessions.map((session) => (
+              <div key={session.id} role="listitem" className={cn('group flex items-center border-l-2', session.id === activeChatSessionId ? 'border-cyan-400 bg-cyan-500/10' : 'border-transparent')}>
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left" aria-current={session.id === activeChatSessionId ? 'true' : undefined} onClick={() => { onSwitchChat(session.id); setShowChatHistory(false); }}>
+                  <MessageSquare size={13} className="shrink-0 text-slate-500" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs text-slate-200">{session.title}</span>
+                    <span className="block text-[10px] text-slate-500">{session.messages.length} messages · {new Date(session.updatedAt).toLocaleDateString()}</span>
+                  </span>
+                </button>
+                <button type="button" aria-label={`Delete chat ${session.title}`} onClick={() => { if (window.confirm('Delete this chat?')) onDeleteChat(session.id); }} className="icon-button mr-1 text-slate-500 hover:text-red-300"><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {selectedNode && (
+          <div className="mt-2 flex items-center gap-2 rounded-md border border-cyan-500/25 bg-cyan-500/8 px-2 py-1.5 text-xs">
+            <Folder size={13} className="text-cyan-300" aria-hidden="true" />
+            <span className="min-w-0 truncate font-medium text-cyan-200">{selectedNode.data.label}</span>
+            <span className="ml-auto shrink-0 text-slate-500">{selectedNode.data.files?.length ?? 0} files</span>
+          </div>
+        )}
+        {repoDetails && <p className="mt-2 flex items-center gap-1 text-[10px] text-slate-500"><FileCode size={11} />{repoDetails.owner}/{repoDetails.repo} · {repoDetails.commitSha?.slice(0, 7) ?? 'unpinned'}</p>}
+      </header>
+
+      <div
+        ref={scrollRef}
+        className="relative flex-1 overflow-y-auto px-3 py-3 custom-scrollbar"
+        role="log"
+        aria-live="polite"
+        aria-busy={loadingCurrentSession}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          nearBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+          if (nearBottomRef.current) setShowNewResponse(false);
+        }}
+      >
+        <div className="relative w-full" style={{ height: messageVirtualizer.getTotalSize() }}>
+          {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+            const message = messages[virtualRow.index];
+            return (
+              <article
+                key={message.id}
+                ref={messageVirtualizer.measureElement}
+                data-index={virtualRow.index}
+                className={cn('absolute left-0 top-0 flex w-full gap-2 pb-3', message.role === 'user' && 'flex-row-reverse')}
+                style={{ transform: `translateY(${virtualRow.start}px)` }}
+              >
+                <span className={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full border', message.role === 'user' ? 'border-slate-600 bg-slate-800' : 'border-cyan-500/30 bg-cyan-500/15 text-cyan-300')}>
+                  {message.role === 'user' ? <User size={13} /> : <Sparkles size={13} />}
+                </span>
+                <div className="group/message min-w-0 max-w-[87%] rounded-lg border border-slate-700/70 bg-slate-800/55 px-3 py-2">
+                  {message.role === 'assistant'
+                    ? <MarkdownRenderer content={message.content || (loadingCurrentSession ? 'Working…' : '')} onNavigateToSource={onNavigateToSource} />
+                    : <p className="whitespace-pre-wrap text-sm text-slate-100">{message.content}</p>}
+                  <div className="mt-1 flex items-center justify-between gap-3 text-[9px] text-slate-500">
+                    <time>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+                    <button type="button" className="rounded p-1 opacity-0 transition-opacity group-focus-within/message:opacity-100 group-hover/message:opacity-100" aria-label="Copy message" onClick={() => void copyMessage(message.id, message.content)}>
+                      {copiedId === message.id ? <Check size={12} className="text-emerald-300" /> : <Copy size={12} />}
                     </button>
                   </div>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        
-        {/* Context indicator */}
-        <AnimatePresence>
-          {selectedNode && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mt-2 flex items-center gap-2 text-xs"
-            >
-              <div className={cn(
-                "px-2 py-1 rounded-lg flex items-center gap-1.5",
-                "bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30"
-              )}>
-                <Folder size={12} className="text-blue-400" />
-                <span className="text-blue-300 font-medium">{selectedNode.data.label}</span>
-                <span className="text-slate-500">•</span>
-                <span className="text-slate-400">{selectedNode.data.files?.length || 0} files</span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        
-        {/* Repo info */}
-        {repoDetails && (
-          <div className="mt-2 text-[10px] text-slate-500 flex items-center gap-1">
-            <FileCode size={10} />
-            {repoDetails.owner}/{repoDetails.repo}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        {loadingCurrentSession && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800/50 p-2 text-xs text-slate-300" role="status">
+            <RefreshCw size={14} className="animate-spin text-cyan-300" /> Rassam is working…
+          </div>
+        )}
+
+        {currentToolEvents.length > 0 && (
+          <details className="mb-3 rounded-md border border-slate-700 bg-slate-900/50 text-xs">
+            <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-slate-300"><ChevronDown size={13} />Tool progress ({currentToolEvents.length})</summary>
+            <ol className="space-y-1 border-t border-slate-700 px-3 py-2 text-slate-400">
+              {currentToolEvents.map((event, index) => <li key={`${index}-${event}`}>{event}</li>)}
+            </ol>
+          </details>
+        )}
+
+        {pendingProposal && (
+          <section className="mb-3 rounded-md border border-cyan-500/40 bg-cyan-500/8 p-3" aria-label="Canvas change proposal">
+            <h3 className="text-xs font-semibold text-cyan-200">Review proposed canvas changes</h3>
+            <p className="mt-1 text-xs text-slate-300">{pendingProposal.patch.summary}</p>
+            <dl className="mt-2 grid grid-cols-3 gap-2 text-center text-[10px] text-slate-400">
+              <div><dt>Operations</dt><dd className="text-sm text-slate-100">{pendingProposal.patch.operations.length}</dd></div>
+              <div><dt>Nodes</dt><dd className="text-sm text-slate-100">{pendingProposal.patch.affectedNodeIds.length}</dd></div>
+              <div><dt>Edges</dt><dd className="text-sm text-slate-100">{pendingProposal.patch.affectedEdgeIds.length}</dd></div>
+            </dl>
+            <div className="mt-3 flex gap-2">
+              <button type="button" onClick={applyProposal} className="min-h-10 flex-1 rounded-md bg-cyan-500 px-3 text-xs font-semibold text-slate-950 hover:bg-cyan-400">Apply</button>
+              <button type="button" onClick={discardProposal} className="min-h-10 flex-1 rounded-md border border-slate-600 px-3 text-xs text-slate-200 hover:bg-slate-800">Discard</button>
+            </div>
+          </section>
+        )}
+        {proposalMessage && <p className="mb-3 rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300" role="status">{proposalMessage}</p>}
+
+        {showQuickActions && !loading && (
+          <div className="grid grid-cols-2 gap-2 pb-2">
+            {(selectedNode ? quickActions : globalQuickActions).map((action) => (
+              <button key={action.label} type="button" onClick={() => void handleSend(action.prompt)} className="flex min-h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-800/45 px-3 text-left text-xs text-slate-300 hover:border-cyan-500/50">
+                <action.icon size={13} className="text-cyan-300" />{action.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {messages.map((m) => (
-          <motion.div 
-            key={m.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={cn("flex gap-3 group", m.role === 'user' ? "flex-row-reverse" : "")}
-          >
-            <div className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-lg", 
-              m.role === 'user' 
-                ? "bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600" 
-                : "bg-gradient-to-br from-blue-600 to-blue-700"
-            )}>
-              {m.role === 'user' ? <User size={14}/> : <Sparkles size={14}/>}
-            </div>
-            <div className={cn(
-              "rounded-2xl px-4 py-2 max-w-[85%] relative",
-              m.role === 'user' 
-                ? "bg-slate-800 text-slate-100 border border-slate-700" 
-                : "bg-slate-800/50 border border-slate-700/50"
-            )}>
-              {m.role === 'assistant' ? (
-                <MarkdownRenderer content={m.content} />
-              ) : (
-                <p className="text-sm">{m.content}</p>
-              )}
-              
-              {/* Message actions */}
-              <div className={cn(
-                "absolute top-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                m.role === 'user' ? "left-2" : "right-2"
-              )}>
-                <button
-                  onClick={() => copyMessage(m.id, m.content)}
-                  className="p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-700 rounded transition-colors"
-                  title="Copy"
-                >
-                  {copiedId === m.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-                </button>
-              </div>
-              
-              {/* Timestamp */}
-              <div className={cn(
-                "text-[9px] text-slate-600 mt-1",
-                m.role === 'user' ? "text-right" : "text-left"
-              )}>
-                {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-            </div>
-          </motion.div>
-        ))}
-        
-        {/* Loading indicator */}
-        {loading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex gap-3"
-          >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center shadow-lg">
-              <RefreshCw size={14} className="animate-spin" />
-            </div>
-            <div className="rounded-2xl px-4 py-3 bg-slate-800/50 border border-slate-700/50">
-              <div className="flex items-center gap-2 text-sm text-slate-400">
-                <span className="flex gap-1">
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
-                </span>
-                Thinking...
-              </div>
-            </div>
-          </motion.div>
-        )}
-        
-        {/* Quick actions */}
-        <AnimatePresence>
-          {showQuickActions && selectedNode && !loading && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="mt-4"
-            >
-              <div className="text-[10px] text-slate-500 mb-2 flex items-center gap-1">
-                <Sparkles size={10} />
-                Quick actions for {selectedNode.data.label}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {quickActions.map((action, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSend(action.prompt)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:border-blue-500/50 hover:bg-slate-800 text-slate-300 text-xs transition-all group"
-                  >
-                    <action.icon size={12} className="text-slate-500 group-hover:text-blue-400 transition-colors" />
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {showNewResponse && <button type="button" onClick={scrollToLatest} className="mx-auto -mt-12 mb-2 rounded-full border border-cyan-500/40 bg-slate-900 px-3 py-1.5 text-xs text-cyan-200 shadow-lg">New response</button>}
 
-        {/* Global quick actions when no node selected */}
-        <AnimatePresence>
-          {showQuickActions && !selectedNode && getCanvasState && getCanvasState().nodes.length > 0 && !loading && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="mt-4"
-            >
-              <div className="text-[10px] text-slate-500 mb-2 flex items-center gap-1">
-                <MessageSquare size={10} />
-                Ask about the project
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {globalQuickActions.map((action, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSend(action.prompt)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:border-green-500/50 hover:bg-slate-800 text-slate-300 text-xs transition-all group"
-                  >
-                    <action.icon size={12} className="text-slate-500 group-hover:text-green-400 transition-colors" />
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Input */}
-      <div className="p-4 border-t border-slate-800 bg-gradient-to-t from-slate-900 to-slate-900/50">
-        <div className="mb-2 flex items-center gap-2">
-          <select
-            value={activeModelValue}
-            onChange={(e) => updateSelectedModel(e.target.value)}
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500"
-            disabled={enabledModelOptions.length === 0 || loading}
-          >
-            {enabledModelOptions.length === 0 ? (
-              <option value="">No enabled model</option>
-            ) : (
-              enabledModelOptions.map((option) => (
-                <option key={`${option.providerId}-${option.model}`} value={`${option.providerId}::${option.model}`}>
-                  {option.label}
-                </option>
-              ))
-            )}
+      <footer className="border-t border-[var(--border-subtle)] p-3">
+        <div className="mb-2 flex gap-2">
+          <label className="sr-only" htmlFor="rassam-model">AI model</label>
+          <select id="rassam-model" value={activeModelValue} onChange={(event) => updateSelectedModel(event.target.value)} disabled={!enabledModelOptions.length || loading} className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-2 text-xs text-slate-200">
+            {!enabledModelOptions.length
+              ? <option value="">No enabled model</option>
+              : enabledModelOptions.map((option) => <option key={`${option.providerId}-${option.model}`} value={`${option.providerId}::${option.model}`}>{option.label}</option>)}
           </select>
-          <select
-            value={chatMode}
-            onChange={(e) => setChatMode(e.target.value as ChatMode)}
-            disabled={loading}
-            className={cn(
-              "bg-slate-800 border rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-cyan-500 capitalize cursor-pointer",
-              chatMode === 'agent'
-                ? "border-cyan-500/50 text-cyan-300"
-                : "border-slate-700 text-slate-300",
-            )}
-            title={chatMode === 'ask' ? 'Read-only tools' : 'Read + write canvas tools'}
-          >
+          <label className="sr-only" htmlFor="rassam-mode">Assistant mode</label>
+          <select id="rassam-mode" value={chatMode} onChange={(event) => setChatMode(event.target.value as ChatMode)} disabled={loading} className="rounded-md border border-slate-700 bg-slate-800 px-2 py-2 text-xs text-slate-200">
             <option value="ask">Ask</option>
-            <option value="agent">Agent</option>
+            <option value="agent">Propose changes</option>
           </select>
         </div>
-        {modelError && (
-          <div className="text-[10px] text-amber-300 mb-2">{modelError}</div>
+
+        {repoDetails && (
+          <label className="mb-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-[10px] leading-4 text-slate-300">
+            <input type="checkbox" checked={sourceConsent} onChange={(event) => setConsent(event.target.checked)} className="mt-0.5 h-4 w-4 accent-cyan-400" />
+            I understand that selected source excerpts are sent to {activeModelLabel}.
+          </label>
         )}
-        <div className="flex gap-2">
-          <div className="flex-1 relative">
-            <input
-              ref={inputRef}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 pr-10 text-sm text-slate-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none placeholder-slate-500 transition-all"
-              placeholder={selectedNode ? `Ask about ${selectedNode.data.label}...` : "Ask about the codebase..."}
-              value={input}
-              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              onChange={(e) => setInput(e.target.value)}
-            />
-          </div>
-          {loading ? (
-            <button 
-              onClick={handleStop}
-              className="p-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all shadow-lg shadow-red-900/30 hover:shadow-red-900/50"
-              title="Stop generating"
-            >
-              <Square size={18} />
-            </button>
-          ) : (
-            <button 
-              onClick={() => handleSend()}
-              disabled={!input.trim()}
-              className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/30 hover:shadow-blue-900/50"
-            >
-              <Send size={18} />
-            </button>
-          )}
+        {modelError && <p className="mb-2 text-[10px] text-amber-300" role="alert">{modelError}</p>}
+
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={inputRef}
+            rows={2}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                void handleSend();
+              }
+            }}
+            placeholder={selectedNode ? `Ask about ${selectedNode.data.label}…` : 'Ask about the codebase…'}
+            className="min-h-11 max-h-40 flex-1 resize-none rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+          {loadingCurrentSession
+            ? <button type="button" onClick={() => abortControllerRef.current?.abort()} aria-label="Stop response" className="grid min-h-11 min-w-11 place-items-center rounded-md bg-red-600 text-white hover:bg-red-500"><Square size={17} /></button>
+            : <button type="button" onClick={() => void handleSend()} disabled={!input.trim() || loading} aria-label="Send message" className="grid min-h-11 min-w-11 place-items-center rounded-md bg-cyan-500 text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"><Send size={17} /></button>}
         </div>
-        <div className="text-[9px] text-slate-600 mt-2 text-center">
-          Press Enter to send • {activeModelLabel}
-        </div>
-      </div>
-    </div>
+        <p className="mt-2 text-center text-[9px] text-slate-500">Enter to send · Shift+Enter for a new line · {activeModelLabel}</p>
+      </footer>
+    </section>
   );
 });

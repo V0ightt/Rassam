@@ -43,7 +43,7 @@ import { NodeCategory, NodeData } from '@/types';
 import { useNodeEdit } from './NodeEditContext';
 
 // Icon mapping for different node categories
-const categoryIcons: Record<NodeCategory, React.ElementType> = {
+export const categoryIcons: Record<NodeCategory, React.ElementType> = {
   // Code-based
   api: Server,
   component: Box,
@@ -80,7 +80,7 @@ const categoryIcons: Record<NodeCategory, React.ElementType> = {
 };
 
 // Color mapping for different node categories
-const categoryColors: Record<NodeCategory, { bg: string; border: string; icon: string; glow: string }> = {
+export const categoryColors: Record<NodeCategory, { bg: string; border: string; icon: string; glow: string }> = {
   // Code-based
   api: { bg: 'bg-emerald-900/30', border: 'border-emerald-500', icon: 'text-emerald-400', glow: 'shadow-emerald-500/30' },
   component: { bg: 'bg-blue-900/30', border: 'border-blue-500', icon: 'text-blue-400', glow: 'shadow-blue-500/30' },
@@ -158,7 +158,7 @@ const getFileIcon = (file: string) => {
 };
 
 // File item component - memoized
-const FileItem = memo(({ file, index }: { file: string; index: number }) => {
+const FileItem = memo(({ file }: { file: string }) => {
   const [copied, setCopied] = useState(false);
   
   const copyToClipboard = useCallback((e: React.MouseEvent) => {
@@ -197,7 +197,7 @@ const FileList = memo(({ files, isExpanded }: { files: string[]; isExpanded: boo
   return (
     <div className="mt-2 pt-2 border-t border-slate-700/50 max-h-[150px] overflow-y-auto custom-scrollbar">
       {files.slice(0, 10).map((file, i) => (
-        <FileItem key={i} file={file} index={i} />
+        <FileItem key={`${file}-${i}`} file={file} />
       ))}
       {files.length > 10 && (
         <div className="text-[10px] text-slate-500 mt-1 text-center">
@@ -219,7 +219,7 @@ const InlineEdit = memo(({ value, nodeId, field, className, multiline }: {
   multiline?: boolean;
 }) => {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
+  const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const { onUpdateNode } = useNodeEdit();
 
@@ -229,11 +229,6 @@ const InlineEdit = memo(({ value, nodeId, field, className, multiline }: {
       inputRef.current.select();
     }
   }, [editing]);
-
-  // Sync draft when value changes externally while not editing
-  useEffect(() => {
-    if (!editing) setDraft(value);
-  }, [value, editing]);
 
   const commit = useCallback(() => {
     const trimmed = draft.trim();
@@ -260,8 +255,9 @@ const InlineEdit = memo(({ value, nodeId, field, className, multiline }: {
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    setDraft(value);
     setEditing(true);
-  }, []);
+  }, [value]);
 
   if (editing) {
     const sharedClass = cn(

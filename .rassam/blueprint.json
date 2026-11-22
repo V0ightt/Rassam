@@ -1,0 +1,739 @@
+{
+  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
+  "version": "0.1",
+  "system": {
+    "name": "Rassam",
+    "description": "An open, human-owned architecture contract for agent-built software: a local-first canvas, an isomorphic rules engine, a CLI, an MCP server and a CI gate. Rassam dogfoods its own contract.",
+    "repository": "github.com/V0ightt/Rassam"
+  },
+  "policy": {
+    "undeclaredDependencies": "warning",
+    "unmappedFiles": "warning",
+    "includeTypeOnly": true,
+    "tripwires": {
+      "defaults": true
+    },
+    "verificationHeuristics": true,
+    "ignore": [
+      "research_notes/**",
+      "reports/**"
+    ]
+  },
+  "components": [
+    {
+      "id": "web-shell",
+      "name": "Web shell",
+      "kind": "route",
+      "intent": "Next.js pages that mount the workbench and settings. Thin wiring only: no business logic, no data access. Logic belongs in hooks and libraries so it can be tested.",
+      "paths": [
+        "src/app/page.tsx",
+        "src/app/layout.tsx",
+        "src/app/settings/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "api",
+      "name": "API routes",
+      "kind": "api",
+      "intent": "Server route handlers. Every request body is untrusted and validated with zod; every route goes through request-security (rate limits, origin checks). Credentials stay here and never appear in responses or exports.",
+      "paths": [
+        "src/app/api/**"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "workbench-shell",
+      "name": "Workbench shell",
+      "kind": "component",
+      "paths": [
+        "src/components/workspace/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ],
+      "intent": "Composes the workbench: wires the Map and Blueprint features, panels and hooks together. Thin wiring only; feature logic lives in feature components and hooks. Features never import the shell."
+    },
+    {
+      "id": "workbench-ui",
+      "name": "Workbench UI",
+      "kind": "component",
+      "intent": "The VS Code-style workbench: map canvas, explorer, editor tabs, evidence inspector and the Rassam chat panel. Renders state owned by hooks; AI output reaches the canvas only as a validated patch the user applies.",
+      "paths": [
+        "src/components/**"
+      ],
+      "exclude": [
+        "src/components/blueprint/**",
+        "src/components/workspace/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "blueprint-ui",
+      "name": "Blueprint UI",
+      "kind": "component",
+      "intent": "Where humans author the contract and rule on exceptions: the blueprint canvas, the ranked attention list, rule and intent editors, and the reach view. It must keep human attention scarce: a short ranked list first, evidence links instead of persuasive prose.",
+      "paths": [
+        "src/components/blueprint/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "hooks",
+      "name": "State hooks",
+      "kind": "hook",
+      "intent": "Client state and lifecycles (projects, history, clipboard, editor tabs, blueprint sessions). Hooks own state; components render it.",
+      "paths": [
+        "src/hooks/**"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "blueprint-client",
+      "name": "Blueprint client",
+      "kind": "service",
+      "intent": "Browser-side host for the engine: loads a blueprint for a GitHub project through the API, or reads and writes a local folder through the File System Access API so edits land in the user's repository. Heavy analysis runs in a Web Worker so large repositories do not freeze the canvas.",
+      "paths": [
+        "src/lib/blueprint-client/**",
+        "src/workers/blueprint-analysis.worker.ts"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "local-store",
+      "name": "Local store",
+      "kind": "storage",
+      "intent": "Local-first persistence of projects, graphs, chats and cached source in IndexedDB and localStorage, plus import and export. Exports never contain credentials.",
+      "paths": [
+        "src/lib/project-store.ts",
+        "src/lib/file-store.ts",
+        "src/lib/project-export.ts",
+        "src/lib/project-revision-channel.ts",
+        "src/lib/model-settings.ts",
+        "src/lib/import.ts"
+      ],
+      "tags": [
+        "runtime:browser"
+      ]
+    },
+    {
+      "id": "chat-agent",
+      "name": "Chat agent",
+      "kind": "service",
+      "intent": "Server-side ask/agent orchestration over the selected model: plans tool calls, reads cited source, and validates canvas changes as complete, revisioned patches (canvas-patch). It never mutates the live graph itself.",
+      "paths": [
+        "src/lib/ai.ts",
+        "src/lib/chat-agent.ts",
+        "src/lib/chat-runtime.ts",
+        "src/lib/chat-source.ts",
+        "src/lib/chat-stream.ts",
+        "src/lib/chat-tools.ts",
+        "src/lib/chat-file-summary.ts",
+        "src/lib/canvas-patch.ts"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "analysis",
+      "name": "Repository analysis",
+      "kind": "core",
+      "intent": "Deterministic map building from source evidence (static analysis is the only source of edges), with optional AI enrichment of names and descriptions for verified components.",
+      "paths": [
+        "src/lib/repository-analysis.ts",
+        "src/lib/repository-enrichment.ts"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "github-gateway",
+      "name": "GitHub gateway",
+      "kind": "gateway",
+      "intent": "The only code that talks to GitHub and holds GITHUB_TOKEN. Binds repository identity and commit with signed source grants so clients cannot request content they were not granted.",
+      "paths": [
+        "src/lib/github.ts",
+        "src/lib/source-grant.ts"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "server-platform",
+      "name": "Server platform",
+      "kind": "middleware",
+      "intent": "Cross-cutting server concerns: rate limiting, origin and deployment checks, request parsing, the error envelope and privacy-preserving telemetry.",
+      "paths": [
+        "src/lib/request-security.ts",
+        "src/lib/api-error.ts",
+        "src/lib/api-request.ts",
+        "src/lib/operational-telemetry.ts",
+        "src/proxy.ts"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "llm-providers",
+      "name": "LLM providers",
+      "kind": "service",
+      "intent": "Adapters over model providers behind one interface. The only code that reads provider API keys.",
+      "paths": [
+        "src/lib/llm/**"
+      ],
+      "tags": [
+        "runtime:server"
+      ]
+    },
+    {
+      "id": "shared",
+      "name": "Shared library",
+      "kind": "utility",
+      "intent": "Runtime-neutral code shared by browser and server: zod contracts, types, canvas normalization, source-sensitivity policy, patch application, search and small utilities. Nothing here may need Node or server credentials.",
+      "paths": [
+        "src/lib/*",
+        "src/types/**",
+        "src/workers/**"
+      ],
+      "public": true
+    },
+    {
+      "id": "blueprint-engine",
+      "name": "Blueprint engine",
+      "kind": "core",
+      "intent": "The isomorphic heart of Rassam: blueprint format, import graph, rules, gate, reach analysis and reports. It runs unchanged in the CLI, the MCP server, CI and the browser, so it must not depend on Node, the DOM, React, Next or any other part of the app. Same inputs must always give the same findings and fingerprints.",
+      "paths": [
+        "src/blueprint/**"
+      ],
+      "assurance": "tested"
+    },
+    {
+      "id": "cli",
+      "name": "CLI and MCP server",
+      "kind": "client",
+      "intent": "The Node host: `rassam` commands, git and GitHub Actions integration, and the dual-era MCP server agents call before acting. Agent proposals and escalations are written to files for humans; the CLI never edits the blueprint on an agent's behalf.",
+      "paths": [
+        "src/cli/**"
+      ]
+    },
+    {
+      "id": "tooling",
+      "name": "Build tooling",
+      "kind": "config",
+      "intent": "Build, lint, test and bundling configuration, including the CLI bundle consumed by the GitHub Action.",
+      "paths": [
+        "/*.ts",
+        "/*.mts",
+        "/*.mjs",
+        "scripts/**"
+      ]
+    },
+    {
+      "id": "tests",
+      "name": "Tests",
+      "kind": "test",
+      "intent": "Unit, integration and browser tests. Tests may depend on anything; nothing may depend on tests.",
+      "paths": [
+        "**/*.test.*",
+        "**/*.spec.*",
+        "tests/**",
+        "vitest.setup.ts"
+      ],
+      "priority": 10
+    },
+    {
+      "id": "bench",
+      "name": "Gate benchmark",
+      "kind": "test",
+      "paths": [
+        "bench/**"
+      ],
+      "intent": "Labeled scenarios (documented agent reward hacks, architecture violations, reach problems and legitimate changes) that measure the gate's recall and false positives. Results are published, including misses."
+    },
+    {
+      "id": "github-api",
+      "name": "GitHub API",
+      "kind": "external-api",
+      "intent": "Public repository trees and blobs, and PR comments from the GitHub Action.",
+      "paths": [],
+      "external": true
+    },
+    {
+      "id": "llm-apis",
+      "name": "Model provider APIs",
+      "kind": "external-api",
+      "intent": "DeepSeek, OpenAI, Anthropic, Google and Ollama endpoints, called only through llm-providers.",
+      "paths": [],
+      "external": true
+    }
+  ],
+  "dependencies": [
+    {
+      "from": "analysis",
+      "to": "blueprint-engine",
+      "kind": "imports",
+      "reason": "The map analyzer shares the engine's import graph so the map and the gate agree on every edge."
+    },
+    {
+      "from": "analysis",
+      "to": "chat-agent",
+      "kind": "imports",
+      "reason": "Enrichment reuses the chat runtime's provider selection."
+    },
+    {
+      "from": "analysis",
+      "to": "github-gateway",
+      "kind": "imports"
+    },
+    {
+      "from": "analysis",
+      "to": "llm-providers",
+      "kind": "imports",
+      "reason": "Optional AI enrichment of verified components."
+    },
+    {
+      "from": "analysis",
+      "to": "server-platform",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "analysis",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "blueprint-client",
+      "kind": "imports",
+      "reason": "The blueprint route reuses the pure layout parser."
+    },
+    {
+      "from": "api",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "chat-agent",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "github-gateway",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "llm-providers",
+      "kind": "imports"
+    },
+    {
+      "from": "api",
+      "to": "server-platform",
+      "kind": "imports"
+    },
+    {
+      "from": "blueprint-client",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "blueprint-ui",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "blueprint-ui",
+      "to": "hooks",
+      "kind": "imports",
+      "reason": "The panel and canvas consume the useBlueprint session."
+    },
+    {
+      "from": "blueprint-ui",
+      "to": "workbench-ui",
+      "kind": "imports",
+      "reason": "Reuses the category icon and color mapping from the map canvas."
+    },
+    {
+      "from": "chat-agent",
+      "to": "github-gateway",
+      "kind": "imports",
+      "reason": "Chat reads source only through signed source grants."
+    },
+    {
+      "from": "chat-agent",
+      "to": "llm-providers",
+      "kind": "imports"
+    },
+    {
+      "from": "chat-agent",
+      "to": "server-platform",
+      "kind": "imports"
+    },
+    {
+      "from": "cli",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "github-gateway",
+      "to": "server-platform",
+      "kind": "imports"
+    },
+    {
+      "from": "hooks",
+      "to": "blueprint-client",
+      "kind": "imports"
+    },
+    {
+      "from": "hooks",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "hooks",
+      "to": "local-store",
+      "kind": "imports"
+    },
+    {
+      "from": "local-store",
+      "to": "llm-providers",
+      "kind": "imports",
+      "reason": "Type-only: provider ids in saved model settings."
+    },
+    {
+      "from": "tooling",
+      "to": "blueprint-engine",
+      "kind": "imports"
+    },
+    {
+      "from": "web-shell",
+      "to": "llm-providers",
+      "kind": "imports",
+      "reason": "Type-only: provider ids on the settings page."
+    },
+    {
+      "from": "web-shell",
+      "to": "local-store",
+      "kind": "imports"
+    },
+    {
+      "from": "web-shell",
+      "to": "workbench-shell",
+      "kind": "imports"
+    },
+    {
+      "from": "web-shell",
+      "to": "workbench-ui",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-shell",
+      "to": "blueprint-ui",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-shell",
+      "to": "hooks",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-shell",
+      "to": "local-store",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-shell",
+      "to": "workbench-ui",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-ui",
+      "to": "hooks",
+      "kind": "imports"
+    },
+    {
+      "from": "workbench-ui",
+      "to": "llm-providers",
+      "kind": "imports",
+      "reason": "Type-only: provider ids in the chat panel."
+    },
+    {
+      "from": "workbench-ui",
+      "to": "local-store",
+      "kind": "imports"
+    }
+  ],
+  "rules": [
+    {
+      "id": "engine-is-standalone",
+      "reason": "The engine runs in the CLI, the MCP server, CI and the browser. Host APIs belong in src/cli or src/lib/blueprint-client; app code must never leak into it.",
+      "kind": "allow-only",
+      "from": "blueprint-engine",
+      "to": [
+        "blueprint-engine",
+        "package:zod"
+      ]
+    },
+    {
+      "id": "cli-builds-on-engine",
+      "reason": "The CLI is bundled into a single dependency-free file for the GitHub Action; it may use only the engine, Node built-ins and zod.",
+      "kind": "allow-only",
+      "from": "cli",
+      "to": [
+        "blueprint-engine",
+        "package:node:*",
+        "package:zod"
+      ]
+    },
+    {
+      "id": "browser-code-stays-client-side",
+      "reason": "Browser bundles must never include server modules that read credentials or call providers. Type-only imports are fine.",
+      "kind": "forbid",
+      "from": "tag:runtime:browser",
+      "to": [
+        "github-gateway",
+        "llm-providers",
+        "chat-agent",
+        "server-platform",
+        "analysis",
+        "package:node:*",
+        "package:octokit",
+        "package:openai"
+      ],
+      "includeTypeOnly": false
+    },
+    {
+      "id": "github-token-in-gateway",
+      "reason": "One place holds the GitHub credential; the CLI reads the Actions token only to post the sticky PR comment.",
+      "kind": "secret-access",
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "allow": [
+        "github-gateway",
+        "cli",
+        "tests"
+      ]
+    },
+    {
+      "id": "provider-keys-in-adapters",
+      "reason": "Provider keys are read only by the adapters that call providers.",
+      "kind": "secret-access",
+      "secrets": [
+        "*_API_KEY"
+      ],
+      "allow": [
+        "llm-providers",
+        "tests"
+      ]
+    },
+    {
+      "id": "platform-secrets-on-server",
+      "reason": "Signing and rate-limit secrets stay in the server platform and the routes that check readiness.",
+      "kind": "secret-access",
+      "secrets": [
+        "SOURCE_GRANT_SECRET",
+        "SESSION_SIGNING_SECRET",
+        "UPSTASH_REDIS_REST_TOKEN"
+      ],
+      "allow": [
+        "server-platform",
+        "github-gateway",
+        "api",
+        "tests"
+      ]
+    },
+    {
+      "id": "shared-is-runtime-neutral",
+      "reason": "Shared code is bundled into the browser and the server alike, so it must not pull in Node built-ins or server-only modules.",
+      "kind": "forbid",
+      "from": "shared",
+      "to": [
+        "package:node:*",
+        "chat-agent",
+        "github-gateway",
+        "llm-providers",
+        "server-platform",
+        "analysis"
+      ],
+      "includeTypeOnly": false
+    },
+    {
+      "id": "tests-are-leaves",
+      "reason": "Production code must never depend on test code.",
+      "kind": "forbid",
+      "from": [
+        "*",
+        "!tests"
+      ],
+      "to": "tests"
+    },
+    {
+      "id": "no-component-cycles",
+      "severity": "warning",
+      "reason": "Cycles erase the direction of dependency, so no component can change safely in isolation.",
+      "kind": "no-cycles"
+    },
+    {
+      "id": "security-boundary",
+      "reason": "Rate limits, signed source grants, origin checks and security headers. Changes here need a human security review.",
+      "kind": "protect",
+      "paths": [
+        "src/lib/request-security.ts",
+        "src/lib/source-grant.ts",
+        "src/proxy.ts",
+        "next.config.ts"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "pr-judged-by-base-contract",
+      "statement": "A change is judged by the base branch's blueprint; it cannot relax the contract it is checked against, and weakening edits are errors until a human approves them.",
+      "components": [
+        "blueprint-engine"
+      ],
+      "check": {
+        "run": "npx vitest run src/blueprint/engine.test.ts",
+        "tests": [
+          "src/blueprint/engine.test.ts",
+          "src/blueprint/blueprint-diff.test.ts"
+        ]
+      }
+    },
+    {
+      "id": "deterministic-findings",
+      "statement": "The engine is deterministic: the same snapshot and blueprint always produce the same findings, order and fingerprints.",
+      "components": [
+        "blueprint-engine"
+      ],
+      "check": {
+        "tests": [
+          "src/blueprint/engine.test.ts"
+        ]
+      }
+    },
+    {
+      "id": "ai-changes-are-proposals",
+      "statement": "AI output never mutates the live graph or the blueprint directly; it is a validated, revisioned proposal a human applies.",
+      "components": [
+        "chat-agent",
+        "workbench-ui",
+        "cli"
+      ],
+      "check": {
+        "run": "npx vitest run src/lib/apply-canvas-patch.test.ts src/lib/canvas-patch.test.ts",
+        "tests": [
+          "src/lib/apply-canvas-patch.test.ts",
+          "src/lib/canvas-patch.test.ts"
+        ]
+      }
+    },
+    {
+      "id": "credentials-never-leave-server",
+      "statement": "Provider keys and the GitHub token never reach the browser, exports, reports or logs; secrets in reports are always redacted.",
+      "components": [
+        "github-gateway",
+        "llm-providers",
+        "local-store",
+        "blueprint-engine"
+      ],
+      "check": {
+        "run": "npx vitest run src/lib/project-export.test.ts src/blueprint/reach.test.ts",
+        "tests": [
+          "src/lib/project-export.test.ts",
+          "src/blueprint/reach.test.ts"
+        ]
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "id": "ADR-001",
+      "title": "Pivot from repository diagrams to architecture contracts",
+      "status": "accepted",
+      "date": "2026-11-21",
+      "components": [
+        "blueprint-engine",
+        "cli",
+        "blueprint-ui"
+      ],
+      "context": "Repository-to-diagram is now free from Google Code Wiki, DeepWiki, Codemaps and GitDiagram. Agents author a large and growing share of merged code while review time has risen sharply; the scarce human contributions are intent, enforcement and sign-off.",
+      "decision": "Rassam becomes an open, vendor-neutral, human-owned architecture contract (.rassam/blueprint.json) that agents read over MCP, a CI gate enforces, and humans author and sign on a canvas.",
+      "consequences": "The map canvas becomes secondary. Investment moves to the engine, the gate, the MCP server and authoring UX. Success is measured by human-authored invariants and violations caught, not diagrams drawn.",
+      "links": [
+        "reports/Rassam pivot for the AGI era.md",
+        "docs/blueprint-spec.md"
+      ]
+    },
+    {
+      "id": "ADR-002",
+      "title": "Judge every change by the base blueprint",
+      "status": "accepted",
+      "date": "2026-11-21",
+      "components": [
+        "blueprint-engine",
+        "cli"
+      ],
+      "context": "Documented reward hacks by coding agents attack the checks themselves. If a pull request could edit the rules it is judged by, an agent could relax its own contract.",
+      "decision": "The gate evaluates a change against the blueprint at the merge-base. Contract edits are diffed semantically; weakening edits are errors until a human applies the approval label. Invariant commands run only from the base blueprint.",
+      "consequences": "Introducing or tightening rules takes effect after merge. Teams must approve contract changes explicitly."
+    },
+    {
+      "id": "ADR-003",
+      "title": "Static analysis is the only source of edges",
+      "status": "accepted",
+      "date": "2026-11-21",
+      "components": [
+        "blueprint-engine",
+        "analysis"
+      ],
+      "context": "LLMs are weakest at recovering relationships between modules, and LLM-written context files did not improve agent outcomes while adding cost.",
+      "decision": "Dependencies come from deterministic import analysis with file:line evidence. Models may draft names and intent, which stay unverified until a human accepts them.",
+      "consequences": "Every finding is reproducible and cites evidence. Languages without import analysis get structural coverage only."
+    },
+    {
+      "id": "ADR-004",
+      "title": "A dependency-free, dual-era MCP server",
+      "status": "accepted",
+      "date": "2026-11-21",
+      "components": [
+        "cli"
+      ],
+      "context": "MCP 2026-07-28 is stateless with server/discover, while most clients still speak 2025-11-25 with an initialize handshake. The CLI ships as one bundled file.",
+      "decision": "Implement JSON-RPC over stdio directly, supporting both the legacy initialize lifecycle and modern per-request _meta with server/discover.",
+      "consequences": "No SDK dependency to track; protocol changes must be followed by hand."
+    },
+    {
+      "id": "ADR-005",
+      "title": "The contract lives in the repository",
+      "status": "accepted",
+      "date": "2026-11-21",
+      "components": [
+        "blueprint-client",
+        "blueprint-ui",
+        "cli"
+      ],
+      "context": "Documentation is used when it lives where the work happens, and hand-made diagrams rot when they live elsewhere.",
+      "decision": "The blueprint is a plain JSON file in the repository, versioned with the code. The browser edits it through the File System Access API or exports it; nothing depends on a hosted service.",
+      "consequences": "Blueprint changes go through normal code review. Canvas layout is kept in a separate file so contract diffs stay clean."
+    }
+  ]
+}

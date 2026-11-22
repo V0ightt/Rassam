@@ -1,38 +1,38 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
-import { 
-  Plus,
-  Trash2,
+import { memo, useState, type FormEvent, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import type { Node as ReactFlowNode } from 'reactflow';
+import {
+  Check,
   Edit3,
+  FileCode,
+  Layers,
+  Plus,
   RotateCcw,
   RotateCw,
   Save,
-  X,
-  Check,
-  FileCode,
-  Layers,
   Tag,
+  Trash2,
+  X,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { NodeCategory } from '@/types';
-import { motion, AnimatePresence } from 'framer-motion';
+
+import type { NodeCategory, NodeData } from '@/types';
 
 interface EditToolbarProps {
-  selectedNode: any | null;
-  selectedNodes?: any[];
-  onAddNode: (nodeData: any) => void;
+  selectedNode: ReactFlowNode<NodeData> | null;
+  selectedNodes?: ReactFlowNode<NodeData>[];
+  onAddNode: (nodeData: NodeData) => void;
   onDeleteNode: (nodeId: string) => void;
-  onUpdateNode: (nodeId: string, data: any) => void;
+  onUpdateNode: (nodeId: string, data: Partial<NodeData>) => void;
   onBatchDelete?: (nodeIds: string[]) => void;
-  onBatchUpdateCategory?: (nodeIds: string[], category: string) => void;
+  onBatchUpdateCategory?: (nodeIds: string[], category: NodeCategory) => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onSave?: () => void;
 }
 
-const categories: { value: NodeCategory; label: string; group?: string }[] = [
-  // Code-based
+const categories: { value: NodeCategory; label: string; group: 'Code' | 'System' | 'Other' }[] = [
   { value: 'component', label: 'Component', group: 'Code' },
   { value: 'api', label: 'API', group: 'Code' },
   { value: 'service', label: 'Service', group: 'Code' },
@@ -50,7 +50,6 @@ const categories: { value: NodeCategory; label: string; group?: string }[] = [
   { value: 'style', label: 'Style', group: 'Code' },
   { value: 'documentation', label: 'Documentation', group: 'Code' },
   { value: 'asset', label: 'Asset', group: 'Code' },
-  // System design
   { value: 'cache', label: 'Cache', group: 'System' },
   { value: 'queue', label: 'Queue', group: 'System' },
   { value: 'load-balancer', label: 'Load Balancer', group: 'System' },
@@ -64,448 +63,238 @@ const categories: { value: NodeCategory; label: string; group?: string }[] = [
   { value: 'container', label: 'Container', group: 'System' },
   { value: 'serverless', label: 'Serverless', group: 'System' },
   { value: 'client', label: 'Client', group: 'System' },
-  { value: 'default', label: 'Other' },
+  { value: 'default', label: 'Other', group: 'Other' },
 ];
 
-export default memo(function EditToolbar({ 
-  selectedNode, 
+const iconButtonClass = 'grid min-h-10 min-w-10 place-items-center rounded-lg text-slate-300 transition-colors hover:bg-slate-700 hover:text-white';
+const inputClass = 'min-h-10 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 text-sm text-slate-200 outline-none focus-visible:ring-2 focus-visible:ring-cyan-500';
+
+function CategoryOptions() {
+  return <>{(['Code', 'System', 'Other'] as const).map((group) => (
+    <optgroup key={group} label={group}>
+      {categories.filter((category) => category.group === group).map((category) => (
+        <option key={category.value} value={category.value}>{category.label}</option>
+      ))}
+    </optgroup>
+  ))}</>;
+}
+
+function DialogSurface({ title, description, closeLabel, children }: {
+  title: string;
+  description: string;
+  closeLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 z-[80] bg-slate-950/75 backdrop-blur-sm" />
+      <Dialog.Content className="fixed left-1/2 top-1/2 z-[81] max-h-[calc(100vh-2rem)] w-[min(440px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+        <header className="mb-3 flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <Dialog.Title className="text-sm font-semibold text-slate-100">{title}</Dialog.Title>
+            <Dialog.Description className="mt-1 text-xs text-slate-400">{description}</Dialog.Description>
+          </div>
+          <Dialog.Close asChild>
+            <button type="button" aria-label={closeLabel} className="grid min-h-10 min-w-10 place-items-center rounded-md text-slate-400 hover:bg-slate-800 hover:text-slate-100">
+              <X size={16} aria-hidden="true" />
+            </button>
+          </Dialog.Close>
+        </header>
+        {children}
+      </Dialog.Content>
+    </Dialog.Portal>
+  );
+}
+
+function AddNodeControl({ onAddNode }: Pick<EditToolbarProps, 'onAddNode'>) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState({ label: '', description: '', category: 'component' as NodeCategory, files: [] as string[] });
+  const [newFile, setNewFile] = useState('');
+
+  const addFile = () => {
+    const path = newFile.trim();
+    if (!path || draft.files.includes(path)) return;
+    setDraft((current) => ({ ...current, files: [...current.files, path] }));
+    setNewFile('');
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.label.trim()) return;
+    onAddNode({
+      label: draft.label.trim(),
+      description: draft.description.trim() || 'Manually added node',
+      category: draft.category,
+      files: draft.files,
+    });
+    setDraft({ label: '', description: '', category: 'component', files: [] });
+    setNewFile('');
+    setOpen(false);
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger asChild>
+        <button type="button" aria-label="Add node" title="Add Node" className={iconButtonClass}>
+          <Plus size={18} aria-hidden="true" />
+        </button>
+      </Dialog.Trigger>
+      <DialogSurface title="Add node" description="Add a component to the current project. This action is undoable." closeLabel="Close add node dialog">
+        <form className="space-y-3" onSubmit={submit}>
+          <div>
+            <label htmlFor="add-node-label" className="mb-1 block text-xs text-slate-400">Label</label>
+            <input id="add-node-label" maxLength={120} required value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} className={inputClass} placeholder="Node name" />
+          </div>
+          <div>
+            <label htmlFor="add-node-description" className="mb-1 block text-xs text-slate-400">Description</label>
+            <textarea id="add-node-description" maxLength={4_000} rows={3} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} className={`${inputClass} py-2`} placeholder="Brief description" />
+          </div>
+          <div>
+            <label htmlFor="add-node-category" className="mb-1 block text-xs text-slate-400">Category</label>
+            <select id="add-node-category" value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value as NodeCategory }))} className={inputClass}>
+              <CategoryOptions />
+            </select>
+          </div>
+          <div>
+            <label htmlFor="add-node-file" className="mb-1 block text-xs text-slate-400">Files (optional)</label>
+            <div className="flex gap-2">
+              <input id="add-node-file" value={newFile} onChange={(event) => setNewFile(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addFile(); } }} className={`${inputClass} min-w-0 flex-1 text-xs`} placeholder="path/to/file.ts" />
+              <button type="button" onClick={addFile} className="min-h-10 rounded-lg bg-slate-700 px-3 text-xs text-slate-200 hover:bg-slate-600">Add</button>
+            </div>
+            {draft.files.length > 0 && (
+              <ul className="mt-2 space-y-1" aria-label="Files assigned to new node">
+                {draft.files.map((file) => (
+                  <li key={file} className="flex min-h-10 items-center gap-2 rounded-md bg-slate-950 px-2 text-xs text-slate-400">
+                    <FileCode size={12} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{file}</span>
+                    <button type="button" aria-label={`Remove ${file}`} onClick={() => setDraft((current) => ({ ...current, files: current.files.filter((candidate) => candidate !== file) }))} className="grid min-h-10 min-w-10 place-items-center rounded text-red-300 hover:bg-red-950">
+                      <X size={13} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button type="submit" disabled={!draft.label.trim()} className="min-h-10 w-full rounded-lg bg-cyan-600 px-4 text-sm font-semibold text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50">Add node</button>
+        </form>
+      </DialogSurface>
+    </Dialog.Root>
+  );
+}
+
+function EditNodeControl({ selectedNode, onUpdateNode }: Pick<EditToolbarProps, 'selectedNode' | 'onUpdateNode'>) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState({ label: '', description: '', category: 'default' as NodeCategory });
+  const changeOpen = (next: boolean) => {
+    if (next && selectedNode) setDraft({
+      label: selectedNode.data.label,
+      description: selectedNode.data.description || '',
+      category: selectedNode.data.category || 'default',
+    });
+    setOpen(next);
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedNode || !draft.label.trim()) return;
+    onUpdateNode(selectedNode.id, { label: draft.label.trim(), description: draft.description.trim(), category: draft.category });
+    setOpen(false);
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={changeOpen}>
+      <Dialog.Trigger asChild>
+        <button type="button" aria-label="Edit selected node" title="Edit Node" className={iconButtonClass}>
+          <Edit3 size={18} aria-hidden="true" />
+        </button>
+      </Dialog.Trigger>
+      <DialogSurface title="Edit node" description="Update the selected component. This action is undoable." closeLabel="Close edit node dialog">
+        <form className="space-y-3" onSubmit={submit}>
+          <div>
+            <label htmlFor="edit-node-label" className="mb-1 block text-xs text-slate-400">Label</label>
+            <input id="edit-node-label" required maxLength={120} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} className={inputClass} />
+          </div>
+          <div>
+            <label htmlFor="edit-node-description" className="mb-1 block text-xs text-slate-400">Description</label>
+            <textarea id="edit-node-description" rows={3} maxLength={4_000} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} className={`${inputClass} py-2`} />
+          </div>
+          <div>
+            <label htmlFor="edit-node-category" className="mb-1 block text-xs text-slate-400">Category</label>
+            <select id="edit-node-category" value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value as NodeCategory }))} className={inputClass}><CategoryOptions /></select>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Dialog.Close asChild><button type="button" className="min-h-10 flex-1 rounded-lg bg-slate-700 text-sm text-slate-200 hover:bg-slate-600">Cancel</button></Dialog.Close>
+            <button type="submit" disabled={!draft.label.trim()} className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-600 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"><Check size={14} aria-hidden="true" />Save</button>
+          </div>
+        </form>
+      </DialogSurface>
+    </Dialog.Root>
+  );
+}
+
+function BatchCategoryControl({ nodeIds, onApply }: { nodeIds: string[]; onApply: (ids: string[], category: NodeCategory) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger asChild>
+        <button type="button" className="flex min-h-10 w-full items-center gap-2 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-cyan-800/40">
+          <Tag size={14} className="text-cyan-400" aria-hidden="true" />Change category
+        </button>
+      </Dialog.Trigger>
+      <DialogSurface title={`Set category for ${nodeIds.length} nodes`} description="Choose one category for every selected component." closeLabel="Close category dialog">
+        <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+          {(['Code', 'System', 'Other'] as const).map((group) => (
+            <section key={group} aria-labelledby={`batch-category-${group}`}>
+              <h3 id={`batch-category-${group}`} className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{group}</h3>
+              {categories.filter((category) => category.group === group).map((category) => (
+                <button key={category.value} type="button" onClick={() => { onApply(nodeIds, category.value); setOpen(false); }} className="min-h-10 w-full rounded-lg px-3 text-left text-sm text-slate-300 hover:bg-cyan-800/30 hover:text-cyan-200">{category.label}</button>
+              ))}
+            </section>
+          ))}
+        </div>
+      </DialogSurface>
+    </Dialog.Root>
+  );
+}
+
+export default memo(function EditToolbar({
+  selectedNode,
   selectedNodes = [],
-  onAddNode, 
-  onDeleteNode, 
+  onAddNode,
+  onDeleteNode,
   onUpdateNode,
   onBatchDelete,
   onBatchUpdateCategory,
   onUndo,
   onRedo,
-  onSave
+  onSave,
 }: EditToolbarProps) {
-  const [isAddingNode, setIsAddingNode] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [isBatchCategoryOpen, setIsBatchCategoryOpen] = useState(false);
-  const [newNodeData, setNewNodeData] = useState({
-    label: '',
-    description: '',
-    category: 'component' as NodeCategory,
-    files: [] as string[],
-  });
-  const [editData, setEditData] = useState({
-    label: '',
-    description: '',
-    category: 'default' as NodeCategory,
-  });
-  const [newFile, setNewFile] = useState('');
-  
-  const addNodeRef = useRef<HTMLDivElement>(null);
-  const editNodeRef = useRef<HTMLDivElement>(null);
-  const batchCategoryRef = useRef<HTMLDivElement>(null);
-
   const isMultiSelect = selectedNodes.length > 1;
-  const multiSelectIds = selectedNodes.map((n: any) => n.id);
-
-  // Click away listener
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (addNodeRef.current && !addNodeRef.current.contains(event.target as Node)) {
-        setIsAddingNode(false);
-      }
-      if (editNodeRef.current && !editNodeRef.current.contains(event.target as Node)) {
-        setIsEditing(false);
-      }
-      if (batchCategoryRef.current && !batchCategoryRef.current.contains(event.target as Node)) {
-        setIsBatchCategoryOpen(false);
-      }
-    };
-
-    if (isAddingNode || isEditing || isBatchCategoryOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [isAddingNode, isEditing, isBatchCategoryOpen]);
-
-  const handleAddNode = () => {
-    if (!newNodeData.label.trim()) return;
-    
-    onAddNode({
-      label: newNodeData.label,
-      description: newNodeData.description || 'Manually added node',
-      category: newNodeData.category,
-      files: newNodeData.files,
-    });
-    
-    setNewNodeData({ label: '', description: '', category: 'component', files: [] });
-    setIsAddingNode(false);
-  };
-
-  const handleEditStart = () => {
-    if (selectedNode) {
-      setEditData({
-        label: selectedNode.data.label,
-        description: selectedNode.data.description || '',
-        category: selectedNode.data.category || 'default',
-      });
-      setIsEditing(true);
-    }
-  };
-
-  const handleEditSave = () => {
-    if (selectedNode) {
-      onUpdateNode(selectedNode.id, {
-        ...selectedNode.data,
-        ...editData,
-      });
-      setIsEditing(false);
-    }
-  };
-
-  const addFileToNewNode = () => {
-    if (newFile.trim()) {
-      setNewNodeData(prev => ({
-        ...prev,
-        files: [...prev.files, newFile.trim()]
-      }));
-      setNewFile('');
-    }
-  };
+  const selectedIds = selectedNodes.map((node) => node.id);
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Main toolbar buttons */}
-      <div className="flex flex-col items-center gap-2 p-2 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-xl">
-        {/* Add Node Button */}
-        <button
-          onClick={() => setIsAddingNode(true)}
-          className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-          title="Add Node"
-        >
-          <Plus size={18} />
-        </button>
-
-        {/* Edit Node Button (only when single selected) */}
+      <div role="toolbar" aria-label="Canvas editing" className="flex flex-col items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/90 p-2 backdrop-blur">
+        <AddNodeControl onAddNode={onAddNode} />
+        {selectedNode && !isMultiSelect && <EditNodeControl selectedNode={selectedNode} onUpdateNode={onUpdateNode} />}
         {selectedNode && !isMultiSelect && (
-          <button
-            onClick={handleEditStart}
-            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-            title="Edit Node"
-          >
-            <Edit3 size={18} />
-          </button>
+          <button type="button" aria-label="Delete selected node" title="Delete Node" onClick={() => onDeleteNode(selectedNode.id)} className={`${iconButtonClass} text-red-400 hover:bg-red-900/30 hover:text-red-300`}><Trash2 size={18} aria-hidden="true" /></button>
         )}
-
-        {/* Delete Node Button (single selection) */}
-        {selectedNode && !isMultiSelect && (
-          <button
-            onClick={() => onDeleteNode(selectedNode.id)}
-            className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-lg transition-colors"
-            title="Delete Node"
-          >
-            <Trash2 size={18} />
-          </button>
-        )}
-
-        <div className="h-px w-6 bg-slate-700" />
-
-        {/* Undo Button */}
-        {onUndo && (
-          <button
-            onClick={onUndo}
-            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-            title="Undo"
-          >
-            <RotateCcw size={18} />
-          </button>
-        )}
-
-        {/* Redo Button */}
-        {onRedo && (
-          <button
-            onClick={onRedo}
-            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-            title="Redo"
-          >
-            <RotateCw size={18} />
-          </button>
-        )}
-
-        {/* Save Button */}
-        {onSave && (
-          <button
-            onClick={onSave}
-            className="p-2 text-green-400 hover:text-green-300 hover:bg-green-900/30 rounded-lg transition-colors"
-            title="Save"
-          >
-            <Save size={18} />
-          </button>
-        )}
+        <span aria-hidden="true" className="h-px w-6 bg-slate-700" />
+        {onUndo && <button type="button" aria-label="Undo last canvas change" title="Undo" onClick={onUndo} className={iconButtonClass}><RotateCcw size={18} aria-hidden="true" /></button>}
+        {onRedo && <button type="button" aria-label="Redo last canvas change" title="Redo" onClick={onRedo} className={iconButtonClass}><RotateCw size={18} aria-hidden="true" /></button>}
+        {onSave && <button type="button" aria-label="Save canvas" title="Save" onClick={onSave} className={`${iconButtonClass} text-cyan-300`}><Save size={18} aria-hidden="true" /></button>}
       </div>
 
-      {/* Multi-select batch operations bar */}
-      <AnimatePresence>
-        {isMultiSelect && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="p-2.5 bg-cyan-900/60 backdrop-blur border border-cyan-600/40 rounded-xl shadow-xl"
-          >
-            <div className="flex items-center gap-1.5 mb-2 px-1">
-              <Layers size={14} className="text-cyan-300" />
-              <span className="text-xs font-medium text-cyan-200">
-                {selectedNodes.length} nodes selected
-              </span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {/* Batch Change Category */}
-              {onBatchUpdateCategory && (
-                <button
-                  onClick={() => setIsBatchCategoryOpen(true)}
-                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-slate-200 hover:bg-cyan-800/40 rounded-lg transition-colors"
-                  title="Change category for all selected nodes"
-                >
-                  <Tag size={14} className="text-cyan-400" />
-                  Change Category
-                </button>
-              )}
-              {/* Batch Delete */}
-              {onBatchDelete && (
-                <button
-                  onClick={() => onBatchDelete(multiSelectIds)}
-                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-red-300 hover:bg-red-900/30 rounded-lg transition-colors"
-                  title="Delete all selected nodes"
-                >
-                  <Trash2 size={14} />
-                  Delete {selectedNodes.length} Nodes
-                </button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Batch Category Picker Modal */}
-      <AnimatePresence>
-        {isBatchCategoryOpen && isMultiSelect && onBatchUpdateCategory && (
-          <motion.div
-            ref={batchCategoryRef}
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-72 max-h-[420px] flex flex-col"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-slate-200">
-                Set Category ({selectedNodes.length} nodes)
-              </h4>
-              <button
-                onClick={() => setIsBatchCategoryOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-200"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="overflow-y-auto custom-scrollbar space-y-1 pr-1">
-              {(['Code', 'System', undefined] as const).map(group => {
-                const groupCats = categories.filter(c => c.group === group);
-                if (groupCats.length === 0) return null;
-                return (
-                  <div key={group || 'other'}>
-                    {group && (
-                      <div className="text-[10px] uppercase tracking-wider text-slate-500 px-2 pt-2 pb-1">{group}</div>
-                    )}
-                    {groupCats.map(cat => (
-                      <button
-                        key={cat.value}
-                        onClick={() => {
-                          onBatchUpdateCategory(multiSelectIds, cat.value);
-                          setIsBatchCategoryOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-1.5 text-sm text-slate-300 hover:bg-cyan-800/30 hover:text-cyan-200 rounded-lg transition-colors"
-                      >
-                        {cat.label}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Add Node Modal */}
-      <AnimatePresence>
-        {isAddingNode && (
-          <motion.div
-            ref={addNodeRef}
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-72"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-slate-200">Add New Node</h4>
-              <button
-                onClick={() => setIsAddingNode(false)}
-                className="p-1 text-slate-400 hover:text-slate-200"
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Label</label>
-                <input
-                  value={newNodeData.label}
-                  onChange={(e) => setNewNodeData(prev => ({ ...prev, label: e.target.value }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                  placeholder="Node name"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Description</label>
-                <input
-                  value={newNodeData.description}
-                  onChange={(e) => setNewNodeData(prev => ({ ...prev, description: e.target.value }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                  placeholder="Brief description"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Category</label>
-                <select
-                  value={newNodeData.category}
-                  onChange={(e) => setNewNodeData(prev => ({ ...prev, category: e.target.value as NodeCategory }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                >
-                  {categories.map(cat => (
-                    <option key={cat.value} value={cat.value}>{cat.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Files (optional)</label>
-                <div className="flex gap-2">
-                  <input
-                    value={newFile}
-                    onChange={(e) => setNewFile(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addFileToNewNode()}
-                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                    placeholder="path/to/file.ts"
-                  />
-                  <button
-                    onClick={addFileToNewNode}
-                    className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg text-xs"
-                  >
-                    Add
-                  </button>
-                </div>
-                {newNodeData.files.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {newNodeData.files.map((file, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs text-slate-400">
-                        <FileCode size={10} />
-                        <span className="truncate flex-1">{file}</span>
-                        <button
-                          onClick={() => setNewNodeData(prev => ({
-                            ...prev,
-                            files: prev.files.filter((_, idx) => idx !== i)
-                          }))}
-                          className="text-red-400 hover:text-red-300"
-                        >
-                          <X size={10} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <button
-                onClick={handleAddNode}
-                disabled={!newNodeData.label.trim()}
-                className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                Add Node
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Edit Node Modal */}
-      <AnimatePresence>
-        {isEditing && selectedNode && (
-          <motion.div
-            ref={editNodeRef}
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="p-4 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-72"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-slate-200">Edit Node</h4>
-              <button
-                onClick={() => setIsEditing(false)}
-                className="p-1 text-slate-400 hover:text-slate-200"
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Label</label>
-                <input
-                  value={editData.label}
-                  onChange={(e) => setEditData(prev => ({ ...prev, label: e.target.value }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Description</label>
-                <input
-                  value={editData.description}
-                  onChange={(e) => setEditData(prev => ({ ...prev, description: e.target.value }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Category</label>
-                <select
-                  value={editData.category}
-                  onChange={(e) => setEditData(prev => ({ ...prev, category: e.target.value as NodeCategory }))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 outline-none"
-                >
-                  {categories.map(cat => (
-                    <option key={cat.value} value={cat.value}>{cat.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setIsEditing(false)}
-                  className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleEditSave}
-                  className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1"
-                >
-                  <Check size={14} />
-                  Save
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {isMultiSelect && (
+        <section aria-label={`${selectedNodes.length} selected nodes`} className="rounded-xl border border-cyan-600/40 bg-cyan-950/80 p-2.5 shadow-xl backdrop-blur">
+          <p className="mb-2 flex items-center gap-1.5 px-1 text-xs font-medium text-cyan-200"><Layers size={14} aria-hidden="true" />{selectedNodes.length} nodes selected</p>
+          <div className="space-y-1">
+            {onBatchUpdateCategory && <BatchCategoryControl nodeIds={selectedIds} onApply={onBatchUpdateCategory} />}
+            {onBatchDelete && (
+              <button type="button" onClick={() => onBatchDelete(selectedIds)} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-2.5 text-xs text-red-300 hover:bg-red-900/30"><Trash2 size={14} aria-hidden="true" />Delete {selectedNodes.length} nodes</button>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 });

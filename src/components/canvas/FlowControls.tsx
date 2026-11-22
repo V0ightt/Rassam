@@ -13,14 +13,14 @@ import {
   X,
   ArrowDown,
   ArrowRight,
-  Grid,
-  RefreshCw
+  Grid
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
 
 interface FlowControlsProps {
   onSearch: (query: string) => void;
+  /** Opens the unified workspace palette. Node-only search remains as a fallback. */
+  onOpenCommandPalette?: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitView: () => void;
@@ -29,33 +29,25 @@ interface FlowControlsProps {
   onToggleMinimap: () => void;
   snapToGrid?: boolean;
   onToggleSnapToGrid?: () => void;
-  onSelectAll?: () => void;
-  onDuplicateSelected?: () => void;
-  onSyncCanvas?: () => void;
-  isSyncing?: boolean;
-  lastSyncedAt?: string | null;
 }
 
 // Keyboard shortcuts helper
 const shortcuts = [
-  { keys: ['⌘/Ctrl', 'F'], action: 'Search nodes' },
-  { keys: ['⌘/Ctrl', '+'], action: 'Zoom in' },
-  { keys: ['⌘/Ctrl', '-'], action: 'Zoom out' },
-  { keys: ['⌘/Ctrl', '0'], action: 'Fit view' },
-  { keys: ['⌘/Ctrl', 'Z'], action: 'Undo' },
-  { keys: ['⌘/Ctrl', 'Shift', 'Z'], action: 'Redo' },
-  { keys: ['⌘/Ctrl', 'A'], action: 'Select all' },
-  { keys: ['⌘/Ctrl', 'C'], action: 'Copy node(s)' },
-  { keys: ['⌘/Ctrl', 'V'], action: 'Paste node(s)' },
-  { keys: ['⌘/Ctrl', 'D'], action: 'Duplicate' },
+  { keys: ['Ctrl/Cmd', 'K'], action: 'Search workspace' },
+  { keys: ['Ctrl/Cmd', 'Z'], action: 'Undo' },
+  { keys: ['Ctrl/Cmd', 'Shift', 'Z'], action: 'Redo' },
+  { keys: ['Ctrl/Cmd', 'Y'], action: 'Redo' },
+  { keys: ['Ctrl/Cmd', 'A'], action: 'Select all' },
+  { keys: ['Ctrl/Cmd', 'C'], action: 'Copy node(s)' },
+  { keys: ['Ctrl/Cmd', 'V'], action: 'Paste node(s)' },
+  { keys: ['Ctrl/Cmd', 'D'], action: 'Duplicate' },
   { keys: ['Delete'], action: 'Delete selected' },
-  { keys: ['Escape'], action: 'Clear selection' },
-  { keys: ['Space'], action: 'Pan canvas (hold)' },
   { keys: ['G'], action: 'Toggle grid snap' },
 ];
 
 export default memo(function FlowControls({
   onSearch,
+  onOpenCommandPalette,
   onZoomIn,
   onZoomOut,
   onFitView,
@@ -64,11 +56,6 @@ export default memo(function FlowControls({
   onToggleMinimap,
   snapToGrid = true,
   onToggleSnapToGrid,
-  onSelectAll,
-  onDuplicateSelected,
-  onSyncCanvas,
-  isSyncing = false,
-  lastSyncedAt = null,
 }: FlowControlsProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
@@ -119,22 +106,26 @@ export default memo(function FlowControls({
         {/* Search Toggle + Dropdown */}
         <div ref={searchRef} className="relative w-full flex flex-col items-center">
           <button
-            onClick={() => setShowSearch(!showSearch)}
+            onClick={() => {
+              if (onOpenCommandPalette) {
+                setShowSearch(false);
+                onOpenCommandPalette();
+              } else {
+                setShowSearch(!showSearch);
+              }
+            }}
             className={cn(
               "p-2 rounded-lg transition-colors",
               showSearch ? "bg-cyan-500/20 text-cyan-400" : "text-slate-300 hover:text-white hover:bg-slate-700"
             )}
-            title="Search (Ctrl+F)"
+            title={onOpenCommandPalette ? 'Search workspace (Ctrl/Cmd+K)' : 'Search nodes'}
+            aria-label={onOpenCommandPalette ? 'Search workspace and open commands' : 'Search nodes'}
           >
             <Search size={16} />
           </button>
           
-          <AnimatePresence>
-            {showSearch && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
+          {showSearch && (
+              <div
                 className="absolute top-0 left-full ml-2 w-64 z-50"
               >
                 <div className="relative bg-slate-900 backdrop-blur border border-slate-700 rounded-xl p-2 shadow-xl">
@@ -155,9 +146,8 @@ export default memo(function FlowControls({
                     <X size={14} />
                   </button>
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+          )}
         </div>
 
         <div className="h-px w-5 bg-slate-700" />
@@ -200,12 +190,8 @@ export default memo(function FlowControls({
             <LayoutGrid size={16} />
           </button>
           
-          <AnimatePresence>
-            {showLayoutOptions && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
+          {showLayoutOptions && (
+              <div
                 className="absolute top-0 left-full ml-2 p-2 bg-slate-900 border border-slate-700 rounded-xl shadow-xl z-50"
               >
                 <button
@@ -228,9 +214,8 @@ export default memo(function FlowControls({
                   <ArrowRight size={14} />
                   Left to Right
                 </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+          )}
         </div>
 
         {/* Snap to Grid Toggle */}
@@ -259,22 +244,6 @@ export default memo(function FlowControls({
           <Map size={16} />
         </button>
 
-        {/* Sync Canvas Context */}
-        {onSyncCanvas && (
-          <button
-            onClick={onSyncCanvas}
-            className={cn(
-              "p-2 rounded-lg transition-colors",
-              isSyncing
-                ? "bg-cyan-500/20 text-cyan-400"
-                : "text-slate-300 hover:text-white hover:bg-slate-700"
-            )}
-            title={lastSyncedAt ? `Sync canvas context (Last sync: ${new Date(lastSyncedAt).toLocaleTimeString()})` : 'Sync canvas context with AI'}
-          >
-            <RefreshCw size={16} className={cn(isSyncing && 'animate-spin')} />
-          </button>
-        )}
-
         <div className="h-px w-5 bg-slate-700" />
 
         {/* Keyboard Shortcuts */}
@@ -290,23 +259,23 @@ export default memo(function FlowControls({
             <Keyboard size={16} />
           </button>
 
-          <AnimatePresence>
-            {showShortcuts && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
+          {showShortcuts && (
+              <div
                 className="absolute top-0 left-full ml-2 p-3 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-64 z-50"
               >
                 <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                   Keyboard Shortcuts
                 </h4>
                 <div className="space-y-2">
-                  {shortcuts.map((shortcut, i) => (
+                  {shortcuts.map((shortcut, i) => {
+                    const displayedShortcut = i === 0 && onOpenCommandPalette
+                      ? { keys: ['Ctrl/Cmd', 'K'], action: 'Search workspace' }
+                      : shortcut;
+                    return (
                     <div key={i} className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400">{shortcut.action}</span>
+                      <span className="text-slate-400">{displayedShortcut.action}</span>
                       <div className="flex items-center gap-1">
-                        {shortcut.keys.map((key, j) => (
+                        {displayedShortcut.keys.map((key, j) => (
                           <React.Fragment key={j}>
                             {j > 0 && <span className="text-slate-600">+</span>}
                             <kbd className="px-1.5 py-0.5 bg-slate-800 rounded text-slate-300 font-mono">
@@ -316,11 +285,11 @@ export default memo(function FlowControls({
                         ))}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+          )}
         </div>
       </div>
     </div>

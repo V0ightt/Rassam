@@ -3,8 +3,7 @@
 import React, { memo, useCallback } from 'react';
 import { MessageSquare, X, XCircle, Workflow } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// ── File icon color helper ────────────────────────────────────
+import { CANVAS_TAB, type EditorTab } from '@/lib/editor-tabs';
 
 const EXT_COLORS: Record<string, string> = {
   ts: 'text-blue-400',
@@ -37,23 +36,7 @@ function fileTabColor(name: string): string {
   return EXT_COLORS[ext] || 'text-slate-400';
 }
 
-// ── Types ─────────────────────────────────────────────────────
-
-export interface EditorTab {
-  /** Unique id: 'canvas' for the canvas tab, or the file path */
-  id: string;
-  /** Display label (filename or "Canvas") */
-  label: string;
-  /** Full file path (undefined for canvas tab) */
-  filePath?: string;
-}
-
-export const CANVAS_TAB: EditorTab = {
-  id: '__canvas__',
-  label: 'Canvas',
-};
-
-// ── TabBar Component ──────────────────────────────────────────
+export { CANVAS_TAB, type EditorTab };
 
 interface TabBarProps {
   tabs: EditorTab[];
@@ -74,22 +57,28 @@ function TabBar({
   isChatOpen,
   onToggleChat,
 }: TabBarProps) {
-  const handleClose = useCallback(
-    (e: React.MouseEvent, tabId: string) => {
-      e.stopPropagation();
-      onCloseTab(tabId);
+  const handleTabKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      let nextIndex: number | null = null;
+      if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+      if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === 'Home') nextIndex = 0;
+      if (event.key === 'End') nextIndex = tabs.length - 1;
+      if (nextIndex === null) return;
+
+      event.preventDefault();
+      onSelectTab(tabs[nextIndex].id);
+      requestAnimationFrame(() => document.getElementById(`editor-tab-${nextIndex}`)?.focus());
     },
-    [onCloseTab],
+    [onSelectTab, tabs],
   );
 
-  // Track whether there are file tabs open (beyond the canvas default)
-  const hasFileTabs = tabs.some((t) => t.id !== CANVAS_TAB.id);
+  const hasFileTabs = tabs.some((tab) => tab.id !== CANVAS_TAB.id);
 
   return (
-    <div className="flex items-center bg-slate-900 border-b border-slate-800 shrink-0 select-none">
-      {/* Tabs scroll container */}
-      <div className="flex-1 flex items-center overflow-x-auto custom-scrollbar min-w-0">
-        {tabs.map((tab) => {
+    <div className="flex shrink-0 select-none items-center border-b border-slate-800 bg-slate-900">
+      <div role="tablist" aria-label="Open editors" className="custom-scrollbar flex min-w-0 flex-1 items-center overflow-x-auto">
+        {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId;
           const isCanvas = tab.id === CANVAS_TAB.id;
           const fileName = tab.filePath?.split('/').pop() || tab.label;
@@ -98,35 +87,43 @@ function TabBar({
             <div
               key={tab.id}
               className={cn(
-                'group flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-[13px] border-r border-slate-800 shrink-0 transition-colors max-w-[200px]',
+                'group flex max-w-[220px] shrink-0 items-center border-r border-slate-800 border-t-2 transition-colors',
                 isActive
-                  ? 'bg-slate-950 text-slate-100 border-t-2 border-t-cyan-500'
-                  : 'bg-slate-900 text-slate-400 hover:bg-slate-800/70 hover:text-slate-300 border-t-2 border-t-transparent',
+                  ? 'border-t-cyan-500 bg-slate-950 text-slate-100'
+                  : 'border-t-transparent bg-slate-900 text-slate-400 hover:bg-slate-800/70 hover:text-slate-200',
               )}
-              onClick={() => onSelectTab(tab.id)}
               title={tab.filePath || tab.label}
             >
-              {/* Tab icon */}
-              {isCanvas ? (
-                <Workflow size={13} className="shrink-0 text-cyan-400" />
-              ) : (
-                <span className={cn('shrink-0 text-[11px]', fileTabColor(fileName))}>●</span>
-              )}
+              <button
+                id={`editor-tab-${index}`}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`editor-panel-${tab.id}`}
+                tabIndex={isActive ? 0 : -1}
+                onClick={() => onSelectTab(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+                className="flex min-h-9 min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-[13px]"
+              >
+                {isCanvas ? (
+                  <Workflow size={13} className="shrink-0 text-cyan-400" />
+                ) : (
+                  <span aria-hidden="true" className={cn('shrink-0 text-[11px]', fileTabColor(fileName))}>●</span>
+                )}
+                <span className="truncate">{isCanvas ? 'Canvas' : fileName}</span>
+              </button>
 
-              {/* Tab label */}
-              <span className="truncate">{isCanvas ? 'Canvas' : fileName}</span>
-
-              {/* Close button (not on canvas tab) */}
               {!isCanvas && (
                 <button
+                  type="button"
+                  aria-label={`Close ${fileName}`}
+                  onClick={() => onCloseTab(tab.id)}
                   className={cn(
-                    'shrink-0 p-0.5 rounded transition-colors',
+                    'mr-1 grid min-h-8 min-w-8 shrink-0 place-items-center rounded-lg transition-colors',
                     isActive
-                      ? 'opacity-70 hover:opacity-100 hover:bg-slate-800'
-                      : 'opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:bg-slate-700',
+                      ? 'opacity-70 hover:bg-slate-800 hover:opacity-100'
+                      : 'opacity-60 hover:bg-slate-700 hover:opacity-100 md:opacity-0 md:group-hover:opacity-70 md:group-focus-within:opacity-70',
                   )}
-                  onClick={(e) => handleClose(e, tab.id)}
-                  title="Close"
                 >
                   <X size={12} />
                 </button>
@@ -138,32 +135,33 @@ function TabBar({
 
       {onToggleChat && (
         <button
+          type="button"
+          aria-pressed={Boolean(isChatOpen)}
+          aria-label={isChatOpen ? 'Hide Rassam' : 'Show Rassam'}
           className={cn(
-            'flex items-center gap-1 px-2 py-1.5 text-[11px] transition-colors shrink-0 border-l border-slate-800',
+            'flex min-h-9 shrink-0 items-center gap-1 border-l border-slate-800 px-3 py-1.5 text-[11px] transition-colors',
             isChatOpen
-              ? 'text-cyan-300 bg-slate-800/70 hover:bg-slate-700'
-              : 'text-slate-500 hover:text-cyan-300 hover:bg-slate-800',
+              ? 'bg-slate-800/70 text-cyan-300 hover:bg-slate-700'
+              : 'text-slate-400 hover:bg-slate-800 hover:text-cyan-300',
           )}
           onClick={onToggleChat}
-          title={isChatOpen ? 'Hide chat' : 'Show chat'}
         >
           <MessageSquare size={13} />
-          <span className="hidden sm:inline">Chat</span>
+          <span className="hidden sm:inline">Rassam</span>
         </button>
       )}
 
-      {/* Close all button */}
       {hasFileTabs && (
         <button
-          className="flex items-center gap-1 px-2 py-1.5 text-[11px] text-slate-500 hover:text-red-400 hover:bg-slate-800 transition-colors shrink-0 border-l border-slate-800"
+          type="button"
+          aria-label="Close all file tabs"
+          className="flex min-h-9 shrink-0 items-center gap-1 border-l border-slate-800 px-3 py-1.5 text-[11px] text-slate-400 transition-colors hover:bg-slate-800 hover:text-red-300"
           onClick={onCloseAll}
-          title="Close all file tabs"
         >
           <XCircle size={13} />
-          <span className="hidden sm:inline">Close All</span>
+          <span className="hidden sm:inline">Close all</span>
         </button>
       )}
-
     </div>
   );
 }

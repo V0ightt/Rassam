@@ -1,0 +1,46 @@
+name: Rassam Blueprint
+
+# Dogfood: every pull request to this repository is judged by the blueprint on
+# its base branch. The gate itself also comes from the base branch, so a pull
+# request cannot weaken the checker that judges it. External repositories
+# should pin a released ref of this action instead.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: rassam-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  blueprint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out the gate from the base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .rassam-gate
+          sparse-checkout: |
+            action.yml
+            action/dist
+          sparse-checkout-cone-mode: false
+      - name: Keep the gate checkout out of the analyzed change
+        run: echo ".rassam-gate/" >> .git/info/exclude
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rassam Blueprint Check (base gate)
+        if: hashFiles('.rassam-gate/action.yml') != ''
+        uses: ./.rassam-gate
+      - name: Rassam Blueprint Check (bootstrap, base has no gate yet)
+        if: hashFiles('.rassam-gate/action.yml') == ''
+        uses: ./

@@ -1,7 +1,10 @@
-import { LLMProviderId } from "@/lib/llm";
+import type { LLMProviderId } from "@/lib/llm";
+import type { ProviderCapabilities } from "@/lib/llm/catalog";
 
 export const MODEL_SETTINGS_STORAGE_KEY = "repoAgent_modelSettings";
 export const PROVIDER_STATUS_STORAGE_KEY = "repoAgent_providerStatus";
+export const MODEL_VALIDATION_STORAGE_KEY = "rassam.model-validation.v1";
+export const MODEL_VALIDATION_TTL_MS = 5 * 60 * 1_000;
 
 export interface ModelSettings {
   enabledModels: Partial<Record<LLMProviderId, string[]>>;
@@ -20,10 +23,23 @@ export interface ProviderStatus {
   validated: boolean;
   available: boolean;
   reason?: string;
+  capabilities?: ProviderCapabilities;
 }
 
 export interface ProviderStatusResponse {
   providers: ProviderStatus[];
+  checkedAt: string;
+  validationMode?: 'explicit';
+  validationCacheTtlSeconds?: number;
+}
+
+export interface ModelValidationStatus {
+  providerId: LLMProviderId;
+  model: string;
+  validated: boolean;
+  available: boolean;
+  reason?: string;
+  cached: boolean;
   checkedAt: string;
 }
 
@@ -83,6 +99,10 @@ export function loadProviderStatus(): ProviderStatusResponse | null {
     return {
       providers: parsed.providers,
       checkedAt: typeof parsed.checkedAt === "string" ? parsed.checkedAt : "",
+      ...(parsed.validationMode === "explicit" ? { validationMode: "explicit" as const } : {}),
+      ...(typeof parsed.validationCacheTtlSeconds === "number"
+        ? { validationCacheTtlSeconds: parsed.validationCacheTtlSeconds }
+        : {}),
     };
   } catch {
     return null;
@@ -92,6 +112,45 @@ export function loadProviderStatus(): ProviderStatusResponse | null {
 export function saveProviderStatus(status: ProviderStatusResponse) {
   if (typeof window === "undefined") return;
   localStorage.setItem(PROVIDER_STATUS_STORAGE_KEY, JSON.stringify(status));
+}
+
+export function loadModelValidationStatus(
+  providerId?: LLMProviderId | null,
+  model?: string | null,
+  now = Date.now(),
+): ModelValidationStatus | null {
+  if (typeof window === "undefined" || !providerId || !model) return null;
+  try {
+    const raw = localStorage.getItem(MODEL_VALIDATION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ModelValidationStatus>;
+    const checkedAt = typeof parsed.checkedAt === "string" ? Date.parse(parsed.checkedAt) : Number.NaN;
+    if (
+      parsed.providerId !== providerId
+      || parsed.model !== model
+      || typeof parsed.validated !== "boolean"
+      || typeof parsed.available !== "boolean"
+      || !Number.isFinite(checkedAt)
+      || checkedAt > now + 60_000
+      || now - checkedAt > MODEL_VALIDATION_TTL_MS
+    ) return null;
+    return {
+      providerId,
+      model,
+      validated: parsed.validated,
+      available: parsed.available,
+      ...(typeof parsed.reason === "string" ? { reason: parsed.reason } : {}),
+      cached: Boolean(parsed.cached),
+      checkedAt: parsed.checkedAt!,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveModelValidationStatus(status: ModelValidationStatus): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(MODEL_VALIDATION_STORAGE_KEY, JSON.stringify(status));
 }
 
 function clampMaxTokens(value: number): number {
@@ -118,52 +177,36 @@ export function sanitizeModelSettings(
     return base;
   }
 
-  const availableProviders = providerResponse.providers.filter((provider) => provider.available);
   const enabledModels: Partial<Record<LLMProviderId, string[]>> = {};
 
   for (const provider of providerResponse.providers) {
     const existingEnabled = base.enabledModels[provider.id] || [];
     const allowed = existingEnabled.filter((model) => provider.models.includes(model));
-
-    if (provider.available && allowed.length > 0) {
-      enabledModels[provider.id] = allowed;
-      continue;
-    }
-
-    // Only auto-enable if the user had no previous selection for this provider
-    if (provider.available && provider.models[0] && !base.enabledModels[provider.id]) {
-      enabledModels[provider.id] = [provider.models[0]];
-    }
+    if (allowed.length > 0) enabledModels[provider.id] = allowed;
   }
 
   const selectedProvider = base.selectedProvider;
   const providerForSelection = selectedProvider
-    ? availableProviders.find((provider) => provider.id === selectedProvider)
+    ? providerResponse.providers.find((provider) => provider.id === selectedProvider)
     : null;
+  const selectedProviderIsKnown = Boolean(providerForSelection);
+  const exactModelIsValid = Boolean(
+    providerForSelection
+    && base.selectedModel
+    && providerForSelection.models.includes(base.selectedModel)
+  );
 
-  const enabledForSelected = providerForSelection
-    ? enabledModels[providerForSelection.id] || []
-    : [];
-
-  if (providerForSelection && enabledForSelected.length > 0) {
-    const selectedModel = enabledForSelected.includes(base.selectedModel || "")
-      ? base.selectedModel
-      : enabledForSelected[0];
-
-    return {
-      ...base,
-      enabledModels,
-      selectedProvider: providerForSelection.id,
-      selectedModel,
-    };
+  if (exactModelIsValid && providerForSelection && base.selectedModel) {
+    enabledModels[providerForSelection.id] = Array.from(new Set([
+      ...(enabledModels[providerForSelection.id] || []),
+      base.selectedModel,
+    ]));
   }
-
-  const fallbackProvider = availableProviders.find((provider) => (enabledModels[provider.id] || []).length > 0) || null;
 
   return {
     ...base,
     enabledModels,
-    selectedProvider: fallbackProvider?.id || null,
-    selectedModel: fallbackProvider ? (enabledModels[fallbackProvider.id] || [])[0] || null : null,
+    selectedProvider: selectedProviderIsKnown ? providerForSelection!.id : null,
+    selectedModel: exactModelIsValid ? base.selectedModel : null,
   };
 }

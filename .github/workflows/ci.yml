@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run bundle:check
+      # The GitHub Action runs the committed bundle, so it must match the source.
+      - name: Verify the committed CLI bundle is fresh
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm run build:cli
+          git diff --exit-code -- action/dist
+          if [ -n "$(git status --porcelain -- action/dist)" ]; then
+            echo "::error::action/dist is not committed. Run npm run build:cli and commit the result."
+            exit 1
+          fi
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    needs: quality
+    # The production server fails closed without signing secrets. These are
+    # throwaway values for the smoke test only; real deployments set their own.
+    env:
+      RASSAM_DEPLOYMENT_PROFILE: local
+      APP_ORIGIN: http://127.0.0.1:3000
+      SESSION_SIGNING_SECRET: ci-smoke-session-secret-not-used-anywhere-else-0001
+      SOURCE_GRANT_SECRET: ci-smoke-source-grant-secret-not-used-anywhere-else-02
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run bundle:check
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=chromium
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 14

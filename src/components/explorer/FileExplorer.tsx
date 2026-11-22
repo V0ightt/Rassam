@@ -1,74 +1,48 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useMemo, memo } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  Files,
-  ChevronRight,
+  CheckCircle2,
   ChevronDown,
+  ChevronRight,
+  Download,
   File,
+  Files,
   Folder,
   FolderOpen,
-  Download,
   Loader2,
-  CheckCircle2,
-  RefreshCw,
   Search,
+  Square,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { FileTreeNode, RepoFileEntry } from '@/types';
-import { motion, AnimatePresence } from 'framer-motion';
-
-// ── File icon helper ──────────────────────────────────────────
+import type { FileTreeNode, RepoFileEntry } from '@/types';
 
 const EXT_COLORS: Record<string, string> = {
-  ts: 'text-blue-400',
-  tsx: 'text-blue-400',
-  js: 'text-yellow-400',
-  jsx: 'text-yellow-400',
-  json: 'text-yellow-300',
-  css: 'text-purple-400',
-  scss: 'text-pink-400',
-  html: 'text-orange-400',
-  md: 'text-slate-300',
-  mdx: 'text-slate-300',
-  py: 'text-green-400',
-  rs: 'text-orange-500',
-  go: 'text-cyan-400',
-  java: 'text-red-400',
-  yml: 'text-red-300',
-  yaml: 'text-red-300',
-  toml: 'text-red-300',
-  env: 'text-yellow-500',
-  svg: 'text-amber-400',
-  png: 'text-emerald-400',
-  jpg: 'text-emerald-400',
-  gif: 'text-emerald-400',
-  lock: 'text-slate-600',
+  ts: 'text-blue-400', tsx: 'text-blue-400', js: 'text-yellow-400', jsx: 'text-yellow-400',
+  json: 'text-yellow-300', css: 'text-purple-400', scss: 'text-pink-400', html: 'text-orange-400',
+  md: 'text-slate-300', mdx: 'text-slate-300', py: 'text-green-400', rs: 'text-orange-500',
+  go: 'text-cyan-400', java: 'text-red-400', yml: 'text-red-300', yaml: 'text-red-300',
+  toml: 'text-red-300', env: 'text-yellow-500', svg: 'text-amber-400', lock: 'text-slate-600',
 };
 
 function fileColor(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase() || '';
-  return EXT_COLORS[ext] || 'text-slate-400';
+  const extension = name.split('.').pop()?.toLowerCase() || '';
+  return EXT_COLORS[extension] || 'text-slate-400';
 }
-
-// ── Build tree from flat path list ────────────────────────────
 
 export function buildFileTree(entries: RepoFileEntry[]): FileTreeNode[] {
   const root: FileTreeNode = { name: '', path: '', type: 'folder', children: [] };
 
   for (const entry of entries) {
-    const parts = entry.path.split('/');
+    const parts = entry.path.split('/').filter(Boolean);
     let current = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isLast = i === parts.length - 1;
-      const currentPath = parts.slice(0, i + 1).join('/');
-
-      if (!current.children) current.children = [];
-      let child = current.children.find((c) => c.name === part);
-
+    parts.forEach((part, index) => {
+      const isLast = index === parts.length - 1;
+      const currentPath = parts.slice(0, index + 1).join('/');
+      current.children ??= [];
+      let child = current.children.find((candidate) => candidate.name === part);
       if (!child) {
         child = {
           name: part,
@@ -78,147 +52,47 @@ export function buildFileTree(entries: RepoFileEntry[]): FileTreeNode[] {
         };
         current.children.push(child);
       }
-
       current = child;
-    }
+    });
   }
 
-  // Sort: folders first, then alphabetical
-  const sortTree = (nodes: FileTreeNode[]): FileTreeNode[] => {
-    return nodes
-      .map((n) => ({ ...n, children: n.children ? sortTree(n.children) : undefined }))
-      .sort((a, b) => {
-        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-  };
+  const sortTree = (nodes: FileTreeNode[]): FileTreeNode[] => nodes
+    .map((node) => ({ ...node, children: node.children ? sortTree(node.children) : undefined }))
+    .sort((left, right) => {
+      if (left.type !== right.type) return left.type === 'folder' ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
 
   return sortTree(root.children || []);
 }
 
-// ── TreeItem ──────────────────────────────────────────────────
-
-interface TreeItemProps {
+interface VisibleRow {
   node: FileTreeNode;
   depth: number;
-  cachedPaths: Set<string>;
-  fetchingPaths: Set<string>;
-  expandedPaths: Set<string>;
-  onToggle: (path: string) => void;
-  onFileClick: (path: string) => void;
-  searchQuery: string;
 }
 
-const TreeItem = memo(function TreeItem({
-  node,
-  depth,
-  cachedPaths,
-  fetchingPaths,
-  expandedPaths,
-  onToggle,
-  onFileClick,
-  searchQuery,
-}: TreeItemProps) {
-  const isFolder = node.type === 'folder';
-  const isExpanded = expandedPaths.has(node.path);
-  const isCached = cachedPaths.has(node.path);
-  const isFetching = fetchingPaths.has(node.path);
+function containsQuery(node: FileTreeNode, query: string): boolean {
+  if (!query) return true;
+  if (node.name.toLowerCase().includes(query) || node.path.toLowerCase().includes(query)) return true;
+  return node.children?.some((child) => containsQuery(child, query)) ?? false;
+}
 
-  // Filter by search query
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    if (isFolder) {
-      const hasMatch = node.children?.some(function hasDeep(c: FileTreeNode): boolean {
-        if (c.name.toLowerCase().includes(q)) return true;
-        return c.children?.some(hasDeep) || false;
-      });
-      if (!hasMatch && !node.name.toLowerCase().includes(q)) return null;
-    } else {
-      if (!node.name.toLowerCase().includes(q) && !node.path.toLowerCase().includes(q)) return null;
+function flattenTree(
+  tree: FileTreeNode[],
+  expandedPaths: Set<string>,
+  query: string,
+  depth = 0,
+  rows: VisibleRow[] = [],
+): VisibleRow[] {
+  for (const node of tree) {
+    if (!containsQuery(node, query)) continue;
+    rows.push({ node, depth });
+    if (node.type === 'folder' && node.children && (query || expandedPaths.has(node.path))) {
+      flattenTree(node.children, expandedPaths, query, depth + 1, rows);
     }
   }
-
-  return (
-    <>
-      <div
-        className={cn(
-          'flex items-center gap-1 py-[3px] px-1 rounded-[3px] cursor-pointer transition-colors text-[13px] leading-tight group select-none',
-          isCached && !isFolder ? 'text-slate-200' : 'text-slate-400',
-          'hover:bg-slate-800/70',
-        )}
-        style={{ paddingLeft: `${depth * 16 + 4}px` }}
-        onClick={() => {
-          if (isFolder) {
-            onToggle(node.path);
-          } else {
-            onFileClick(node.path);
-          }
-        }}
-        title={node.path}
-      >
-        {/* Chevron */}
-        {isFolder ? (
-          isExpanded ? (
-            <ChevronDown size={14} className="shrink-0 text-slate-500" />
-          ) : (
-            <ChevronRight size={14} className="shrink-0 text-slate-500" />
-          )
-        ) : (
-          <span className="w-[14px] shrink-0" />
-        )}
-
-        {/* Icon */}
-        {isFolder ? (
-          isExpanded ? (
-            <FolderOpen size={14} className="shrink-0 text-yellow-400/80" />
-          ) : (
-            <Folder size={14} className="shrink-0 text-yellow-400/60" />
-          )
-        ) : (
-          <File size={14} className={cn('shrink-0', fileColor(node.name))} />
-        )}
-
-        {/* Name */}
-        <span className="truncate flex-1">{node.name}</span>
-
-        {/* Status indicators */}
-        {!isFolder && isFetching && (
-          <Loader2 size={12} className="shrink-0 animate-spin text-cyan-400" />
-        )}
-        {!isFolder && isCached && !isFetching && (
-          <CheckCircle2 size={12} className="shrink-0 text-green-500/70" />
-        )}
-        {!isFolder && !isCached && !isFetching && (
-          <Download
-            size={12}
-            className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-600 hover:text-cyan-400 transition-all"
-          />
-        )}
-      </div>
-
-      {/* Children */}
-      {isFolder && isExpanded && node.children && (
-        <div>
-          {node.children.map((child) => (
-            <TreeItem
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              cachedPaths={cachedPaths}
-              fetchingPaths={fetchingPaths}
-              expandedPaths={expandedPaths}
-              onToggle={onToggle}
-              onFileClick={onFileClick}
-              searchQuery={searchQuery}
-            />
-          ))}
-        </div>
-      )}
-    </>
-  );
-});
-
-// ── FileExplorer ──────────────────────────────────────────────
+  return rows;
+}
 
 interface FileExplorerProps {
   fileEntries: RepoFileEntry[];
@@ -226,9 +100,13 @@ interface FileExplorerProps {
   fetchingPaths: Set<string>;
   onFetchFile: (path: string) => void;
   onFetchAll: () => void;
+  onCancelFetchAll?: () => void;
   projectName?: string;
   totalFiles: number;
   isFetchingAll: boolean;
+  activeFilePath?: string;
+  cacheProgress?: { total: number; completed: number; failed: number; estimatedBytes: number } | null;
+  error?: string | null;
 }
 
 function FileExplorer({
@@ -237,25 +115,38 @@ function FileExplorer({
   fetchingPaths,
   onFetchFile,
   onFetchAll,
+  onCancelFetchAll,
   projectName,
   totalFiles,
   isFetchingAll,
+  activeFilePath,
+  cacheProgress,
+  error,
 }: FileExplorerProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const tree = useMemo(() => buildFileTree(fileEntries), [fileEntries]);
-
-  // Auto-expand root level folders on mount
-  useEffect(() => {
-    const rootFolders = tree.filter((n) => n.type === 'folder').map((n) => n.path);
-    setExpandedPaths(new Set(rootFolders));
-  }, [tree]);
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const rows = useMemo(
+    () => flattenTree(tree, expandedPaths, normalizedQuery),
+    [expandedPaths, normalizedQuery, tree],
+  );
+  // TanStack Virtual intentionally returns imperative methods that the React
+  // compiler cannot memoize. Keep this localized to the virtual tree boundary.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 30,
+    overscan: 12,
+  });
 
   const toggleExpanded = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev);
+    setExpandedPaths((previous) => {
+      const next = new Set(previous);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
@@ -264,131 +155,141 @@ function FileExplorer({
 
   const expandAll = useCallback(() => {
     const allFolders = new Set<string>();
-    function walk(nodes: FileTreeNode[]) {
-      for (const n of nodes) {
-        if (n.type === 'folder') {
-          allFolders.add(n.path);
-          n.children && walk(n.children);
-        }
-      }
-    }
-    walk(tree);
+    const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
+      if (node.type !== 'folder') return;
+      allFolders.add(node.path);
+      if (node.children) visit(node.children);
+    });
+    visit(tree);
     setExpandedPaths(allFolders);
   }, [tree]);
 
-  const collapseAll = useCallback(() => {
-    setExpandedPaths(new Set());
-  }, []);
+  const focusRow = useCallback((index: number) => {
+    if (index < 0 || index >= rows.length) return;
+    virtualizer.scrollToIndex(index, { align: 'auto' });
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-file-row="${index}"]`)?.focus());
+  }, [rows.length, virtualizer]);
+
+  const handleRowKeyDown = useCallback((event: React.KeyboardEvent, index: number, row: VisibleRow) => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); focusRow(index + 1); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); focusRow(index - 1); return; }
+    if (event.key === 'Home') { event.preventDefault(); focusRow(0); return; }
+    if (event.key === 'End') { event.preventDefault(); focusRow(rows.length - 1); return; }
+    if (event.key === 'ArrowRight' && row.node.type === 'folder') {
+      event.preventDefault();
+      if (!expandedPaths.has(row.node.path)) toggleExpanded(row.node.path);
+      else focusRow(index + 1);
+      return;
+    }
+    if (event.key === 'ArrowLeft' && row.node.type === 'folder' && expandedPaths.has(row.node.path)) {
+      event.preventDefault();
+      toggleExpanded(row.node.path);
+    }
+  }, [expandedPaths, focusRow, rows.length, toggleExpanded]);
 
   const cachedCount = cachedPaths.size;
-  const blobCount = fileEntries.filter((e) => e.type === 'blob').length;
+  const cachePercent = cacheProgress?.total
+    ? Math.round((cacheProgress.completed / cacheProgress.total) * 100)
+    : 0;
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-3 border-b border-slate-800 flex items-center justify-between shrink-0">
-        <h2 className="font-semibold text-slate-100 text-sm flex items-center gap-2 truncate">
-          <Files size={16} className="text-cyan-400 shrink-0" />
+    <section aria-label="Repository files" className="flex h-full flex-col bg-slate-900">
+      <header className="flex shrink-0 items-center justify-between border-b border-slate-800 p-3">
+        <h2 className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold text-slate-100">
+          <Files size={16} className="shrink-0 text-cyan-400" aria-hidden="true" />
           <span className="truncate">{projectName || 'Explorer'}</span>
         </h2>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            onClick={() => setShowSearch((s) => !s)}
-            className="p-1 text-slate-500 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors"
-            title="Search files"
-          >
+        <div className="flex shrink-0 items-center gap-1">
+          <button type="button" onClick={() => setShowSearch((value) => !value)} aria-expanded={showSearch} aria-controls="file-search" aria-label="Search files" className="grid min-h-9 min-w-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-cyan-300">
             <Search size={14} />
           </button>
-          <button
-            onClick={expandAll}
-            className="p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded transition-colors"
-            title="Expand all"
-          >
+          <button type="button" onClick={expandAll} aria-label="Expand all folders" className="grid min-h-9 min-w-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-100">
             <ChevronDown size={14} />
           </button>
-          <button
-            onClick={collapseAll}
-            className="p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded transition-colors"
-            title="Collapse all"
-          >
+          <button type="button" onClick={() => setExpandedPaths(new Set())} aria-label="Collapse all folders" className="grid min-h-9 min-w-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-100">
             <ChevronRight size={14} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Search bar */}
-      <AnimatePresence>
-        {showSearch && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="border-b border-slate-800 overflow-hidden"
-          >
-            <div className="p-2 flex items-center gap-1">
-              <Search size={12} className="text-slate-500 shrink-0" />
-              <input
-                autoFocus
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder-slate-600"
-                placeholder="Filter files..."
-              />
-              {searchQuery && (
-                <button onClick={() => setSearchQuery('')} className="text-slate-600 hover:text-slate-300">
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {showSearch && (
+        <div id="file-search" className="flex items-center gap-2 border-b border-slate-800 p-2">
+          <Search size={13} className="shrink-0 text-slate-500" aria-hidden="true" />
+          <label htmlFor="file-search-input" className="sr-only">Filter repository files</label>
+          <input id="file-search-input" autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 outline-none placeholder:text-slate-500" placeholder="Filter files" />
+          {searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear file filter" className="grid min-h-8 min-w-8 place-items-center rounded text-slate-400 hover:bg-slate-800 hover:text-slate-100"><X size={13} /></button>}
+        </div>
+      )}
 
-      {/* Stats bar */}
-      <div className="px-3 py-1.5 border-b border-slate-800/50 flex items-center justify-between text-[10px] text-slate-500 shrink-0">
-        <span>
-          {cachedCount}/{blobCount} files cached
-        </span>
-        <button
-          onClick={onFetchAll}
-          disabled={isFetchingAll || cachedCount >= blobCount}
-          className={cn(
-            'flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors',
-            isFetchingAll || cachedCount >= blobCount
-              ? 'text-slate-600 cursor-not-allowed'
-              : 'text-cyan-400 hover:bg-cyan-500/10',
+      <div className="shrink-0 border-b border-slate-800/70 px-3 py-2 text-[11px] text-slate-400">
+        <div className="flex items-center justify-between gap-2">
+          <span>{cachedCount.toLocaleString()} of {totalFiles.toLocaleString()} files cached</span>
+          {isFetchingAll ? (
+            <button type="button" onClick={onCancelFetchAll} className="flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-red-300 hover:bg-red-500/10">
+              <Square size={10} fill="currentColor" aria-hidden="true" /> Stop
+            </button>
+          ) : (
+            <button type="button" onClick={onFetchAll} disabled={cachedCount >= totalFiles || totalFiles === 0} className="flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-cyan-300 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:text-slate-600">
+              <Download size={12} aria-hidden="true" /> Cache files
+            </button>
           )}
-        >
-          {isFetchingAll ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-          {isFetchingAll ? 'Fetching...' : cachedCount >= blobCount ? 'All cached' : 'Fetch all'}
-        </button>
+        </div>
+        {cacheProgress && (
+          <p role="status" aria-live="polite" className="mt-1 text-slate-500">
+            {cachePercent}% complete, {cacheProgress.failed} failed, up to {(cacheProgress.estimatedBytes / 1024 / 1024).toFixed(1)} MiB
+          </p>
+        )}
+        {error && <p role="alert" className="mt-1 text-amber-300">{error}</p>}
       </div>
 
-      {/* Tree */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar py-1">
-        {tree.length === 0 ? (
-          <div className="text-center text-slate-500 text-xs py-8 px-4">
-            No files yet.
-            <br />
-            Create a project from GitHub to explore its files.
+      <div ref={scrollRef} role="tree" aria-label="Repository file tree" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        {rows.length === 0 ? (
+          <div className="px-4 py-8 text-center text-xs leading-5 text-slate-400">
+            {fileEntries.length === 0 ? 'No repository files are available.' : 'No files match this filter.'}
           </div>
         ) : (
-          tree.map((node) => (
-            <TreeItem
-              key={node.path}
-              node={node}
-              depth={0}
-              cachedPaths={cachedPaths}
-              fetchingPaths={fetchingPaths}
-              expandedPaths={expandedPaths}
-              onToggle={toggleExpanded}
-              onFileClick={onFetchFile}
-              searchQuery={searchQuery}
-            />
-          ))
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              const isFolder = row.node.type === 'folder';
+              const isExpanded = isFolder && (Boolean(normalizedQuery) || expandedPaths.has(row.node.path));
+              const isCached = cachedPaths.has(row.node.path);
+              const isFetching = fetchingPaths.has(row.node.path);
+              const isActive = !isFolder && activeFilePath === row.node.path;
+
+              return (
+                <button
+                  key={row.node.path}
+                  type="button"
+                  role="treeitem"
+                  aria-level={row.depth + 1}
+                  aria-expanded={isFolder ? isExpanded : undefined}
+                  aria-selected={isActive}
+                  aria-current={isActive ? 'true' : undefined}
+                  data-file-row={virtualRow.index}
+                  tabIndex={virtualRow.index === 0 || isActive ? 0 : -1}
+                  onKeyDown={(event) => handleRowKeyDown(event, virtualRow.index, row)}
+                  onClick={() => isFolder ? toggleExpanded(row.node.path) : onFetchFile(row.node.path)}
+                  title={row.node.path}
+                  className={cn(
+                    'absolute left-0 top-0 flex w-full items-center gap-1 rounded-sm pr-2 text-left text-[13px] text-slate-400 hover:bg-slate-800/80 hover:text-slate-100',
+                    isActive && 'bg-cyan-500/10 text-cyan-100',
+                    isCached && !isFolder && 'text-slate-200',
+                  )}
+                  style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)`, paddingLeft: `${row.depth * 16 + 6}px` }}
+                >
+                  {isFolder ? (isExpanded ? <ChevronDown size={14} className="shrink-0 text-slate-500" /> : <ChevronRight size={14} className="shrink-0 text-slate-500" />) : <span className="w-[14px] shrink-0" />}
+                  {isFolder ? (isExpanded ? <FolderOpen size={14} className="shrink-0 text-amber-300/80" /> : <Folder size={14} className="shrink-0 text-amber-300/60" />) : <File size={14} className={cn('shrink-0', fileColor(row.node.name))} />}
+                  <span className="min-w-0 flex-1 truncate">{row.node.name}</span>
+                  {!isFolder && isFetching && <Loader2 size={12} className="shrink-0 animate-spin text-cyan-300" aria-label="Fetching" />}
+                  {!isFolder && isCached && !isFetching && <CheckCircle2 size={12} className="shrink-0 text-cyan-400/80" aria-label="Cached" />}
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 

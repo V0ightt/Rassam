@@ -23,6 +23,15 @@ export interface ChatInput {
   structuredOutput?: { type: 'json_object' };
   /** AbortSignal to cancel the request when the client disconnects */
   signal?: AbortSignal;
+  /** Aggregate provider metadata only. The callback must never receive prompt or response text. */
+  onUsage?: (metadata: LLMUsageMetadata) => void;
+}
+
+export interface LLMUsageMetadata {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  finishReason?: string;
 }
 
 export interface LLMProvider {
