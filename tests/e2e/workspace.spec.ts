@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
 test('opens the offline sample, inspects a node, and restores it after reload', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Understand a repository through its architecture' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'The architecture contract your coding agents must obey' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Analyze GitHub repository/i })).toBeVisible();
 
   await page.getByRole('button', { name: /Explore sample/i }).click();
