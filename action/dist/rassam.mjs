@@ -27922,6 +27922,17 @@ function ruleReferencedComponents(blueprint) {
   }
   return referenced;
 }
+function ruleSelects(blueprint, rule, id) {
+  if (!rule) return false;
+  const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "secret-access" ? [rule.allow] : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
+  return selectors.some((selector2) => {
+    const resolved = resolveSelector(selector2, blueprint);
+    return resolved.all || resolved.components.has(id);
+  });
+}
+function coveredBySameRules(base, head, fromId, toId) {
+  return base.rules.every((rule) => !ruleSelects(base, rule, fromId) || ruleSelects(head, head.rules.find((candidate) => candidate.id === rule.id), toId));
+}
 function membershipMoves(base, head, files, approved) {
   const constrained = ruleReferencedComponents(base);
   if (!constrained.size) return [];
@@ -27933,6 +27944,7 @@ function membershipMoves(base, head, files, approved) {
     if (!from || !constrained.has(from)) continue;
     const to = after.get(path) ?? "(unmapped)";
     if (to === from) continue;
+    if (to !== "(unmapped)" && coveredBySameRules(base, head, from, to)) continue;
     const key = `${from}\0${to}`;
     moves.set(key, [...moves.get(key) ?? [], path]);
   }
@@ -27998,17 +28010,11 @@ function claimedPaths(base, head, alreadyReported, approved) {
     const key = `${from}\0${to}`;
     moves.set(key, [...moves.get(key) ?? [], probe]);
   }
-  const selects = (blueprint, rule, id) => {
-    if (!rule) return false;
-    const selectors = rule.kind === "forbid" || rule.kind === "allow-only" ? [rule.from, rule.to] : rule.kind === "layers" ? rule.layers : rule.kind === "secret-access" ? [rule.allow] : rule.kind === "no-cycles" && rule.scope ? [rule.scope] : [];
-    return selectors.some((selector2) => resolveSelector(selector2, blueprint).components.has(id));
-  };
   const findings = [];
   for (const [key, probePaths] of moves) {
     const [targetId, ownerId] = key.split("\0");
     if (alreadyReported.has(key)) continue;
-    const coveredBySameRules = base.rules.every((rule) => !selects(base, rule, targetId) || selects(head, head.rules.find((candidate) => candidate.id === rule.id), ownerId));
-    if (coveredBySameRules) continue;
+    if (coveredBySameRules(base, head, targetId, ownerId)) continue;
     const owner = headById.get(ownerId);
     const target = baseById.get(targetId);
     const globs = (owner?.paths ?? []).filter((glob) => probePaths.some((probe) => compileGlob(glob).test(probe)));
@@ -30728,7 +30734,7 @@ function escapeHtml(value) {
 function cell(value, limit = 160) {
   const line = value.replace(/\s+/g, " ").trim();
   const cut = line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
-  return escapeHtml(cut).replace(/\|/g, "\\|").replace(/([*_`[\]])/g, "\\$1");
+  return escapeHtml(cut).replace(/([\\|*_`[\]])/g, "\\$1");
 }
 function firstLine2(value) {
   return (value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
@@ -33105,7 +33111,7 @@ async function doCommand(args, io) {
   const result = parseIntent(instruction, blueprint);
   if (result.status === "unknown") {
     if (json2) io.stdout(renderJsonText({ status: "unknown", message: result.message, examples: result.examples }));
-    else io.stderr([`rassam: ${result.message}`, "", "Instructions that work:", ...result.examples.slice(0, MAX_EXAMPLES).map((example) => `  rassam do "${example.replace(/"/g, '\\"')}"`), ""].join("\n"));
+    else io.stderr([`rassam: ${result.message}`, "", "Instructions that work:", ...result.examples.slice(0, MAX_EXAMPLES).map((example) => `  rassam do "${example.replace(/([\\"])/g, "\\$1")}"`), ""].join("\n"));
     return EXIT_USAGE;
   }
   let edits;

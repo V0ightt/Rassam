@@ -423,10 +423,10 @@ describe("rassam status", () => {
     expect(written).toBe(io.text());
     for (const secret of ["BODY-MUST-NOT-LEAK", "hunter2", "ghs_test_token", "token=abc"]) expect(io.text() + io.errText()).not.toContain(secret);
 
-    expect(calls.some((call) => call.url.includes("secret.example"))).toBe(false);
+    expect(calls.some((call) => new URL(call.url).hostname === "secret.example")).toBe(false);
     expect(calls.find((call) => call.url === "https://api.example/healthz")!.method).toBe("HEAD");
-    expect(calls.find((call) => call.url.startsWith("https://shop.example"))!.authorization).toBeNull();
-    expect(calls.filter((call) => call.url.startsWith("https://api.github.test")).every((call) => call.authorization === "Bearer ghs_test_token")).toBe(true);
+    expect(calls.find((call) => new URL(call.url).hostname === "shop.example")!.authorization).toBeNull();
+    expect(calls.filter((call) => new URL(call.url).hostname === "api.github.test").every((call) => call.authorization === "Bearer ghs_test_token")).toBe(true);
     expect(calls.filter((call) => call.url === "https://api.github.test/repos/acme/shop")).toHaveLength(1);
   });
 

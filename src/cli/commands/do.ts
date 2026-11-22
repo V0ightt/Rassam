@@ -40,7 +40,7 @@ export async function doCommand(args: ParsedArgs, io: Io): Promise<number> {
 
   if (result.status === "unknown") {
     if (json) io.stdout(renderJsonText({ status: "unknown", message: result.message, examples: result.examples }));
-    else io.stderr([`rassam: ${result.message}`, "", "Instructions that work:", ...result.examples.slice(0, MAX_EXAMPLES).map((example) => `  rassam do "${example.replace(/"/g, '\\"')}"`), ""].join("\n"));
+    else io.stderr([`rassam: ${result.message}`, "", "Instructions that work:", ...result.examples.slice(0, MAX_EXAMPLES).map((example) => `  rassam do "${example.replace(/([\\"])/g, '\\$1')}"`), ""].join("\n"));
     return EXIT_USAGE;
   }
 

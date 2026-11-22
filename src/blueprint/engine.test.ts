@@ -427,3 +427,34 @@ describe("future paths that change owner", () => {
     expect(probePathFor("src/ui/Cart.tsx")).toBe("src/ui/Cart.tsx");
   });
 });
+
+describe("restructures that stay under the same rules", () => {
+  it("does not flag files moving into a component the same rules select by tag", () => {
+    const tagged = (input: BlueprintInput): Blueprint => blueprintSchema.parse(input);
+    const base = tagged({
+      version: "0.1",
+      system: { name: "Shop" },
+      components: [
+        { id: "ui", name: "UI", paths: ["src/ui/**"], tags: ["runtime:browser"] },
+        { id: "infra", name: "Infra", paths: ["src/infra/**"] },
+      ],
+      rules: [{ id: "browser-no-infra", kind: "forbid", from: "tag:runtime:browser", to: "infra" }],
+    });
+    const head = tagged({
+      ...JSON.parse(JSON.stringify(base)),
+      components: [
+        ...base.components,
+        { id: "cart", name: "Cart", paths: ["src/ui/Cart.tsx"], tags: ["runtime:browser"] },
+      ],
+    });
+    const untagged = tagged({
+      ...JSON.parse(JSON.stringify(base)),
+      components: [...base.components, { id: "cart", name: "Cart", paths: ["src/ui/Cart.tsx"] }],
+    });
+    const changes: ChangedFile[] = [{ path: ".rassam/blueprint.json", status: "modified", added: [], removed: [] }];
+    const moved = (blueprint: Blueprint) => byKind(runCheck({ files, blueprint, baseBlueprint: base, changes, baseFiles: [] }).findings, "contract-weakened")
+      .filter((finding) => finding.title.includes("moved out of") || finding.title.includes("claims"));
+    expect(moved(head)).toEqual([]);
+    expect(moved(untagged)).toHaveLength(1);
+  });
+});

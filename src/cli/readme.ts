@@ -30,7 +30,7 @@ function escapeHtml(value: string): string {
 function cell(value: string, limit = 160): string {
   const line = value.replace(/\s+/g, " ").trim();
   const cut = line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
-  return escapeHtml(cut).replace(/\|/g, "\\|").replace(/([*_`[\]])/g, "\\$1");
+  return escapeHtml(cut).replace(/([\\|*_`[\]])/g, "\\$1");
 }
 
 function firstLine(value: string | undefined): string {
