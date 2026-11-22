@@ -1,4 +1,4 @@
-import { analyzeLocalSnapshot, type LocalAnalysisRequest } from '@/lib/blueprint-client/analysis';
+import { analyzeLocalSnapshot, type LocalAnalysisRequest } from '@/lib/blueprint-client/analysis-core';
 
 // Runs import analysis, reach analysis and draft derivation for a local
 // folder off the main thread, so large repositories do not freeze the canvas.

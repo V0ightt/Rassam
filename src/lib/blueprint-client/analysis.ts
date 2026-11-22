@@ -1,37 +1,9 @@
-import { deriveBlueprint } from "@/blueprint/derive";
-import { buildFileGraph } from "@/blueprint/imports";
-import { analyzeReach } from "@/blueprint/reach";
-import { parseBlueprintText, type Blueprint, type BlueprintIssue } from "@/blueprint/schema";
-import { deserializeFileGraph, serializeFileGraph, type SerializedFileGraph } from "@/blueprint/snapshot";
-import type { FileGraph, ReachReport, SourceFile } from "@/blueprint/types";
+import { deserializeFileGraph } from "@/blueprint/snapshot";
+import type { FileGraph } from "@/blueprint/types";
 
-export interface LocalAnalysisRequest {
-  name: string;
-  files: SourceFile[];
-  blueprintText: string | null;
-}
+import { analyzeLocalSnapshot, type LocalAnalysisRequest, type LocalAnalysisResult } from "./analysis-core";
 
-export interface LocalAnalysisResult {
-  graph: SerializedFileGraph;
-  reach: ReachReport;
-  blueprint: Blueprint | null;
-  issues: BlueprintIssue[];
-  draft: Blueprint | null;
-}
-
-/** Pure, synchronous analysis of a local snapshot (runs in a worker or inline). */
-export function analyzeLocalSnapshot(request: LocalAnalysisRequest): LocalAnalysisResult {
-  const graph = buildFileGraph(request.files);
-  const reach = analyzeReach(request.files, graph);
-  const parsed = request.blueprintText !== null ? parseBlueprintText(request.blueprintText) : null;
-  return {
-    graph: serializeFileGraph(graph),
-    reach,
-    blueprint: parsed?.ok ? parsed.blueprint : null,
-    issues: parsed && !parsed.ok ? parsed.issues : [],
-    draft: parsed?.ok ? null : deriveBlueprint(request.files, { name: request.name }),
-  };
-}
+export { analyzeLocalSnapshot, type LocalAnalysisRequest, type LocalAnalysisResult };
 
 interface WorkerResponse {
   id: string;
