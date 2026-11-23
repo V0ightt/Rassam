@@ -10,11 +10,9 @@
 </div>
 
 <p align="center">
-  <a href="./docs/media/rassam-demo.mp4">
-    <img src="./docs/media/rassam-demo.gif" alt="Demo: 'forbid web from importing storage' is typed into the Rassam Studio. The rule is previewed on the canvas, applied with Enter, and Rassam points at the one import that already breaks it." width="900" />
-  </a>
+  <img src="./docs/media/rassam-demo.gif" alt="Demo: 'forbid web from importing storage' is typed into the Rassam Studio. The rule is previewed on the canvas, applied with Enter, and Rassam points at the one import that already breaks it." width="900" />
   <br/>
-  <sub><a href="./docs/media/rassam-demo.mp4">Watch the full demo</a> · under a minute · no sound needed</sub>
+  <sub>That was 14 seconds of it. <a href="./docs/media/rassam-demo.mp4?raw=true">Download the full 56-second demo</a> (MP4, 8 MB, no sound needed).</sub>
 </p>
 
 > Rassam (رسّام) means "painter" in Arabic. It used to paint pictures of your code. Now it paints the blueprint your code gets checked against.
