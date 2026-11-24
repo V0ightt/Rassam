@@ -6,7 +6,7 @@ import { MarkerType, type Edge, type Node } from 'reactflow';
 
 import type { Workspace, WorkspaceGraphView } from '@/blueprint';
 import { calmEdgeKey, calmGraphView } from '@/blueprint/calm';
-import { EDGE_STATUS_STYLE, type BlueprintEdgeData } from './BlueprintEdge';
+import { edgeStyle, type BlueprintEdgeData } from './BlueprintEdge';
 import { BLUEPRINT_NODE_HEIGHT, BLUEPRINT_NODE_WIDTH, type BlueprintNodeData, type NodeEmphasis } from './BlueprintNode';
 import type { BlueprintSession } from './session';
 
@@ -160,8 +160,10 @@ export function useBlueprintCanvas({
   const secrets = useMemo(() => (question === 'reach' && workspace ? secretReads(workspace) : null), [question, workspace]);
 
   const nodes = useMemo<Node<BlueprintNodeData>[]>(() => {
-    const findings = new Map(view.components.map((component) => [component.id, component.findings ?? 0]));
+    // Findings per card never include dependency cycles: those are drawn once, on their edges.
+    const judged = new Map(view.components.map((component) => [component.id, component]));
     return (blueprint?.components ?? []).filter((component) => !hiddenIds?.has(component.id)).map((component) => {
+      const severity = judged.get(component.id)?.severity;
       let emphasis: NodeEmphasis = 'normal';
       let note: string | undefined;
       if (impact) {
@@ -180,7 +182,8 @@ export function useBlueprintCanvas({
         data: {
           component,
           fileCount: fileCounts.get(component.id) ?? 0,
-          findings: findings.get(component.id) ?? 0,
+          findings: judged.get(component.id)?.findings ?? 0,
+          ...(severity ? { findingSeverity: severity } : {}),
           emphasis,
           note,
           secrets: secrets?.get(component.id),
@@ -192,8 +195,9 @@ export function useBlueprintCanvas({
 
   const edges = useMemo<Edge<BlueprintEdgeData>[]>(() => {
     const names = new Map((blueprint?.components ?? []).map((component) => [component.id, component.name]));
-    return view.edges
-      .filter((edge) => names.has(edge.from) && names.has(edge.to) && !hiddenIds?.has(edge.from) && !hiddenIds?.has(edge.to))
+    const shown = view.edges.filter((edge) => names.has(edge.from) && names.has(edge.to) && !hiddenIds?.has(edge.from) && !hiddenIds?.has(edge.to));
+    const shownIds = new Set(shown.map((edge) => edgeId(edge.from, edge.to)));
+    return shown
       .map((edge) => {
         const inImpact = impact
           ? (edge.to === selectedId || impact.has(edge.to)) && (edge.from === selectedId || impact.has(edge.from))
@@ -208,8 +212,8 @@ export function useBlueprintCanvas({
           target: edge.to,
           type: 'blueprint',
           focusable: false,
-          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_STATUS_STYLE[edge.status].stroke, width: 16, height: 16 },
-          zIndex: edge.status === 'forbidden' ? 2 : edge.status === 'undeclared' ? 1 : 0,
+          markerEnd: { type: MarkerType.ArrowClosed, color: edgeStyle(edge).stroke, width: 16, height: 16 },
+          zIndex: edge.status === 'forbidden' ? 2 : edge.status === 'undeclared' || edge.cycle ? 1 : 0,
           data: {
             from: edge.from,
             to: edge.to,
@@ -217,6 +221,8 @@ export function useBlueprintCanvas({
             toName: names.get(edge.to)!,
             status: edge.status,
             count: edge.count,
+            ...(edge.cycle ? { cycle: true } : {}),
+            ...(shownIds.has(edgeId(edge.to, edge.from)) ? { reverseDrawn: true } : {}),
             dim,
             ...(waypoints ? { waypoints } : {}),
           },
@@ -236,7 +242,9 @@ export function useBlueprintCanvas({
     }
     const undeclared = fullView.edges.filter((edge) => edge.status === 'undeclared').length;
     const forbidden = fullView.edges.filter((edge) => edge.status === 'forbidden').length;
-    return `${fullView.edges.length} dependencies · ${undeclared} undeclared · ${forbidden} forbidden. Draw an edge to declare or forbid one.`;
+    const cycles = fullView.cycles?.length ?? 0;
+    const loops = cycles ? ` · ${cycles} dependency ${cycles === 1 ? 'cycle' : 'cycles'}` : '';
+    return `${fullView.edges.length} dependencies · ${undeclared} undeclared · ${forbidden} forbidden${loops}. Draw an edge to declare or forbid one.`;
   }, [fullView, impact, question, secrets, selectedId]);
 
   return { view, hiddenNote: calm?.note ?? '', nodes, edges, caption };

@@ -107,6 +107,7 @@ describe("applyBlueprintEdits: every op produces a valid blueprint", () => {
     { name: "set_policy loosen", edit: { op: "set_policy", undeclaredDependencies: "off" }, weakens: true, summary: /warning → off/ },
     { name: "set_policy ignore", edit: { op: "set_policy", ignoreAdd: ["fixtures/**"] }, weakens: true, summary: /now ignoring fixtures\/\*\*/ },
     { name: "set_policy heuristics off", edit: { op: "set_policy", verificationHeuristics: false, includeTypeOnly: false }, weakens: true, summary: /type-only imports ignored; verification heuristics off/ },
+    { name: "set_policy tests only warn", edit: { op: "set_policy", verificationWeakening: "warn" }, weakens: true, summary: /weakened tests only warn/ },
     { name: "set_runtime", edit: { op: "set_runtime", id: "api", health: { url: "https://api.example.com/health", expectStatus: 200 }, deployment: { environment: "production" }, workflow: { file: ".github/workflows/deploy.yml" } }, weakens: false, summary: /Set runtime of "API": health check GET https:\/\/api\.example\.com\/health expecting 200; deployed to environment production; workflow \.github\/workflows\/deploy\.yml/ },
   ];
 

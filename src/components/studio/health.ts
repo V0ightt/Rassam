@@ -2,7 +2,7 @@
 // runtime status rolled into a glyph, a label and a colour.
 
 import { isStale, summarizeStatus, type Blueprint, type CheckReport, type SystemStatus } from '@/blueprint';
-import { reportVerdict, type Verdict } from '@/components/blueprint/model';
+import { needsRuling, preExistingCount, reportVerdict, type Verdict } from '@/components/blueprint/model';
 import type { StatusTone } from '@/components/ui/StatusGlyph';
 
 export interface Health {
@@ -25,6 +25,11 @@ export function rulingsLabel(count: number): string {
   return count === 1 ? '1 needs a ruling' : `${count} need a ruling`;
 }
 
+/** Violations of a fresh draft's rules: they existed before the contract did. */
+export function inheritedLabel(count: number): string {
+  return count === 1 ? '1 existed before the contract' : `${count} existed before the contract`;
+}
+
 function namesOf(blueprint: Blueprint | null, status: SystemStatus | null, state: 'down' | 'degraded'): string[] {
   return (blueprint?.components ?? [])
     .filter((component) => component.runtime && status?.components[component.id]?.state === state)
@@ -45,7 +50,8 @@ export function describeHealth({
   now?: number | Date;
 }): Health {
   const verdict = reportVerdict(report);
-  const rulings = report ? report.summary.errors + report.summary.warnings : 0;
+  const rulings = report ? report.findings.filter(needsRuling).length : 0;
+  const inherited = preExistingCount(report);
   const runtime = summarizeStatus(status, blueprint);
   const stale = Boolean(status) && runtime.monitored > 0 && isStale(status!, now);
   const ratio = humanRatio ?? report?.summary.humanAuthoredRatio;
@@ -65,7 +71,9 @@ export function describeHealth({
   if (degraded.length > 0) {
     return { ...base, tone: 'warn', label: degraded.length === 1 ? `Degraded: ${degraded[0]}` : `Degraded: ${degraded.length} components`, detail: contract };
   }
-  if (verdict === 'warn') return { ...base, tone: 'warn', label: rulingsLabel(rulings), detail: null };
-  if (verdict === 'pass') return { ...base, tone: 'ok', label: 'On track', detail: stale ? 'Runtime status is stale' : null };
+  if (verdict === 'warn') return { ...base, tone: 'warn', label: rulingsLabel(rulings), detail: inherited ? inheritedLabel(inherited) : null };
+  if (verdict === 'pass') {
+    return { ...base, tone: 'ok', label: 'On track', detail: inherited ? inheritedLabel(inherited) : stale ? 'Runtime status is stale' : null };
+  }
   return { ...base, tone: 'unknown', label: 'Not checked yet', detail: null };
 }

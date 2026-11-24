@@ -959,7 +959,8 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
     if (state.graph) {
       try {
         const workspace = createWorkspace([], preview, { fileGraph: state.graph, ...(state.reach ? { reach: state.reach } : {}) });
-        previewReport = workspace.check();
+        // A draft derived from this code: what it already finds existed before the contract did.
+        previewReport = workspace.check(state.origin === "derived" ? { preExisting: true } : {});
         const before = graphViewOf(state);
         graphDiff = before ? diffArchitecture(before, workspace.graphView()) : null;
       } catch {
@@ -1283,7 +1284,7 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
 
   // ── Derived state ───────────────────────────────────────────
 
-  const { blueprint, graph, reach, savedCanonical } = core;
+  const { blueprint, graph, reach, savedCanonical, origin: currentOrigin } = core;
 
   const workspace = useMemo<Workspace | null>(() => {
     if (!graph) return null;
@@ -1297,11 +1298,12 @@ export function useBlueprint(): BlueprintSessionState & BlueprintActions {
   const report = useMemo<CheckReport | null>(() => {
     if (!workspace || !blueprint) return null;
     try {
-      return workspace.check();
+      // A draft derived from this code: what it already finds existed before the contract did.
+      return workspace.check(currentOrigin === "derived" ? { preExisting: true } : {});
     } catch {
       return null;
     }
-  }, [workspace, blueprint]);
+  }, [workspace, blueprint, currentOrigin]);
 
   const draftText = useMemo(() => (blueprint ? serializeBlueprint(blueprint) : null), [blueprint]);
   const dirty = draftText !== null && draftText !== savedCanonical;

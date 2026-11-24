@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 
 import { DIAGRAM_PALETTES, renderStatusBadge, renderSystemDiagram, type BadgeTone, type DiagramTheme } from "@/blueprint/diagram";
 import { verdict } from "@/blueprint/report";
+import { PACKAGE_NAME } from "@/blueprint/constants";
 import type { Blueprint } from "@/blueprint/schema";
 import { isStale, summarizeStatus, type SystemStatus } from "@/blueprint/status";
 import { createWorkspace, type WorkspaceGraphView } from "@/blueprint/workspace";
@@ -234,12 +235,12 @@ function renderSystem(head: HeadEntry, analysis: AnalysisEntry, status: SystemSt
       ? renderMessageCard({
         title: "The blueprint has errors",
         lines: [`${head.owner}/${head.repo}: .rassam/blueprint.json could not be read as a blueprint.`, "Run the check locally to see what to fix:"],
-        code: "npx rassam check",
+        code: `npx ${PACKAGE_NAME} check`,
       }, theme)
       : renderMessageCard({
         title: "No blueprint yet — run rassam init",
         lines: [`${head.owner}/${head.repo} has no .rassam/blueprint.json.`, "Create one to see the system design here:"],
-        code: "npx rassam init",
+        code: `npx ${PACKAGE_NAME} init`,
       }, theme);
   }
   return renderSystemDiagram({

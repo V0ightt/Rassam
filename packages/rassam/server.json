@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.V0ightt/rassam",
+  "title": "Rassam Blueprint",
+  "description": "Architecture contract for coding agents: who owns a file, which imports are allowed, check changes.",
+  "version": "0.4.0",
+  "repository": {
+    "url": "https://github.com/V0ightt/Rassam",
+    "source": "github",
+    "subfolder": "packages/rassam"
+  },
+  "websiteUrl": "https://github.com/V0ightt/Rassam#readme",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@v0ightt/rassam",
+      "version": "0.4.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Start the MCP server on stdio. It serves the repository in the working directory."
+        }
+      ]
+    }
+  ]
+}

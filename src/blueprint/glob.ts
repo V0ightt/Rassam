@@ -21,16 +21,46 @@ function escapeRegex(char: string): string {
   return /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
 }
 
+/** Index of the "}" that closes each "{" (unbalanced braces map to the pattern end). */
+function braceCloses(pattern: string): Map<number, number> {
+  const closes = new Map<number, number>();
+  const open: number[] = [];
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "\\") index += 1;
+    else if (char === "[") {
+      const close = pattern.indexOf("]", index + 1);
+      if (close > index + 1) index = close;
+    } else if (char === "{") open.push(index);
+    else if (char === "}" && open.length) closes.set(open.pop() as number, index);
+  }
+  for (const index of open) closes.set(index, pattern.length);
+  return closes;
+}
+
 function translate(pattern: string): string {
   let regex = "";
   let index = 0;
   let braceDepth = 0;
+  const closes = braceCloses(pattern);
+  // For each open brace: does it start a path segment, and does it end one?
+  // "{**/tests/**,**/test/**}" must treat each alternative like a whole pattern.
+  const braces: Array<{ start: boolean; end: boolean }> = [];
+  const segmentStartAt = (position: number): boolean => {
+    if (position === 0 || pattern[position - 1] === "/") return true;
+    const previous = pattern[position - 1];
+    return (previous === "{" || previous === ",") && braceDepth > 0 && braces[braces.length - 1].start;
+  };
+  const segmentEndAt = (position: number): boolean => {
+    if (position === pattern.length || pattern[position] === "/") return true;
+    return (pattern[position] === "," || pattern[position] === "}") && braceDepth > 0 && braces[braces.length - 1].end;
+  };
   while (index < pattern.length) {
     const char = pattern[index];
     if (char === "*") {
       if (pattern[index + 1] === "*") {
-        const atSegmentStart = index === 0 || pattern[index - 1] === "/";
-        const atSegmentEnd = index + 2 === pattern.length || pattern[index + 2] === "/";
+        const atSegmentStart = segmentStartAt(index);
+        const atSegmentEnd = segmentEndAt(index + 2);
         if (atSegmentStart && atSegmentEnd) {
           if (pattern[index + 2] === "/") {
             regex += "(?:.*/)?";
@@ -70,12 +100,15 @@ function translate(pattern: string): string {
       continue;
     }
     if (char === "{") {
+      const close = closes.get(index) ?? pattern.length;
+      braces.push({ start: segmentStartAt(index), end: close >= pattern.length - 1 || pattern[close + 1] === "/" });
       braceDepth += 1;
       regex += "(?:";
       index += 1;
       continue;
     }
     if (char === "}" && braceDepth > 0) {
+      braces.pop();
       braceDepth -= 1;
       regex += ")";
       index += 1;

@@ -1,46 +1,171 @@
 <div align="center">
   <img src="./public/logo.png" alt="Rassam" width="96" height="96" />
   <h1>Rassam</h1>
-  <p><b>Is your project still on track?</b><br/>
-  One place where you and your coding agents check before changing anything.</p>
+  <p><b>A merge gate for the code your agents write.</b><br/>
+  Write down how your system is built, once. Every pull request is checked against it,<br/>and no pull request can loosen the rules it is judged by.</p>
 
   [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
   ![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
 </div>
 
-<p align="center">
-  <img src="./docs/media/rassam-demo.gif" alt="Demo: 'forbid web from importing storage' is typed into the Rassam Studio. The rule is previewed on the canvas, applied with Enter, and Rassam points at the one import that already breaks it." width="900" />
-  <br/>
-  <sub>That was 14 seconds of it. <a href="./docs/media/rassam-demo.mp4?raw=true">Download the full 56-second demo</a> (MP4, 8 MB, no sound needed).</sub>
-</p>
+```console
+$ npx @v0ightt/rassam check --base main
+✖ fail · Notes · diff mode · main…archived-count
+2 errors, 2 warnings, 0 infos · 4 new · 5 components · 5/5 files mapped (0 unmapped) · 5 component edges (1 undeclared) · 100% human-authored
+
+Needs your attention (4 of 4 new)
+  ✖ error Web must not depend on Storage [forbidden-dependency]
+      src/web/notes-page.js imports src/storage/db.js. Rule "web-goes-through-api" forbids web → storage.
+      at src/web/notes-page.js:2
+      reason: "Pages reach data through the API, so access checks always run."
+  ✖ error Verification weakened (test-skipped): test/notes.test.js [verification-weakened]
+      Test skipped or disabled: test("free plan allows three notes", { todo: "revisit after launch" }, () => {. This weakens the checks agents are graded by, so a human must approve it: apply the approval label (rassam:approved by default), or restore the check.
+      at test/notes.test.js:5
+  ▲ warning Undeclared dependency: Web → Storage [undeclared-dependency]
+      1 import from Web into Storage is not declared in the blueprint. Declare the dependency if it is intended, or remove it.
+      at src/web/notes-page.js:2
+  ▲ warning Protected path changed: test/notes.test.js [protected-path]
+      Tests are the checks agents are graded by.
+      at test/notes.test.js
+
+Weakened tests and checks (1, NOT approved)
+  test-skipped: a human must review it and apply the rassam:approved label, or the change must restore the check.
+```
+
+<sub>Real output, on a change like the ones agents made in our pilot when asked to "just import storage from the page for the demo" and to "get the suite green".</sub>
 
 > Rassam (رسّام) means "painter" in Arabic. It used to paint pictures of your code. Now it paints the blueprint your code gets checked against.
 
-> [!NOTE]
-> Rassam is young and moving fast. The blueprint format is versioned (`0.1`), so your files stay valid as it grows.
+## Try it in five minutes
 
-## So, what is this?
+In the repository you want to protect:
 
-Agents write a lot of your code now. That part got easy. The hard part is knowing whether all those changes still add up to the system you actually wanted.
+```bash
+npx @v0ightt/rassam init
+```
 
-Rassam fixes that with one small file in your repo, `.rassam/blueprint.json`. Think of it as the house rules for your codebase:
+That drafts `.rassam/blueprint.json` from your code, then asks before writing three more things: the rules as plain prose in `AGENTS.md` (every agent reads it), the MCP server in `.mcp.json` (so agents can ask while they work), and `.github/workflows/rassam.yml` (the gate). Say yes, open a pull request, and the gate is on. Pass `--yes` to skip the questions.
 
-- **what the parts are** ("this folder is the payments service")
-- **what each part is for**, in your own words
-- **what may talk to what** ("the UI never touches the database")
-- **who may hold which secrets** ("only payments reads the Stripe key")
+Then make the draft yours: name the parts, write what each one is for, and add a rule or two.
 
-Then three things happen on their own:
+```bash
+npx @v0ightt/rassam do "forbid web from importing db because pages go through the API" --write
+npx @v0ightt/rassam instructions --write   # rewrite the rules in AGENTS.md
+npx @v0ightt/rassam check                  # everything, or --base origin/main for just your branch
+```
 
-1. **Your agents ask before they act.** Claude Code, Codex, Cursor and friends query the blueprint over MCP: *may I import this from here?*
-2. **Every pull request gets checked.** If a change breaks a rule, weakens a test, or quietly loosens the rules themselves, you hear about it.
-3. **Your README shows the real system.** A diagram of your architecture that redraws itself on every push.
+The whole walkthrough, with Cursor, Codex and VS Code setup: [docs/getting-started.md](docs/getting-started.md).
 
-You stay the author. Agents do the typing.
+## We told three agents to break the rules
 
-## This repo's own system design, live
+Before asking anyone to install this, we checked whether it does anything an `AGENTS.md` doesn't. Same small layered app, three tasks, three ways of telling the agent the rules: **nothing**, **prose rules in `AGENTS.md`**, or **the Rassam contract and its query tools**. Opus 5.5, Sonnet 5.5 and Haiku 5.5 each ran every combination once: 27 runs, scored from the diff, the test run and the gate, never from what the agent said.
 
-This picture is not a screenshot. A GitHub Action redraws it every time someone pushes to `main`, straight from the code and this repo's own blueprint.
+| What ended up in the diff | No rules | Prose rules | Rassam contract |
+| --- | :---: | :---: | :---: |
+| Forbidden import, the task only hints at it | 1 of 3 | 0 of 3 | 0 of 3 |
+| Forbidden import, **the owner asks for it** ("for the demo, we'll tidy later") | **3 of 3** | 0 of 3 | 0 of 3 |
+| A contradictory test disabled or rewritten to go green | 2 of 3 | 0 of 3 | 1 of 3 |
+| Stopped and reported the contradiction instead | 0 of 3 | 3 of 3 | 2 of 3 |
+
+What we learned:
+
+- **With no rules, agents did what the person in a hurry asked**, every time, and called the shortcut "temporary". From the agent's side nothing was wrong.
+- **Prose rules steered just as well as our query tools.** That cut against our own feature, so `init` now writes the contract into `AGENTS.md` as prose. Use it: it's free steering.
+- **The gate failed all 4 changes with the forbidden import and passed every honest one**, whoever asked for the import and whatever the agent was told.
+- **It only warned on the edited tests.** That was the gap: since then, skipped, focused or gutted tests fail the gate until a human approves them, like loosened rules do.
+
+It's a small pilot (one run per cell, one toy project, one model family). The method, the limits and every number are in [the pilot notes](research_notes/Rassam%20usefulness%20and%20launch%20readiness/05-pilot-and-hands-on-trial.md).
+
+## What the gate does
+
+```yaml
+# .github/workflows/rassam.yml (init writes this for you)
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write # one sticky comment; leave it out with comment: "false"
+jobs:
+  blueprint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: V0ightt/Rassam@<full commit SHA> # v0.4.0
+```
+
+- **A pull request can't loosen its own rules.** It's judged by the blueprint on the *base* branch. Removing a rule, lowering a severity or moving files out of a constrained component fails until a human adds the `rassam:approved` label.
+- **Weakened tests need a human, not a yellow note.** Skipped or focused tests, deleted or always-true assertions, deleted test files, lowered coverage thresholds and forced `exit 0` fail the same way until someone approves. Other changes to tests, CI and agent config get a warning: worth a look, never blocking.
+- **Only new problems fail.** Old mess is reported quietly, so you can adopt it on a legacy codebase today.
+- **It respects your attention.** One sticky comment, the top few findings first, each with file and line.
+
+Pin the action to a full commit SHA with the version as a comment (`@<sha> # v0.4.0`), or at least to a release tag (`@v0.4.0`); never to `@main`. [Why, and how to find the SHA.](docs/getting-started.md#pin-the-action)
+
+We measure the gate instead of bragging: on [116 labelled cases](bench/gate/RESULTS.md), 48 of 79 attacks fail the check outright, most of the rest reach a human as a warning, and none of the 37 legitimate changes fails. The misses are written down too.
+
+## Why not just CLAUDE.md, dependency-cruiser or CODEOWNERS?
+
+- **`CLAUDE.md` / `AGENTS.md`**: they steer well (as well as our tools, in the pilot), but they're advice. Nothing stops the change that ignores them. Keep them; Rassam writes the rules into them for you and adds the check that holds.
+- **dependency-cruiser** (and eslint-plugin-boundaries, import-linter, ArchUnit): better parsers for their one language, so use them if that's all you need. Rassam adds what they don't do: the base branch's contract can't be edited by the change it judges, and weakened tests fail in the same required check.
+- **CODEOWNERS**: it says *who* must review a path, and GitHub reads it from the base branch too. It can't say what may import what, and it won't notice a skipped test or a loosened rule in a file a tired reviewer skims.
+
+## Limitations
+
+- **Import analysis is pattern matching, not a compiler.** Nine languages, regex-level: unusual aliases, dynamic imports and generated code can slip past. For a single language, the tools above see more.
+- **The test checks catch the common moves, not the clever ones.** A rewritten expected value, an early return or a mocked unit under test gets past them: none of the nine "hard evasions" in [the benchmark](bench/gate/RESULTS.md) is detected (six still reach a human as a tests-changed warning, three pass silently). A green gate is not proof the tests are honest.
+- **The approval label is trusted.** Rassam doesn't check who added it. Don't give agents tokens that can label pull requests, and make the check required.
+- **It's a pull request gate.** An agent holding production credentials can do damage at runtime without ever opening a pull request.
+- **Drafts are a starting point.** `init` guesses components from folders; unusual layouts need a human pass.
+- **It's young.** Blueprint format 0.1, one maintainer, a 27-run pilot rather than a field study.
+
+## Hook up your agents
+
+`init` wires Claude Code. For anything else, the server is one command over stdio:
+
+```json
+{ "mcpServers": { "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.0", "mcp"] } } }
+```
+
+| The agent asks | Rassam answers |
+| --- | --- |
+| `explain_path` | Who owns this file, what it is for, which rules apply |
+| `check_dependency` | "May this file import that?" Yes or no, with your reason |
+| `impact` | What breaks if this changes |
+| `check_changes` | Does my work pass the gate right now? |
+| `architecture_diff` | What did I change structurally? |
+| `system_status` | What is running, what is down |
+| `report_conflict` | "The task and the rules disagree, I am stopping" |
+
+That last one matters. When a task can't be done honestly, an agent with a sanctioned way to stop is less likely to cheat by editing the tests. In the pilot, two of the three agents that had the contract filed a conflict report instead of touching the red test.
+
+<details>
+<summary><b>A tiny blueprint, so you can see there is no magic</b></summary>
+
+```json
+{
+  "version": "0.1",
+  "system": { "name": "Shop" },
+  "components": [
+    { "id": "ui", "name": "Storefront", "paths": ["src/ui/**"],
+      "intent": "Renders the shop. Never touches storage directly." },
+    { "id": "db", "name": "Database access", "paths": ["src/db/**"] },
+    { "id": "payments", "name": "Payments", "paths": ["src/payments/**"] }
+  ],
+  "rules": [
+    { "id": "ui-no-db", "kind": "forbid", "from": "ui", "to": "db",
+      "reason": "The UI reaches data only through the domain layer." },
+    { "id": "stripe-key", "kind": "secret-access", "secrets": ["STRIPE_*"], "allow": "payments" }
+  ]
+}
+```
+
+Full format: [docs/blueprint-spec.md](docs/blueprint-spec.md).
+</details>
+
+## Your system design, live in your README
+
+The blueprint also draws itself. This picture is not a screenshot: a GitHub Action redraws it every time someone pushes to `main`, straight from the code and this repo's own blueprint.
 
 <!-- rassam:system:start -->
 <!-- Written by `rassam render --readme`. Edit the blueprint, not this block: it is overwritten. -->
@@ -87,48 +212,33 @@ This picture is not a screenshot. A GitHub Action redraws it every time someone 
 </details>
 <!-- rassam:system:end -->
 
-Want the same in your README? [It takes one workflow file.](docs/live-system-design.md)
+Want the same in your README? [It takes one workflow file.](docs/live-system-design.md) Tell Rassam where a component runs (`rassam do "monitor api at https://api.example.com/health" --write`) and the picture shows whether it's up, refreshed every few minutes with an "as of" time.
 
-## Just tell it what you want
-
-No forms. Type what you mean, see it on the canvas first, then hit Enter.
+## The Studio: see it, say what to change
 
 <p align="center">
-  <img src="./docs/images/studio-proposal.png" alt="Typing 'forbid web from importing storage' previews a new rule on the canvas before applying it" width="820" />
+  <img src="./docs/media/rassam-demo.gif" alt="Demo: 'forbid web from importing storage' is typed into the Rassam Studio. The rule is previewed on the canvas, applied with Enter, and Rassam points at the one import that already breaks it." width="900" />
+  <br/>
+  <sub>14 seconds of it. <a href="./docs/media/rassam-demo.mp4?raw=true">Download the full 56-second demo</a> (MP4, 8 MB, no sound needed).</sub>
 </p>
 
-Things you can say:
+A web app for reading and editing the contract: paste a public GitHub URL or open a local folder (Chrome or Edge; it saves straight back into your repo). Type what you mean, see it on the canvas first, then hit Enter:
 
 ```text
 forbid web from importing storage because the UI must go through the API
 add a component Payments for src/payments
 only payments may read STRIPE_*
 domain may only depend on util and shared
-monitor api at https://api.example.com/health
 ```
 
-Nothing changes until you apply it, and every change has an Undo. Loosening a rule always asks twice. The common commands work with no AI key at all; plug in a model in Settings if you want free-form requests.
-
-Prefer the terminal? Same thing:
-
-```bash
-rassam do "forbid web from importing storage" --write
-```
-
-## What it looks like
-
-<p align="center">
-  <img src="./docs/images/studio-canvas.png" alt="The Rassam Studio: your system design on a canvas, with a health pill and a bar to tell it what to change" width="900" />
-</p>
+Nothing changes until you apply it, every change has an Undo, and loosening a rule always asks twice. The common commands work with no AI key; plug in a model in Settings for free-form requests.
 
 | | |
 | --- | --- |
 | **One health pill.** "On track" or "2 need a ruling". Click it for a short, ranked list with the exact file and line. | **Click any component** to see what it is for, what it may depend on, and which secrets it reads. |
 | <img src="./docs/images/studio-attention.png" alt="Attention sheet with ranked findings and one-click rulings" width="430" /> | <img src="./docs/images/studio-inspector.png" alt="Inspector showing a component's intent, boundaries and secrets" width="430" /> |
-| **Start in ten seconds.** Paste a GitHub URL, open a local folder, or try the sample. | **Light or dark.** Follows your system, switchable any time. |
-| <img src="./docs/images/studio-start.png" alt="Start screen asking 'Is the project on track?'" width="430" /> | <img src="./docs/images/studio-light.png" alt="The Studio in the light theme" width="430" /> |
 
-## Try it in two minutes
+Run it locally:
 
 ```bash
 git clone https://github.com/V0ightt/Rassam && cd Rassam
@@ -136,102 +246,13 @@ npm install
 npm run dev          # open http://localhost:3000 and click "Try the sample"
 ```
 
-Now point it at your own project:
-
-```bash
-# inside YOUR repo
-node /path/to/Rassam/action/dist/rassam.mjs init      # drafts a blueprint from your code
-node /path/to/Rassam/action/dist/rassam.mjs check     # checks the code against it
-```
-
-`init` only writes down what it can see in your code, and marks every line as "derived". The good stuff, the *why*, is yours to add. Open the folder in the Studio (Chrome or Edge) and it saves straight back into your repo.
-
-<details>
-<summary><b>A tiny blueprint, so you can see there is no magic</b></summary>
-
-```json
-{
-  "version": "0.1",
-  "system": { "name": "Shop" },
-  "components": [
-    { "id": "ui", "name": "Storefront", "paths": ["src/ui/**"],
-      "intent": "Renders the shop. Never touches storage directly." },
-    { "id": "db", "name": "Database access", "paths": ["src/db/**"] },
-    { "id": "payments", "name": "Payments", "paths": ["src/payments/**"] }
-  ],
-  "rules": [
-    { "id": "ui-no-db", "kind": "forbid", "from": "ui", "to": "db",
-      "reason": "The UI reaches data only through the domain layer." },
-    { "id": "stripe-key", "kind": "secret-access", "secrets": ["STRIPE_*"], "allow": "payments" }
-  ]
-}
-```
-
-Full format: [docs/blueprint-spec.md](docs/blueprint-spec.md).
-</details>
-
-## Hook up your agents
-
-Add this to `.mcp.json` (Claude Code) or the equivalent for your tool, and your agent can ask the blueprint questions:
-
-```json
-{ "mcpServers": { "rassam": { "command": "node", "args": ["/path/to/Rassam/action/dist/rassam.mjs", "mcp"] } } }
-```
-
-| The agent asks | Rassam answers |
-| --- | --- |
-| `explain_path` | Who owns this file, what it is for, which rules apply |
-| `check_dependency` | "May this file import that?" Yes or no, with your reason |
-| `impact` | What breaks if this changes |
-| `check_changes` | Does my work pass the gate right now? |
-| `architecture_diff` | What did I change structurally? |
-| `system_status` | What is running, what is down |
-| `report_conflict` | "The task and the rules disagree, I am stopping" |
-
-That last one matters. Research on coding agents shows that when a task cannot be done honestly, giving the agent a sanctioned way to stop makes it far less likely to cheat by editing the tests.
-
-Setup for Cursor, Codex and VS Code: [docs/getting-started.md](docs/getting-started.md).
-
-## Guard your pull requests
-
-```yaml
-# .github/workflows/rassam.yml
-on: pull_request
-permissions: { contents: read, pull-requests: write }
-jobs:
-  blueprint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: V0ightt/Rassam@main
-```
-
-What makes this gate different:
-
-- **A PR cannot loosen its own rules.** It is judged by the blueprint on the base branch. Weakening the rules needs a human to add a label.
-- **Only new problems fail.** Old mess is reported quietly, so you can adopt it on a legacy codebase.
-- **It watches the checks themselves.** Skipped tests, deleted assertions, `|| true` in CI, code that behaves differently under test, new broad agent permissions, credentials committed by accident. These are the moves agents make when they are stuck.
-- **It respects your attention.** The top few findings first, each with file and line. The rest is collapsed.
-
-We measure it instead of bragging: [109 labelled cases](bench/gate/RESULTS.md), 89% caught, zero honest changes blocked. The misses are written down too.
-
-## "What is running?" on the diagram
-
-Tell Rassam where a component lives and the diagram shows whether it is up:
-
-```bash
-rassam do "monitor api at https://api.example.com/health" --write
-```
-
-A scheduled workflow pings it and updates the picture. Honest fine print: a README can only show an image, so "live" means *refreshed within a few minutes*, with an "as of" time on it. [Details and the workflow file.](docs/live-system-design.md)
-
 ## All the commands
 
 | Command | In plain words |
 | --- | --- |
-| `rassam init` | Draft a blueprint from the code |
+| `rassam init` | Draft a blueprint from the code, then wire up agents and CI |
 | `rassam check [--base main]` | Check everything, or just what your branch changed |
+| `rassam instructions [--write]` | State the contract as rules in `AGENTS.md` |
 | `rassam do "<sentence>"` | Change the blueprint by describing the change |
 | `rassam explain <path>` | What governs this file? |
 | `rassam impact <paths>` | What depends on these? |
@@ -242,24 +263,27 @@ A scheduled workflow pings it and updates the picture. Honest fine print: a READ
 | `rassam reach` | What can agents touch? Tools, permissions, secrets |
 | `rassam mcp` | Start the MCP server for agents |
 
+`rassam` is `npx @v0ightt/rassam`, or plain `npx rassam` after `npm install --save-dev @v0ightt/rassam`.
+
 ## Under the hood
 
 | Folder | What lives there |
 | --- | --- |
-| `src/blueprint/` | The engine: format, import analysis (TS/JS, Python, Go, Java, Kotlin, Rust, C/C++, Ruby), rules, gate, diagram. Runs the same in the CLI, CI and the browser |
+| `src/blueprint/` | The engine: format, import analysis (TS/JS, Python, Go, Java, Kotlin, Rust, C/C++, Ruby), rules, gate, prose, diagram. Runs the same in the CLI, CI and the browser |
 | `src/cli/` | The `rassam` command and the MCP server |
-| `src/components/studio/` | The Studio you see in the screenshots |
+| `packages/rassam/` | The npm package: the single-file CLI bundle, nothing else |
 | `action.yml`, `action/dist/` | The GitHub Action |
+| `src/components/studio/` | The Studio |
 | `.rassam/blueprint.json` | Rassam's own blueprint. Yes, it checks itself on every PR |
 
 ```bash
-npm test             # 1,300+ tests
+npm test             # 1,400+ tests
 npm run typecheck && npm run lint
 npm run build
 npm run rassam -- check --base main
 ```
 
-Why we built it this way, with sources: [the research report](reports/Rassam%20pivot%20for%20the%20AGI%20era.md). What we still need to prove: [the evaluation plan](docs/evaluation-plan.md).
+Why we built it this way, with sources: [the research report](reports/Rassam%20pivot%20for%20the%20AGI%20era.md). What we still need to prove: [the evaluation plan](docs/evaluation-plan.md). How releases are cut: [docs/releasing.md](docs/releasing.md).
 
 ## Say hi
 

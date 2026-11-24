@@ -7,7 +7,8 @@ import type { WorkspaceGraphView } from "./workspace";
 //   - edges into components marked `public` (shared by all),
 //   - declared dependencies already implied by another declared path.
 // Anything that needs attention is never hidden: undeclared, forbidden and
-// missing edges, components with findings, and whatever the caller pins.
+// missing edges, edges on a dependency cycle, components with findings, and
+// whatever the caller pins.
 
 export interface CalmOptions {
   /** Edges that must stay visible ("from\u0000to"), e.g. what a commit or proposal touched. */
@@ -42,7 +43,7 @@ export function calmGraphView(view: WorkspaceGraphView, blueprint: Blueprint | n
     edges.set(calmEdgeKey(edge), edge);
   }
   const keep = (edge: WorkspaceGraphView["edges"][number]): boolean => (
-    edge.status !== "declared" || Boolean(options.keepEdges?.has(calmEdgeKey(edge)))
+    edge.status !== "declared" || Boolean(edge.cycle) || Boolean(options.keepEdges?.has(calmEdgeKey(edge)))
   );
 
   const pinned = new Set<string>(options.keepComponents ?? []);
@@ -111,6 +112,7 @@ export function calmGraphView(view: WorkspaceGraphView, blueprint: Blueprint | n
     view: {
       components: view.components.filter((component) => !hiddenComponents.has(component.id)),
       edges: [...edges.values()],
+      ...(view.cycles ? { cycles: view.cycles } : {}),
     },
     hiddenComponents,
     sharedComponents,

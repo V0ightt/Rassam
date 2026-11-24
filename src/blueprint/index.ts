@@ -20,16 +20,18 @@ export {
   type ComponentSummary,
   type BlueprintOverview,
   type WorkspaceGraphView,
+  type GraphCycle,
   type RuleSummary,
   type WorkspaceOptions,
 } from "./workspace";
 export { serializeFileGraph, deserializeFileGraph, filterFileGraph, type SerializedFileGraph } from "./snapshot";
 export { deriveBlueprint, detectSystemName, type DeriveOptions } from "./derive";
+export { renderAgentProse, renderAgentBlock, AGENTS_BLOCK_START, AGENTS_BLOCK_END, type AgentProseOptions } from "./prose";
 export { stampVerification, verifiedIds } from "./verify";
 export { syncBlueprint, type SyncOptions, type SyncResult } from "./sync";
 export { buildFileGraph, languageOf, isTestPath, isIgnoredPath, normalizePackageName } from "./imports";
 export { analyzeReach, isAgentConfigPath } from "./reach";
-export { parseUnifiedDiff, fileAdded, matchTripwires, detectVerificationWeakening } from "./diff";
+export { parseUnifiedDiff, fileAdded, matchTripwires, detectVerificationWeakening, WEAKENING_SIGNALS, type WeakeningSignal, type WeakeningSignalName } from "./diff";
 export { diffBlueprints } from "./blueprint-diff";
 export { detectAgentActivity } from "./agents";
 export {
@@ -43,6 +45,7 @@ export {
   verdict,
   exitCodeFor,
   COMMENT_MARKER,
+  DEFAULT_APPROVE_LABEL,
   type FailOn,
   type Verdict,
   type GraphView,

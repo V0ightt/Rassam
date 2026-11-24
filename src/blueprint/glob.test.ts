@@ -74,3 +74,22 @@ describe("paths", () => {
     expect(ancestors("a/b/c.ts")).toEqual(["a/b", "a", ""]);
   });
 });
+
+describe("globstars inside braces", () => {
+  it("treat each alternative like a whole pattern, at any depth", () => {
+    const helpers = compileGlob("{**/tests/**,**/test/**,**/__mocks__/**}");
+    for (const path of ["tests/setup.ts", "tests/helpers/db.ts", "pkg/tests/a/b.ts", "test/x.js", "src/__mocks__/fs.ts"]) {
+      expect(helpers.test(path), path).toBe(true);
+    }
+    for (const path of ["src/testsuite.ts", "contests/a.ts", "src/test.ts"]) expect(helpers.test(path), path).toBe(false);
+  });
+
+  it("keeps ** inside a segment literal-bounded", () => {
+    const infra = compileGlob("{Dockerfile,**/Dockerfile,**/*.tf}");
+    for (const path of ["Dockerfile", "svc/api/Dockerfile", "main.tf", "infra/prod/main.tf"]) expect(infra.test(path), path).toBe(true);
+    expect(infra.test("src/Dockerfile.md")).toBe(false);
+    expect(compileGlob("src/{a,**/b}/x.ts").test("src/deep/er/b/x.ts")).toBe(true);
+    expect(compileGlob("x{**}y").test("xay")).toBe(true);
+    expect(compileGlob("x{**}y").test("xa/y")).toBe(false);
+  });
+});

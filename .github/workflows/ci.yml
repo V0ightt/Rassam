@@ -37,6 +37,10 @@ jobs:
             echo "::error::action/dist is not committed. Run npm run build:cli and commit the result."
             exit 1
           fi
+      # The npm package is that bundle plus a manifest; catch packaging problems on the PR, not at release time.
+      - name: Stage the npm package
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/pack-cli.mjs
 
   browser-smoke:
     runs-on: ubuntu-latest

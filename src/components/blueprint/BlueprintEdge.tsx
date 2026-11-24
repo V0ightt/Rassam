@@ -2,7 +2,7 @@
 
 import { createContext, memo, useContext } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from 'reactflow';
-import { Minus, Plus, Sparkles, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Minus, Plus, RefreshCw, Sparkles, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 
 import type { WorkspaceGraphView } from '@/blueprint';
 import { cx } from '@/components/ui/cx';
@@ -18,12 +18,16 @@ export interface BlueprintEdgeData {
   toName: string;
   status: EdgeStatus;
   count?: number;
+  /** On the path of a dependency cycle. */
+  cycle?: boolean;
   dim?: boolean;
   diff?: EdgeDiff;
   /** Status before the staged change, for "changed" edges. */
   previousStatus?: EdgeStatus;
   /** Bends from the automatic layout, so a long dependency goes around the components in between. */
   waypoints?: Array<{ x: number; y: number }>;
+  /** The opposite dependency is drawn too (a two-member cycle): one of the two labels moves aside so both stay readable. */
+  reverseDrawn?: boolean;
 }
 
 /** A smooth top-to-bottom path through the given points, and where its label goes. */
@@ -59,23 +63,49 @@ export const EDGE_STATUS_STYLE: Record<EdgeStatus, {
   missing: { stroke: 'var(--status-unknown)', dash: '1.5 5', width: 1.5, opacity: 0.9, label: 'not observed', description: 'Declared, but no code uses it', chip: 'border border-dashed border-line-strong bg-raised text-fg-3' },
 };
 
+/**
+ * A declared dependency on a dependency cycle: warning stroke, a dash-dot
+ * line and a "cycle" chip. Undeclared or forbidden edges on a cycle keep their
+ * own stroke and add "cycle" to their label. The cycle is shown once, on its
+ * edges, never as a finding on every member.
+ */
+export const CYCLE_EDGE_STYLE: (typeof EDGE_STATUS_STYLE)[EdgeStatus] = {
+  stroke: 'var(--status-warn)',
+  dash: '9 3 2 3',
+  width: 1.75,
+  opacity: 1,
+  label: 'cycle',
+  description: 'Part of a dependency cycle',
+  chip: 'bg-warn-bg text-warn',
+  icon: RefreshCw,
+};
+
+/** The line style an edge is drawn with. */
+export function edgeStyle(data: Pick<BlueprintEdgeData, 'status' | 'cycle'>): (typeof EDGE_STATUS_STYLE)[EdgeStatus] {
+  return data.cycle && data.status === 'declared' ? CYCLE_EDGE_STYLE : EDGE_STATUS_STYLE[data.status];
+}
+
 const DIFF_STYLE: Record<EdgeDiff, { stroke: string; dash?: string; label: string; chip: string; icon: LucideIcon }> = {
   added: { stroke: 'var(--status-ok)', label: 'added', chip: 'bg-ok-bg text-ok', icon: Plus },
   removed: { stroke: 'var(--status-bad)', dash: '3 5', label: 'removed', chip: 'bg-bad-bg text-bad', icon: Minus },
   changed: { stroke: 'var(--accent)', dash: '4 4', label: 'proposed', chip: 'bg-accent-muted text-accent-text', icon: Sparkles },
 };
 
-export function edgeLabel(data: Pick<BlueprintEdgeData, 'status' | 'count'>): string {
+export function edgeLabel(data: Pick<BlueprintEdgeData, 'status' | 'count' | 'cycle'>): string {
   const style = EDGE_STATUS_STYLE[data.status];
   if (data.status === 'missing') return style.label;
   const count = data.count ?? 0;
-  if (data.status === 'declared') return count ? `${count}` : style.label;
-  return count ? `${style.label} · ${count}` : style.label;
+  if (data.status === 'declared') {
+    if (data.cycle) return count ? `${CYCLE_EDGE_STYLE.label} · ${count}` : CYCLE_EDGE_STYLE.label;
+    return count ? `${count}` : style.label;
+  }
+  const label = count ? `${style.label} · ${count}` : style.label;
+  return data.cycle ? `${label} · ${CYCLE_EDGE_STYLE.label}` : label;
 }
 
 export function edgeDescription(data: BlueprintEdgeData): string {
   const count = data.count ? `, ${data.count} ${data.count === 1 ? 'import' : 'imports'}` : '';
-  const base = `${data.fromName} to ${data.toName}: ${EDGE_STATUS_STYLE[data.status].label} dependency${count}`;
+  const base = `${data.fromName} to ${data.toName}: ${EDGE_STATUS_STYLE[data.status].label} dependency${count}${data.cycle ? ', part of a dependency cycle' : ''}`;
   if (!data.diff) return base;
   if (data.diff === 'changed' && data.previousStatus) return `${base}. Proposed change, was ${EDGE_STATUS_STYLE[data.previousStatus].label}`;
   return `${base}. ${data.diff === 'added' ? 'Added' : data.diff === 'removed' ? 'Removed' : 'Changed'} by the proposal`;
@@ -84,18 +114,23 @@ export function edgeDescription(data: BlueprintEdgeData): string {
 type ActivateEdge = (edge: { from: string; to: string }, anchor: { clientX: number; clientY: number }) => void;
 export const EdgeActivateContext = createContext<ActivateEdge | null>(null);
 
+/** Vertical gap between the labels of a dependency and its reverse (a label is 20px tall). */
+const REVERSE_LABEL_SHIFT = 24;
+
 function BlueprintEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd, selected }: EdgeProps<BlueprintEdgeData>) {
   const activate = useContext(EdgeActivateContext);
   const [path, labelX, labelY] = data?.waypoints?.length
     ? routedPath([{ x: sourceX, y: sourceY }, ...data.waypoints, { x: targetX, y: targetY }])
     : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   if (!data) return null;
-  const style = EDGE_STATUS_STYLE[data.status];
+  const style = edgeStyle(data);
   const diff = data.diff ? DIFF_STYLE[data.diff] : null;
   const Icon = diff?.icon ?? style.icon;
   const text = data.diff === 'changed' ? edgeLabel(data) : diff ? diff.label : edgeLabel(data);
   // Healthy, unchanged dependencies stay quiet: their label disappears when zoomed out.
-  const quiet = !diff && data.status === 'declared';
+  const quiet = !diff && data.status === 'declared' && !data.cycle;
+  // a → b and b → a share a midpoint: move one label (a fixed one of the pair) below the other.
+  const labelShift = data.reverseDrawn && data.from > data.to ? REVERSE_LABEL_SHIFT : 0;
   return (
     <>
       <BaseEdge
@@ -116,11 +151,12 @@ function BlueprintEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosit
         <div
           data-quiet={quiet ? 'true' : 'false'}
           className={cx('studio-edge-label nodrag nopan absolute text-meta font-medium leading-none', data.dim && 'opacity-25')}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`, pointerEvents: 'all' }}
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelShift}px)`, pointerEvents: 'all' }}
         >
           <button
             type="button"
             data-status={data.status}
+            data-cycle={data.cycle ? 'true' : undefined}
             data-diff={data.diff}
             aria-label={edgeDescription(data)}
             onClick={(event) => {

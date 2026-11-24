@@ -29,7 +29,7 @@ inputs:
     required: false
     default: "true"
   approve-label:
-    description: Pull request label a human applies to approve changes that weaken the contract.
+    description: Pull request label a human applies to approve a change that weakens the contract or the tests.
     required: false
     default: rassam:approved
   sarif-output:

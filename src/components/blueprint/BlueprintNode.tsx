@@ -2,9 +2,9 @@
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
-import { BadgeCheck, KeyRound, Minus, PencilLine, Plus, TriangleAlert } from 'lucide-react';
+import { BadgeCheck, KeyRound, Minus, OctagonAlert, PencilLine, Plus, TriangleAlert } from 'lucide-react';
 
-import type { BlueprintComponent, ComponentState } from '@/blueprint';
+import type { BlueprintComponent, ComponentState, Severity } from '@/blueprint';
 import { cx } from '@/components/ui/cx';
 import { StatusGlyph, type StatusTone } from '@/components/ui/StatusGlyph';
 import { KindIcon } from './kinds';
@@ -17,7 +17,10 @@ export type NodeDiff = 'added' | 'removed' | 'changed';
 export interface BlueprintNodeData {
   component: BlueprintComponent;
   fileCount: number;
+  /** Rule violations involving this component; dependency cycles are drawn on their edges instead. */
   findings: number;
+  /** Worst severity among `findings`: errors get a red octagon, warnings an amber triangle. */
+  findingSeverity?: Severity;
   emphasis: NodeEmphasis;
   /** Extra line for the active question, e.g. "2 steps away". */
   note?: string;
@@ -48,8 +51,15 @@ const DIFF_STYLE: Record<NodeDiff, { label: string; icon: typeof Plus; card: str
   changed: { label: 'Changed', icon: PencilLine, card: 'border border-dashed border-accent shadow-none', badge: 'bg-accent-muted text-accent-text' },
 };
 
+/** "2 findings", or "2 findings, including errors" when one of them is an error. */
+export function findingsLabel(count: number, severity?: Severity): string {
+  const base = `${count} ${count === 1 ? 'finding' : 'findings'}`;
+  if (severity !== 'error') return base;
+  return count === 1 ? `${base}, an error` : `${base}, including errors`;
+}
+
 function BlueprintNodeView({ data, selected }: NodeProps<BlueprintNodeData>) {
-  const { component, fileCount, findings, emphasis, note, secrets, spotlight, runtime, diff, scoped } = data;
+  const { component, fileCount, findings, findingSeverity, emphasis, note, secrets, spotlight, runtime, diff, scoped } = data;
   const intent = firstLine(component.intent);
   const assurance = component.assurance && component.assurance !== 'unknown' ? component.assurance : null;
   const diffStyle = diff ? DIFF_STYLE[diff] : null;
@@ -90,10 +100,17 @@ function BlueprintNodeView({ data, selected }: NodeProps<BlueprintNodeData>) {
         {runtime && <StatusGlyph tone={RUNTIME_STATUS[runtime].tone} label={RUNTIME_STATUS[runtime].label} hideLabel />}
         {findings > 0 && (
           <span
-            className="tabular inline-flex h-5 shrink-0 items-center gap-1 rounded-xs bg-warn-bg px-1.5 text-meta font-medium text-warn"
-            aria-label={`${findings} ${findings === 1 ? 'finding' : 'findings'}`}
+            data-severity={findingSeverity}
+            className={cx(
+              'tabular inline-flex h-5 shrink-0 items-center gap-1 rounded-xs px-1.5 text-meta font-medium',
+              findingSeverity === 'error' ? 'bg-bad-bg text-bad' : 'bg-warn-bg text-warn',
+            )}
+            aria-label={findingsLabel(findings, findingSeverity)}
           >
-            <TriangleAlert size={12} strokeWidth={1.75} aria-hidden="true" /> {findings}
+            {findingSeverity === 'error'
+              ? <OctagonAlert size={12} strokeWidth={1.75} aria-hidden="true" />
+              : <TriangleAlert size={12} strokeWidth={1.75} aria-hidden="true" />}
+            {' '}{findings}
           </span>
         )}
       </div>

@@ -58,6 +58,7 @@ A small web shop: a React front end, an HTTP API, a domain layer, a data-access 
     "includeTypeOnly": true,
     "tripwires": { "defaults": true, "paths": ["db/migrations/**"] },
     "verificationHeuristics": true,
+    "verificationWeakening": "require-approval",
     "ignore": ["src/generated/**", "**/*.snap"]
   },
   "components": [
@@ -221,6 +222,7 @@ Policy covers what the rules do not mention. Every field is optional.
 | `tripwires.defaults` | boolean | `true` | Enable the built-in tripwires ([list](#84-tripwires)) |
 | `tripwires.paths` | globs, ≤ 200 | none | Extra tripwire paths |
 | `verificationHeuristics` | boolean | `true` | Enable the heuristics that flag weakened verification ([list](#85-verification-weakening-heuristics)) |
+| `verificationWeakening` | `require-approval`, `warn` | `require-approval` | What a strong verification-weakening signal does (a skipped, focused, deleted or trivialized test, removed assertions, a lowered or removed coverage threshold, a forced zero exit). `require-approval`: an error until a human approves the change with the approval label. `warn`: a warning, except a forced zero exit, which stays an error. See [8.5](#85-verification-weakening-heuristics). |
 | `ignore` | globs, ≤ 500 | `[]` | Paths excluded from analysis entirely, in addition to the [built-in ignore list](#built-in-ignore-list) |
 
 ### 4.3 `components[]`
@@ -341,7 +343,7 @@ No dependency cycle may exist between components. `scope` (a selector) limits th
 { "id": "no-cycles-in-core", "kind": "no-cycles", "scope": "tag:layer:core" }
 ```
 
-Violations are `dependency-cycle` findings, one per group of mutually dependent components, with one concrete path shown (`a → b → c → a`).
+Violations are `dependency-cycle` findings, one per group of mutually dependent components, with one concrete path shown (`a → b → c → a`). Pictures show a cycle once: the graph view (`cycles`, and `cycle: true` on the edges of that path), the README diagram and the Studio canvas draw those edges in the warning colour with a dash-dot line and state the path in the header. Members of a cycle do not get a violation badge for it, because one cycle is one finding however many components it spans.
 
 #### `protect`
 
@@ -559,9 +561,11 @@ When the base has no valid blueprint, for example in the pull request that intro
 
 Each finding has a fingerprint that is stable across runs. A finding is *new* when the change introduces it and *pre-existing* when it was already present at the base. Only new findings affect the verdict. Pre-existing findings are counted and collapsed in the output (`--verbose` lists them). This lets a team adopt a blueprint on a codebase that already violates it and stop the violations from growing.
 
+In full mode every finding is new, with one exception: a host that checks a blueprint it has just drafted from the same files (`rassam init`, the Studio) can say so (`preExisting` in the engine's `CheckInput`). Every rule and policy violation is then reported as pre-existing, with a note that it existed before the contract did: a draft describes the code as it is. Reach findings and an invalid blueprint are still new.
+
 ### 8.3 Contract changes
 
-When the change edits `.rassam/blueprint.json`, the base and head blueprints are compared semantically: reordering keys or reformatting is not a change. Each difference is one of:
+When the change edits `.rassam/blueprint.json`, the base and head blueprints are compared semantically: reordering keys or reformatting is not a change. An edit with no semantic change (formatting, key order, the `$schema` URL) also puts nothing in scope: even when a component's paths claim the blueprint file, it raises no `invariant-at-risk` or `stale-verification` notice. A semantic edit counts as a change to the component that owns the file, like any other file. Each difference is one of:
 
 | Collection | Change kinds |
 | --- | --- |
@@ -589,7 +593,7 @@ The following are weakening changes. The `weakens` flag on each entry of `contra
   - `protect`: a path removed.
   - `secret-access`: a `secrets` pattern removed, or `allow` widened.
 - **An invariant is removed**, its `check.run` is removed or changed, a `check.tests` entry is removed, or its severity is lowered.
-- **Policy is loosened**: `undeclaredDependencies` or `unmappedFiles` lowered; `includeTypeOnly`, `tripwires.defaults` or `verificationHeuristics` turned off; a `tripwires.paths` entry removed; an `ignore` glob added.
+- **Policy is loosened**: `undeclaredDependencies` or `unmappedFiles` lowered; `includeTypeOnly`, `tripwires.defaults` or `verificationHeuristics` turned off; `verificationWeakening` changed from `require-approval` to `warn` (removing the field restores the default, `require-approval`, so it is not a loosening); a `tripwires.paths` entry removed; an `ignore` glob added.
 - **A component that base rules refer to loses coverage**: the component is removed, a `paths` glob is removed, or an `exclude` glob is added, when a rule names the component by ID or by tag; or a tag that a rule selects by is removed.
 - **A component's `assurance` is lowered** from a stated level.
 - **A component is made `public`, or its `kind` becomes `test`**: both exempt edges from undeclared-dependency checks.
@@ -606,7 +610,7 @@ Not weakening: adding rules, invariants, components or decisions; tightening any
 - in GitHub mode, by applying the approval label to the pull request (default `rassam:approved`, `--approve-label`). The label is read from the pull request, so a commit cannot set it;
 - elsewhere, by passing `--approved`.
 
-The report records `approved: true`. An approved weakening change is still listed, at `info` severity instead of `error`, so it no longer fails the gate. Approval covers contract changes only. It does not excuse rule violations, tripwires or weakened verification.
+The report records `approved: true`. An approved weakening change is still listed, at `info` severity instead of `error`, so it no longer fails the gate. The same approval clears the strong verification-weakening signals that need one ([8.5](#85-verification-weakening-heuristics)). It does not excuse rule violations, tripwires or weak verification signals.
 
 ### 8.4 Tripwires
 
@@ -641,24 +645,45 @@ A tripwire does not say the change is wrong. Editing a test alongside the code i
 
 Tripwires see that a check changed. These heuristics read the diff to see whether it got weaker. Text inside single-line string literals in source code is ignored, so test fixtures that merely mention a pattern do not trigger a signal. They run in diff mode when `policy.verificationHeuristics` is `true` and produce `verification-weakened` findings. Each finding names its signal:
 
-| Signal | What it detects |
-| --- | --- |
-| `test-skipped` | Added skip markers: `.skip`, `xit`, `xdescribe`, `@pytest.mark.skip`, `t.Skip()`, `@Disabled`, `@Ignore` and equivalents (`.todo` is not a skip) |
-| `test-focused` | Added focus markers (`.only`, `fit`, `fdescribe`), which silently disable every other test in the file |
-| `test-file-deleted` | A test file deleted, or renamed to a name the runner no longer picks up (e.g. `orders.test.ts` → `orders.disabled.ts`) |
-| `assertions-removed` | Assertions deleted (or commented out) from a test that still exists |
-| `assertion-trivialized` | An assertion replaced by one that cannot fail, such as `expect(true).toBe(true)` or `assert True` |
-| `exit-zero` | A forced success exit: `process.exit(0)`, `sys.exit(0)`, `os.Exit(0)` in tests or runner config; in shell and CI, an `exit 0` that swallows a failure (`cmd \|\| exit 0`), shares a line with a verification command, or stands alone in a git hook. Guard clauses and the last line of a script are not flagged |
-| `suppression-added` | Added `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `# type: ignore`, `# noqa`, `#[allow(...)]`, `@SuppressWarnings` |
-| `ci-weakened` | CI configuration loosened: `continue-on-error`, `\|\| true`, `if: false`, removed verification steps, a dropped `pull_request` trigger |
-| `coverage-threshold-lowered` | A coverage threshold reduced in test or coverage configuration |
-| `coverage-threshold-removed` | A coverage threshold deleted with no replacement |
-| `tests-excluded` | Test-runner configuration now excludes tests (`exclude`, `testPathIgnorePatterns`, `--ignore`, `--deselect`) |
-| `test-script-changed` | A verification script in `package.json` (`test`, `test:*`, `lint`, `typecheck`, `check`, `ci`) changed or was removed; new scripts are not flagged |
-| `test-special-casing` | Production code now detects a test runner (`process.env.NODE_ENV === "test"`, `process.env.VITEST`, `"pytest" in sys.modules`, `testing.Testing()`, an early `return` under `import.meta.vitest`), the pattern behind special-casing graded inputs |
-| `snapshots-mass-updated` | Many snapshot files rewritten in one change |
+| Signal | Strength | What it detects |
+| --- | --- | --- |
+| `test-skipped` | strong | Added skip markers: `.skip`, `xit`, `xdescribe`, `@pytest.mark.skip`, `t.Skip()`, `@Disabled`, `@Ignore`, node:test's `{ skip: … }` and `{ todo: … }` options and equivalents. A bare `it.todo('…')` placeholder has no body to lose and is not a skip |
+| `test-focused` | strong | Added focus markers (`.only`, `fit`, `fdescribe`), which silently disable every other test in the file |
+| `test-file-deleted` | strong | A test file deleted, or renamed to a name the runner no longer picks up (e.g. `orders.test.ts` → `orders.disabled.ts`) |
+| `assertions-removed` | strong | Assertions deleted (or commented out) from a test that still exists |
+| `assertion-trivialized` | strong | An assertion replaced by one that cannot fail, such as `expect(true).toBe(true)`, `expect(x).toBe(x)` or `assert True` |
+| `coverage-threshold-lowered` | strong | A coverage threshold reduced in test or coverage configuration |
+| `coverage-threshold-removed` | strong | A coverage threshold deleted with no replacement |
+| `exit-zero` | strong | A forced success exit: `process.exit(0)`, `sys.exit(0)`, `os.Exit(0)` in tests or runner config; in shell and CI, an `exit 0` that swallows a failure (`cmd \|\| exit 0`), shares a line with a verification command, or stands alone in a git hook. Guard clauses and the last line of a script are not flagged |
+| `ci-weakened` | weak | CI configuration loosened: `continue-on-error`, `\|\| true`, `if: false`, removed verification steps, a dropped `pull_request` trigger |
+| `tests-excluded` | weak | Test-runner configuration now excludes tests (`exclude`, `testPathIgnorePatterns`, `--ignore`, `--deselect`) |
+| `test-script-changed` | weak | A verification script in `package.json` (`test`, `test:*`, `lint`, `typecheck`, `check`, `ci`) changed or was removed; new scripts are not flagged |
+| `suppression-added` | weak | Added `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `# type: ignore`, `# noqa`, `#[allow(...)]`, `@SuppressWarnings` |
+| `test-special-casing` | weak | Production code now detects a test runner (`process.env.NODE_ENV === "test"`, `process.env.VITEST`, `"pytest" in sys.modules`, `testing.Testing()`, an early `return` under `import.meta.vitest`), the pattern behind special-casing graded inputs |
+| `snapshots-mass-updated` | weak | Many snapshot files rewritten in one change |
 
-Most signals are warnings; `exit-zero` is an error. The exact patterns, thresholds and languages covered are implementation-defined. The heuristics are deliberately biased toward recall: a false alarm costs a reviewer a glance, a miss lets a disabled check through.
+The strength of each signal is fixed by the engine (`WEAKENING_SIGNALS` in `src/blueprint/diff.ts`). A strong signal removes or disables a check outright. A weak signal loosens verification in a way that is routine often enough to need a reviewer's judgment rather than a sign-off.
+
+**Severity and approval.** Weak signals are warnings (a single suppression, and mass snapshot updates, are info). What a strong signal does depends on `policy.verificationWeakening` in the blueprint the change is judged by:
+
+| `verificationWeakening` | Strong signal | `exit-zero` | With the approval label |
+| --- | --- | --- | --- |
+| `require-approval` (default) | error | error | info |
+| `warn` | warning | error | strong signals stay warnings; `exit-zero` becomes info |
+
+Under `require-approval` a skipped, deleted or gutted test therefore fails the change until a human applies the approval label ([8.3](#83-contract-changes): `rassam:approved` by default, or `--approved`), the same mechanism that approves contract weakening. The finding's message says so, and the pull request comment lists the weakened checks and the label to apply. An approved signal is still listed, at `info` severity, with a note that a human approved it. `exit-zero` is an error under both settings, and the approval clears it under both, so `warn` is never stricter than `require-approval`. Changing the setting from `require-approval` to `warn` is a weakening change.
+
+**Context from the same change.** A strong signal is reported as weak (a warning that needs no approval), or not at all, when the rest of the diff shows that no verification was lost or that what it verified is gone too:
+
+- Assertions that reappear verbatim in another test file that the runner picks up the same way (tests moved between files, a test file split in several) are not counted as removed, and a deleted test file whose assertions all reappear is not flagged. A file only lends the assertions it gained beyond its own removals.
+- Assertions folded into a parametrized test (`it.each`, `@pytest.mark.parametrize`, a Go table and similar) are not counted as removed when every value they checked appears in the added lines and the new test body makes a real assertion.
+- A test file deleted together with the source file it imports or sits next to, and a test block deleted together with a function or class it calls whose definition the change removes, are reported as weak signals.
+- A deleted file under a test directory that holds no test declarations and no assertions (a helper, a fixture, data) is not a deleted test. The tests tripwire still surfaces it.
+- An assertion replaced by one that cannot fail is reported once, as `assertion-trivialized`.
+
+This context is evidence, not proof: renaming a function and deleting the tests that called its old name reads as a removal with its code and stays a warning.
+
+The exact patterns, thresholds and languages covered are implementation-defined. The heuristics are deliberately biased toward recall: a false alarm costs a reviewer a glance, a miss lets a disabled check through.
 
 Rationale. The documented ways coding agents cheat on tasks do not attack the task; they attack the checks: editing tests so they pass, special-casing test inputs, patching the grader, exiting with status 0, weakening CI. Research on impossible tasks found that agents given an explicit way to stop and report used it instead of cheating far more often, which is why `report_conflict` exists ([section 11](#11-mcp-server)). A gate that only checks whether tests pass is blind to all of this, because the tests do pass. So the gate treats changes to the verification machinery as first-class findings.
 
@@ -815,13 +840,39 @@ Exit codes: `0` success, `1` the check failed, `2` usage or configuration error.
 
 ### `rassam init`
 
-Derives a draft blueprint from the working tree and writes `.rassam/blueprint.json`. The draft records only what static analysis can see, marked `derived`. Intent, rules and invariants are left for a human.
+Derives a draft blueprint from the working tree and writes `.rassam/blueprint.json`, then offers to wire the repository up. The draft records only what static analysis can see, marked `derived`. Intent, rules and invariants are left for a human.
+
+How the draft is cut into components (deterministic, at most 20 components plus Tests by default):
+
+- The repository root is always split; then the largest folder with more than 40 source files is split, again and again, while the total stays within the budget. A split must yield at least two pieces of 10 or more files, otherwise the folder stays whole.
+- One folder yields at most 10 components. Past that, only children with 10 or more files stay separate and the rest are merged into `<Folder> (other)` with explicit globs, so no file becomes unmapped. `benchmarks`, `bench`, `examples`, `docs`, `scripts`, `e2e`, `fixtures`, `testdata` and `migrations` are never split per child.
+- Java, Kotlin and Scala sources under `src/main/<language>/` (also per module) are split by the subpackages of their base package, whatever their size.
+- Root-level code is kind `core`, named after the module or package (Go `module`, Python and Rust package names); root-level files that are only configuration are kind `config`.
+- Drafted rules: `no-component-cycles` (warning), `tests-are-leaves` when there are tests, and one `secret-access` rule per secret-like variable read by at most three components. When the code already breaks a drafted rule, `init` counts the violations and says they existed before the contract did (in a pull request only new violations fail).
+
+Then, for each of `.mcp.json` (the MCP server, pinned to this version), `AGENTS.md` (the contract as prose between `<!-- rassam:agents:start -->` and `<!-- rassam:agents:end -->`, plus a `<!-- rassam:claude:start -->` block in `CLAUDE.md` that imports it) and `.github/workflows/rassam.yml` (the gate): in an interactive terminal `init` asks; elsewhere it writes only what the flags ask for. Every write is idempotent. Text outside the markers is never changed, an existing `rassam` MCP entry or workflow file is kept, and no second gate workflow is added when another workflow already runs it.
 
 | Flag | Meaning |
 | --- | --- |
-| `--force` | Overwrite an existing blueprint |
+| `--force` | Replace an existing blueprint with a fresh draft |
 | `--name <name>` | System name (default: the directory name) |
-| `--dry-run` | Print the draft instead of writing it |
+| `--dry-run` | Print the draft and write nothing |
+| `--yes` | Write all three files without asking |
+| `--mcp`, `--agents`, `--workflow` | Write that file (`--no-mcp`, `--no-agents`, `--no-workflow` to skip it) |
+
+With a blueprint already in place and no `--force`, `init` skips the draft and only wires up what the flags ask for; with none of them it refuses, as before.
+
+### `rassam instructions`
+
+States the contract in plain language in `AGENTS.md` (found in any letter case): the dependency rules with their reasons, the protected paths, where the named components live, the invariants, and standing orders (never skip, delete, loosen or rewrite a test, a CI step or a coverage threshold to make a check pass; never edit the blueprint to pass; if a task needs a rule broken, stop and say so, even when asked for the shortcut; run the check before finishing). The text is a pure function of the blueprint, so it is regenerated and compared to detect a stale block; `rassam check` notes when it is stale.
+
+| Flag | Meaning |
+| --- | --- |
+| `--write` | Create or refresh the block (text outside the markers is kept) |
+| `--check` | Exit `1` when the block is missing or out of date |
+| `--file <path>` | Another instruction file |
+| `--command <cmd>` | How agents run the CLI here (default: the command recorded in the existing block, else `npx -y @v0ightt/rassam@<version>`) |
+| `--no-mcp` | Leave out the MCP tool sentences (they are included when `.mcp.json` configures a `rassam` server) |
 
 ### `rassam check`
 
@@ -835,7 +886,7 @@ Checks the repository, or a change, against the blueprint.
 | `--sarif-output <file>` | — | Additionally write a SARIF report |
 | `--fail-on <level>` | `error` | `error`, `warning` or `never` |
 | `--budget <n>` | 5 | Attention budget: findings shown in full |
-| `--approved` | off | A human approved the contract changes in this change |
+| `--approved` | off | A human approved the weakening changes (contract or tests) in this change |
 | `--run-invariants` | off | Run invariant `check.run` commands (from the base blueprint in diff mode) |
 | `--invariant-timeout <seconds>` | 300 | Timeout for each invariant command |
 | `--github` | off | GitHub Actions mode: pull request context, annotations, step summary |
@@ -1005,7 +1056,7 @@ The gate runs with access to a repository and sometimes a token, on changes that
 - **The change cannot choose its own rules.** In diff mode everything the gate enforces comes from the base blueprint ([8.1](#81-the-change-is-judged-by-the-base-blueprint)).
 - **Invariant commands come only from the base blueprint.** `check.run` is arbitrary shell. It runs only with `--run-invariants`, and in diff mode only as written at the merge-base, so a pull request cannot introduce a command and have the gate execute it. A command added in a pull request first runs after a human has merged it. In full mode the commands come from the working tree: run `--run-invariants` only on a tree you trust.
 - **Secrets are never printed.** Reach analysis reports environment variable names and locations. An inline credential is shown as a redacted preview (prefix, suffix and length), never in full, in every output format. The contents of `.env` files are not read.
-- **Approval is out of band.** A weakening change is approved by a label on the pull request or by an explicit flag from whoever runs the command, never by content inside the change.
+- **Approval is out of band.** A weakening change, to the contract or to the tests, is approved by a label on the pull request or by an explicit flag from whoever runs the command, never by content inside the change.
 - **Proposals are never applied automatically.** `propose_change` and `report_conflict` write files under `.rassam/proposals/` and `.rassam/escalations/`. Only a human editing `blueprint.json`, in a change that itself passes through the gate, alters the contract.
 - **Local first.** The CLI and the canvas work on the local checkout. The CLI makes network requests only in `--github` mode, to the GitHub API, to read pull request labels and write the comment. No repository content is sent to a model or to a Rassam service.
 - **Untrusted text is treated as data.** Paths, commit messages and file contents shown in reports are stripped of control characters and escaped, so repository content cannot forge terminal output, annotations or comment structure.

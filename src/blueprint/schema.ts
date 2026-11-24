@@ -293,6 +293,15 @@ export const policySchema = z
       .default({ defaults: true }),
     /** Heuristics that flag weakened verification (skipped tests, deleted assertions, ...). */
     verificationHeuristics: z.boolean().default(true),
+    /**
+     * What the strong verification-weakening signals do (skipped, focused,
+     * deleted or trivialized tests, removed assertions, lowered or removed
+     * coverage thresholds, a forced zero exit). "require-approval": errors
+     * until a human approves the change with the approval label, the same
+     * mechanism as contract weakening. "warn": warnings, except a forced zero
+     * exit, which stays an error. Weak signals are warnings either way.
+     */
+    verificationWeakening: z.enum(["require-approval", "warn"]).default("require-approval"),
     /** Globs excluded from analysis entirely (generated code, fixtures, vendored code). */
     ignore: z.array(globSchema).max(500).default([]),
   })

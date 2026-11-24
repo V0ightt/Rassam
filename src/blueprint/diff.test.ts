@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { codeOnly, detectVerificationWeakening, fileAdded, matchTripwires, parseUnifiedDiff } from "./diff";
+import { codeOnly, detectVerificationWeakening, fileAdded, matchTripwires, parseUnifiedDiff, WEAKENING_SIGNALS } from "./diff";
 import type { ChangedFile, DiffLine } from "./types";
 
 // Captured from `git diff --cached --no-color -M -U0` (git 2.44).
@@ -667,6 +667,8 @@ describe("detectVerificationWeakening", () => {
       "self.assertTrue(True)",
       "assert.ok(true);",
       "assertEquals(1, 1);",
+      "expect(total).toBe(total);",
+      "expect(result.value).toEqual(result.value);",
     ])("flags %s", (text) => {
       const signals = signalsOf([change("tests/test_a.py", { added: [text] })], "assertion-trivialized");
       expect(signals).toHaveLength(1);
@@ -774,6 +776,7 @@ describe("detectVerificationWeakening", () => {
           line: 10,
           signal: "suppression-added",
           severity: "warning",
+          strong: false,
           message: "3 check suppressions added (lines 10, 12, 13)",
         },
       ]);
@@ -1068,5 +1071,257 @@ describe("test special-casing inside string fixtures", () => {
       removed: [],
     };
     expect(detectVerificationWeakening([change]).filter((signal) => signal.signal === "test-special-casing")).toEqual([]);
+  });
+});
+
+describe("signal strength", () => {
+  const lines = (start: number, texts: readonly string[]): DiffLine[] => numbered(texts, start);
+
+  it("lists every signal once, split into strong and weak", () => {
+    const named = (strength: string) => Object.entries(WEAKENING_SIGNALS).filter(([, value]) => value === strength).map(([name]) => name).sort();
+    expect(named("strong")).toEqual([
+      "assertion-trivialized",
+      "assertions-removed",
+      "coverage-threshold-lowered",
+      "coverage-threshold-removed",
+      "exit-zero",
+      "test-file-deleted",
+      "test-focused",
+      "test-skipped",
+    ]);
+    expect(named("weak")).toEqual([
+      "ci-weakened",
+      "snapshots-mass-updated",
+      "suppression-added",
+      "test-script-changed",
+      "test-special-casing",
+      "tests-excluded",
+    ]);
+  });
+
+  it("marks signals strong or weak from the table, keeping the detector's severity", () => {
+    const signals = detectVerificationWeakening([
+      change("src/a.test.ts", { added: ["it.skip('works', () => {});"] }),
+      change("src/b.test.ts", { status: "deleted", removed: ["it('b', () => expect(b()).toBe(2));"] }),
+      change(".github/workflows/ci.yml", { added: ["        continue-on-error: true"] }),
+      change("tests/setup.ts", { added: ["process.exit(0);"] }),
+    ]);
+    expect(signals.map((entry) => [entry.signal, entry.strong, entry.severity])).toEqual([
+      ["ci-weakened", false, "warning"],
+      ["test-skipped", true, "warning"],
+      ["test-file-deleted", true, "warning"],
+      ["exit-zero", true, "error"],
+    ]);
+  });
+
+  describe("context that clears the need for approval", () => {
+    const couponTest = [
+      'import { expect, it } from "vitest";',
+      'import { couponValue } from "../src/domain/coupons";',
+      "",
+      'it("knows the welcome coupon", () => {',
+      '  expect(couponValue("WELCOME")).toBe(10);',
+      "});",
+    ];
+
+    it("keeps a test file deleted with the code it imports as a weak signal", () => {
+      const signals = signalsOf(
+        [
+          change("tests/coupons.test.ts", { status: "deleted", removed: couponTest }),
+          change("src/domain/coupons.ts", { status: "deleted", removed: ["export function couponValue(code: string): number {", "  return 10;", "}"] }),
+        ],
+        "test-file-deleted",
+      );
+      expect(signals).toHaveLength(1);
+      expect(signals[0]).toMatchObject({ strong: false, severity: "warning" });
+      expect(signals[0].message).toBe("Test file deleted together with src/domain/coupons.ts, the code it tests");
+    });
+
+    it("recognizes the code under test by aliased imports, Python modules and Go packages", () => {
+      const aliased = signalsOf(
+        [
+          change("src/domain/coupons.test.ts", {
+            status: "deleted",
+            removed: ['import { couponValue } from "@/domain/coupons";', "test('x', () => expect(couponValue('A')).toBe(1));"],
+          }),
+          change("src/domain/coupons.ts", { status: "deleted", removed: ["export const couponValue = (code: string) => 1;"] }),
+        ],
+        "test-file-deleted",
+      );
+      const python = signalsOf(
+        [
+          change("services/tax/test_rates.py", { status: "deleted", removed: ["from rates import rate_for", "def test_de():", "    assert rate_for('DE') == 0.19"] }),
+          change("services/tax/rates.py", { status: "deleted", removed: ["def rate_for(country):", "    return 0.19"] }),
+        ],
+        "test-file-deleted",
+      );
+      const go = signalsOf(
+        [
+          change("pkg/ship/cost_test.go", {
+            status: "deleted",
+            removed: ["package ship", "func TestCost(t *testing.T) {", "\tif Cost(1) != 2 {", '\t\tt.Fatal("bad")', "\t}", "}"],
+          }),
+          change("pkg/ship/cost.go", { status: "deleted", removed: ["package ship", "func Cost(grams int) int { return 2 }"] }),
+        ],
+        "test-file-deleted",
+      );
+      expect([aliased, python, go].map((signals) => signals.map((entry) => entry.strong))).toEqual([[false], [false], [false]]);
+    });
+
+    it("keeps a test file deleted next to unrelated code strong", () => {
+      const signals = signalsOf(
+        [
+          change("tests/coupons.test.ts", { status: "deleted", removed: couponTest }),
+          change("src/util/legacy.ts", { status: "deleted", removed: ["export const legacy = 1;"] }),
+        ],
+        "test-file-deleted",
+      );
+      expect(signals.map((entry) => entry.strong)).toEqual([true]);
+      expect(signals[0].message).toBe("Test file deleted");
+    });
+
+    it("does not flag deleted helpers, fixtures or data that hold no tests", () => {
+      expect(
+        signalsOf(
+          [
+            change("tests/helpers/items.ts", { status: "deleted", removed: ["export const items = () => [{ price: 1 }];"] }),
+            change("tests/helpers/match.ts", { status: "deleted", removed: ["export const isId = (value: string) => /^[a-z]+$/.test(value);"] }),
+            change("tests/fixtures/orders.json", { status: "deleted", removed: ['{ "orders": [] }'] }),
+            change("test/data/logo.png", { status: "deleted" }),
+          ],
+          "test-file-deleted",
+        ),
+      ).toEqual([]);
+      // Tests without a test-like file name are still tests.
+      const mocha = change("test/orders.js", { status: "deleted", removed: ["describe('orders', () => {", "  it('works', () => {});", "});"] });
+      expect(signalsOf([mocha], "test-file-deleted")).toHaveLength(1);
+    });
+
+    it("does not flag assertions that moved verbatim into another test file", () => {
+      const moved = ["    expect(discounted).toBe(180);", "    expect(applyDiscount(0, 10)).toBe(0);", "    expect(() => applyDiscount(100, 120)).toThrow();"];
+      const changes = [
+        change("tests/pricing.test.ts", { removed: ['  it("applies a percentage discount", () => {', ...moved, "  });"] }),
+        change("tests/discount.test.ts", { status: "added", added: ['it("applies a percentage discount", () => {', ...moved, "});"] }),
+      ];
+      expect(detectVerificationWeakening(changes)).toEqual([]);
+    });
+
+    it("does not let one added assertion account for two removals, or a file that lost its own", () => {
+      const assertions = ["expect(a()).toBe(1);", "expect(b()).toBe(2);", "expect(c()).toBe(3);"];
+      // b.test.ts gains the three moved assertions but loses three of its own: three are gone.
+      const signals = signalsOf(
+        [
+          change("tests/a.test.ts", { removed: assertions }),
+          change("tests/b.test.ts", { added: assertions, removed: ["expect(x()).toBe(7);", "expect(y()).toBe(8);", "expect(z()).toBe(9);"] }),
+        ],
+        "assertions-removed",
+      );
+      expect(signals.map((entry) => [entry.path, entry.strong])).toEqual([["tests/a.test.ts", true]]);
+      // A move into a file the runner does not pick up by name does not count.
+      const hidden = [change("tests/a.test.ts", { removed: assertions }), change("tests/a.ts", { status: "added", added: assertions })];
+      expect(signalsOf(hidden, "assertions-removed")).toHaveLength(1);
+    });
+
+    it("does not flag a test file split into others that keep every assertion", () => {
+      const first = ["expect(charge(1)).toBe('one');", "expect(charge(2)).toBe('two');"];
+      const second = ["expect(charge(3)).toBe('three');", "expect(charge(4)).toBe('four');"];
+      const signals = detectVerificationWeakening([
+        change("tests/charge.test.ts", { status: "deleted", removed: ["it('formats', () => {", ...first, ...second, "});"] }),
+        change("tests/charge-small.test.ts", { status: "added", added: ["it('small', () => {", ...first, "});"] }),
+        change("tests/charge-large.test.ts", { status: "added", added: ["it('large', () => {", ...second, "});"] }),
+      ]);
+      expect(signals).toEqual([]);
+    });
+
+    it("does not flag tests folded into a parametrized table that keeps their values", () => {
+      const removed = [
+        '  it("formats the charged amount", async () => {',
+        '    expect(await charge(1250)).toBe("Charged $12.50");',
+        "  });",
+        '  it("formats whole amounts", async () => {',
+        '    expect(await charge(100)).toBe("Charged $1.00");',
+        "  });",
+        '  it("formats large amounts", async () => {',
+        '    expect(await charge(123456)).toBe("Charged $1234.56");',
+        "  });",
+        '  it("formats single cents", async () => {',
+        '    expect(await charge(1)).toBe("Charged $0.01");',
+        "  });",
+      ];
+      const rows = ['    [1250, "Charged $12.50"],', '    [100, "Charged $1.00"],', '    [123456, "Charged $1234.56"],', '    [1, "Charged $0.01"],'];
+      const table = (cases: string[], body = "    expect(await charge(cents)).toBe(message);") => [
+        "  it.each([",
+        ...cases,
+        '  ])("formats %i cents", async (cents, message) => {',
+        body,
+        "  });",
+      ];
+      expect(signalsOf([change("tests/charge.test.ts", { removed, added: table(rows) })], "assertions-removed")).toEqual([]);
+
+      // Folding that rewrites the expected values, or a body that cannot fail, still counts as removal.
+      const rewritten = rows.map((row) => row.replace(/\$([\d.]+)/, "$$0.00"));
+      expect(signalsOf([change("tests/charge.test.ts", { removed, added: table(rewritten) })], "assertions-removed")).toHaveLength(1);
+      const tautology = table(rows, "    expect(message).toBe(message);");
+      expect(signalsOf([change("tests/charge.test.ts", { removed, added: tautology })], "assertions-removed")).toHaveLength(1);
+    });
+
+    it("keeps assertions removed together with the functions they called as a weak signal", () => {
+      const changes: ChangedFile[] = [
+        {
+          path: "src/domain/pricing.ts",
+          status: "modified",
+          added: [],
+          removed: lines(12, ["export function applyDiscount(amount: number, percent: number): number {", "  return amount;", "}"]),
+        },
+        {
+          path: "tests/pricing.test.ts",
+          status: "modified",
+          added: [],
+          removed: lines(9, [
+            '  it("applies a percentage discount", () => {',
+            "    const discounted = applyDiscount(200, 10);",
+            "    expect(discounted).toBe(180);",
+            "    expect(applyDiscount(0, 10)).toBe(0);",
+            "    expect(() => applyDiscount(100, 120)).toThrow();",
+            "  });",
+          ]),
+        },
+      ];
+      const signals = signalsOf(changes, "assertions-removed");
+      expect(signals).toHaveLength(1);
+      expect(signals[0]).toMatchObject({ strong: false, severity: "warning" });
+      expect(signals[0].message).toBe("3 assertions removed and none added, together with the code they tested (applyDiscount)");
+
+      // The function survives under the same name (a signature change): the removal stays strong.
+      const kept = changes.map((entry) => (
+        entry.path === "src/domain/pricing.ts" ? { ...entry, added: lines(12, ["export function applyDiscount(amount: number): number {"]) } : entry
+      ));
+      expect(signalsOf(kept, "assertions-removed").map((entry) => entry.strong)).toEqual([true]);
+      // Wrapped rather than removed: the name is still in the code the change adds.
+      const wrapped = changes.map((entry) => (
+        entry.path === "src/domain/pricing.ts" ? { ...entry, added: lines(12, ["export const applyDiscount = memoize(discount);"]) } : entry
+      ));
+      expect(signalsOf(wrapped, "assertions-removed").map((entry) => entry.strong)).toEqual([true]);
+    });
+
+    it("keeps unrelated assertion removals strong when other code is removed", () => {
+      const signals = signalsOf(
+        [
+          change("src/util/legacy.ts", { removed: ["export function legacyFormat(value: number): string {", "  return String(value);", "}"] }),
+          change("tests/pricing.test.ts", {
+            removed: ["    expect(discounted).toBe(180);", "    expect(applyDiscount(0, 10)).toBe(0);", "    expect(() => applyDiscount(100, 120)).toThrow();"],
+          }),
+        ],
+        "assertions-removed",
+      );
+      expect(signals.map((entry) => entry.strong)).toEqual([true]);
+    });
+
+    it("reports an assertion replaced by one that cannot fail once, as assertion-trivialized", () => {
+      const signals = detectVerificationWeakening([
+        change("tests/pricing.test.ts", { removed: ["    expect(discounted).toBe(180);"], added: ["    expect(true).toBe(true);"] }),
+      ]);
+      expect(signals.map((entry) => entry.signal)).toEqual(["assertion-trivialized"]);
+    });
   });
 });

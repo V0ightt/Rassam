@@ -49,3 +49,6 @@ next-env.d.ts
 
 # demo video project (source, renders, caches); deliverables live in docs/media
 /video/
+
+# staged npm package for the CLI (npm run pack:cli)
+/.pack/

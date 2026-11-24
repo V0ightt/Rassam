@@ -1,0 +1,48 @@
+{
+  "name": "@v0ightt/rassam",
+  "version": "0.4.0",
+  "description": "The architecture contract for agent-built software: the rassam CLI (blueprint, CI gate) and the MCP server coding agents ask before they edit.",
+  "keywords": [
+    "architecture",
+    "architecture-as-code",
+    "blueprint",
+    "coding-agents",
+    "ai-agents",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ci",
+    "github-action",
+    "code-review",
+    "dependency-rules"
+  ],
+  "homepage": "https://github.com/V0ightt/Rassam#readme",
+  "bugs": {
+    "url": "https://github.com/V0ightt/Rassam/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/V0ightt/Rassam.git",
+    "directory": "packages/rassam"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "rassam": "rassam.mjs"
+  },
+  "files": [
+    "rassam.mjs",
+    "schema/*.schema.json",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "mcpName": "io.github.V0ightt/rassam",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

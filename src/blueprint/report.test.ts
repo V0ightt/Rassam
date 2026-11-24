@@ -12,6 +12,7 @@ import {
   renderText,
   verdict,
 } from "./report";
+import { WEAKENING_APPROVED, WEAKENING_NEEDS_APPROVAL } from "./diff";
 import type { GraphView } from "./report";
 import type { CheckReport, CheckSummary, Finding } from "./types";
 
@@ -600,5 +601,71 @@ describe("markdown table escaping", () => {
     const row = md.split("\n").find((line) => line.includes("component-changed")) ?? "";
     expect(row).toContain(String.raw`| a\\\|b |`);
     expect(row).toContain(String.raw`path C:\\x \| y`);
+  });
+});
+
+describe("weakened tests and checks awaiting approval", () => {
+  const skipped = finding({
+    id: "v-1",
+    kind: "verification-weakened",
+    severity: "error",
+    ruleId: undefined,
+    reason: undefined,
+    title: "Verification weakened (test-skipped): tests/orders.test.ts",
+    message: `Test skipped or disabled: it.skip("rejects an empty order"). ${WEAKENING_NEEDS_APPROVAL}`,
+    components: [],
+    locations: [{ path: "tests/orders.test.ts", line: 11 }],
+    score: 150,
+  });
+  const gutted = finding({
+    ...skipped,
+    id: "v-2",
+    title: "Verification weakened (assertions-removed): tests/pricing.test.ts",
+    message: `3 assertions removed and none added. ${WEAKENING_NEEDS_APPROVAL}`,
+    locations: [{ path: "tests/pricing.test.ts", line: 9 }],
+  });
+  const ciWarning = finding({
+    ...skipped,
+    id: "v-3",
+    severity: "warning",
+    title: "Verification weakened (ci-weakened): .github/workflows/ci.yml",
+    message: "CI weakened: step failures are ignored (continue-on-error: true)",
+  });
+  const diff = (findings: Finding[], approved = false) => report(findings, { mode: "diff", base: { ref: "main" }, head: { ref: "feature" }, approved });
+
+  it("tells the reader of the sticky comment who must act, and how", () => {
+    const md = renderMarkdown(diff([skipped, gutted, ciWarning]));
+    expect(md).toContain("### Weakened tests and checks");
+    expect(md).toContain(
+      "⚠ **Not approved:** 2 changes weaken the tests or checks agents are graded by (`test-skipped`, `assertions-removed`). " +
+        "A human must review them and apply the `rassam:approved` label, or the change must restore the checks.",
+    );
+    expect(md.indexOf("### Needs your attention")).toBeLessThan(md.indexOf("### Weakened tests and checks"));
+    expect(renderMarkdown(diff([skipped]), { approveLabel: "arch-ok" })).toContain(
+      "1 change weakens the tests or checks agents are graded by (`test-skipped`). A human must review it and apply the `arch-ok` label, or the change must restore the check.",
+    );
+  });
+
+  it("records an approval, and says nothing when only weak signals warn", () => {
+    const approved = { ...skipped, severity: "info" as const, message: `Test skipped or disabled: it.skip(…). ${WEAKENING_APPROVED}` };
+    expect(renderMarkdown(diff([approved], true))).toContain("✅ **Approved:** 1 change that weakens the tests or checks carried a human-approved label.");
+    expect(renderMarkdown(diff([ciWarning]))).not.toContain("### Weakened tests and checks");
+    expect(renderMarkdown(diff([{ ...skipped, isNew: false }]))).not.toContain("### Weakened tests and checks");
+  });
+
+  it("explains the same in the terminal", () => {
+    const text = renderText(diff([skipped, gutted]));
+    expect(text).toContain("Weakened tests and checks (2, NOT approved)");
+    expect(text).toContain("test-skipped, assertions-removed: a human must review them and apply the rassam:approved label, or the change must restore the checks.");
+    const approved = { ...skipped, severity: "info" as const, message: `x. ${WEAKENING_APPROVED}` };
+    expect(renderText(diff([approved], true))).toContain("Weakened tests and checks (1, approved by a human)");
+  });
+
+  it("carries the instruction into SARIF and annotations through the message", () => {
+    const sarif = renderSarif(diff([skipped])) as { runs: Array<{ results: Array<{ level: string; message: { text: string } }>; tool: { driver: { rules: Array<{ help: { text: string } }> } } }> };
+    expect(sarif.runs[0].results[0].level).toBe("error");
+    expect(sarif.runs[0].results[0].message.text).toContain("apply the approval label (rassam:approved by default)");
+    expect(sarif.runs[0].tool.driver.rules[0].help.text).toContain("until a human applies the approval label");
+    expect(renderGithubAnnotations(diff([skipped]))).toContain("::error file=tests/orders.test.ts,line=11");
   });
 });

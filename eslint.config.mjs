@@ -17,6 +17,10 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated CLI bundle (rebuild with npm run build:cli).
     "action/dist/**",
+    // Staged npm package (npm run pack:cli); it holds a copy of the bundle.
+    ".pack/**",
+    // The demo film's local, gitignored source project and its vendored minified libraries.
+    "video/**",
   ]),
 ]);
 

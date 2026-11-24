@@ -2,6 +2,7 @@
 // audit budget: every renderer leads with a short, ranked "needs your
 // attention" list backed by file:line evidence and collapses the rest.
 
+import { WEAKENING_APPROVED } from "./diff";
 import { BLUEPRINT_PATH, PROJECT_URL } from "./schema";
 import type { Severity } from "./schema";
 import type { BlueprintChange, CheckReport, Finding, FindingKind, FindingLocation, ImpactReport, ReachReport } from "./types";
@@ -15,6 +16,9 @@ export interface GraphView {
 }
 
 export const COMMENT_MARKER = "<!-- rassam:blueprint-check -->";
+
+/** The pull request label a human applies to approve weakening changes (the CLI's and the Action's default). */
+export const DEFAULT_APPROVE_LABEL = "rassam:approved";
 
 const DEFAULT_BUDGET = 5;
 const MAX_LOCATIONS = 3;
@@ -63,7 +67,7 @@ const KIND_INFO: Record<FindingKind, { label: string; help: string }> = {
   },
   "verification-weakened": {
     label: "Verification weakened",
-    help: "The change weakens checks: skipped or deleted tests, removed assertions, loosened CI.",
+    help: "The change weakens checks: skipped or deleted tests, removed assertions, loosened CI. Strong signals fail the change until a human applies the approval label.",
   },
   "contract-weakened": {
     label: "Contract weakened",
@@ -191,6 +195,30 @@ function sortedContractChanges(changes: BlueprintChange[]): BlueprintChange[] {
   return [...changes.filter((change) => change.weakens), ...changes.filter((change) => !change.weakens)];
 }
 
+/**
+ * Weakened tests and checks that wait for a human. Every new
+ * verification-weakened error is one: a strong signal under
+ * `policy.verificationWeakening: "require-approval"`, or a forced zero exit
+ * under either setting, and approval clears each of them.
+ */
+function testsAwaitingApproval(report: CheckReport): Finding[] {
+  return report.findings.filter((finding) => finding.isNew && finding.kind === "verification-weakened" && finding.severity === "error");
+}
+
+/** Weakened tests and checks that a human approved in this change. */
+function testsApproved(report: CheckReport): Finding[] {
+  if (!report.approved) return [];
+  return report.findings.filter((finding) => (
+    finding.isNew && finding.kind === "verification-weakened" && finding.severity === "info" && finding.message.endsWith(WEAKENING_APPROVED)
+  ));
+}
+
+/** Distinct signal names, read from titles such as "Verification weakened (test-skipped): path". */
+function signalNames(findings: Finding[]): string[] {
+  const names = findings.map((finding) => /^Verification weakened \(([\w-]+)\)/.exec(finding.title)?.[1]).filter((name): name is string => Boolean(name));
+  return [...new Set(names)];
+}
+
 function hasImpact(impact: ImpactReport | undefined): impact is ImpactReport {
   return !!impact && (impact.touchedComponents.length > 0 || impact.dependents.length > 0);
 }
@@ -297,6 +325,20 @@ function textContractChanges(report: CheckReport, paint: Paint): string[] {
   return lines;
 }
 
+function textTestApproval(report: CheckReport, paint: Paint, label: string): string[] {
+  const waiting = testsAwaitingApproval(report);
+  if (waiting.length > 0) {
+    const signals = signalNames(waiting);
+    return [
+      "",
+      paint(ANSI.bold, `Weakened tests and checks (${waiting.length}, NOT approved)`),
+      `  ${signals.length ? `${signals.join(", ")}: ` : ""}a human must review ${waiting.length === 1 ? "it" : "them"} and apply the ${oneLine(label)} label, or the change must restore the ${waiting.length === 1 ? "check" : "checks"}.`,
+    ];
+  }
+  const approved = testsApproved(report);
+  return approved.length > 0 ? ["", `Weakened tests and checks (${approved.length}, approved by a human)`] : [];
+}
+
 function textImpact(report: CheckReport): string[] {
   if (!hasImpact(report.impact)) return [];
   const impact = report.impact;
@@ -340,7 +382,10 @@ function textReach(report: CheckReport, paint: Paint): string[] {
   return lines;
 }
 
-export function renderText(report: CheckReport, options: { color?: boolean; budget?: number; verbose?: boolean; failOn?: FailOn } = {}): string {
+export function renderText(
+  report: CheckReport,
+  options: { color?: boolean; budget?: number; verbose?: boolean; failOn?: FailOn; approveLabel?: string } = {},
+): string {
   const paint = painter(options.color === true);
   const budget = budgetOf(options.budget);
   const fresh = report.findings.filter((finding) => finding.isNew);
@@ -356,6 +401,7 @@ export function renderText(report: CheckReport, options: { color?: boolean; budg
     for (const finding of top) lines.push(...textFinding(finding, paint));
   }
   lines.push(...textRemaining(rest, options.verbose === true, paint));
+  lines.push(...textTestApproval(report, paint, options.approveLabel ?? DEFAULT_APPROVE_LABEL));
   lines.push(...textContractChanges(report, paint));
   lines.push(...textImpact(report));
   const activity = agentActivityLine(report);
@@ -484,6 +530,24 @@ function mdContractChanges(report: CheckReport): string[] {
   return lines;
 }
 
+function mdTestApproval(report: CheckReport, label: string): string[] {
+  const waiting = testsAwaitingApproval(report);
+  const approved = testsApproved(report);
+  if (waiting.length === 0 && approved.length === 0) return [];
+  const lines = ["### Weakened tests and checks", ""];
+  if (waiting.length > 0) {
+    const signals = signalNames(waiting).map(codeSpan).join(", ");
+    const one = waiting.length === 1;
+    lines.push(
+      `⚠ **Not approved:** ${plural(waiting.length, "change")} weaken${one ? "s" : ""} the tests or checks agents are graded by${signals ? ` (${signals})` : ""}. ` +
+        `A human must review ${one ? "it" : "them"} and apply the ${codeSpan(label)} label, or the change must restore the ${one ? "check" : "checks"}.`,
+    );
+  } else {
+    lines.push(`✅ **Approved:** ${plural(approved.length, "change")} that weaken${approved.length === 1 ? "s" : ""} the tests or checks carried a human-approved label.`);
+  }
+  return lines;
+}
+
 function mdImpact(report: CheckReport): string[] {
   if (!hasImpact(report.impact)) return [];
   const impact = report.impact;
@@ -582,7 +646,7 @@ function cutAtLine(text: string, max: number): string {
 
 export function renderMarkdown(
   report: CheckReport,
-  options: { budget?: number; marker?: string; repoUrl?: string; headSha?: string; maxChars?: number; failOn?: FailOn } = {},
+  options: { budget?: number; marker?: string; repoUrl?: string; headSha?: string; maxChars?: number; failOn?: FailOn; approveLabel?: string } = {},
 ): string {
   const link: LinkContext = { repoUrl: options.repoUrl, headSha: options.headSha };
   const budget = budgetOf(options.budget);
@@ -601,6 +665,8 @@ export function renderMarkdown(
     top.forEach((finding, index) => sections[1].push(...mdAttentionItem(finding, index, link)));
     if (fresh.length > top.length) sections[1].push("", `…and ${plural(fresh.length - top.length, "more new finding")} in the details below.`);
   }
+  const tests = mdTestApproval(report, options.approveLabel ?? DEFAULT_APPROVE_LABEL);
+  if (tests.length) sections.push(tests);
   const contract = mdContractChanges(report);
   if (contract.length) sections.push(contract);
   const impact = mdImpact(report);

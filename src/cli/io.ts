@@ -16,6 +16,11 @@ export interface Io {
   fetch?: typeof fetch;
   /** The clock, replaceable in tests (default: the system clock). */
   now?(): Date;
+  /**
+   * Ask the person a yes/no question. Present only when both stdin and stdout
+   * are an interactive terminal; commands must work without it (CI, agents).
+   */
+  ask?(question: string, defaultYes: boolean): Promise<boolean>;
 }
 
 export const EXIT_OK = 0;
@@ -45,7 +50,20 @@ export class UsageError extends CliError {
   }
 }
 
+async function askOnTerminal(question: string, defaultYes: boolean): Promise<boolean> {
+  const { createInterface } = await import("node:readline/promises");
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await terminal.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"} `)).trim().toLowerCase();
+    if (!answer) return defaultYes;
+    return /^y(es)?$/.test(answer);
+  } finally {
+    terminal.close();
+  }
+}
+
 export function processIo(): Io {
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   return {
     stdout: (text) => void process.stdout.write(text),
     stderr: (text) => void process.stderr.write(text),
@@ -55,6 +73,7 @@ export function processIo(): Io {
     stdin: process.stdin,
     stdoutStream: process.stdout,
     fetch: typeof fetch === "function" ? fetch : undefined,
+    ...(interactive && !process.env.CI ? { ask: askOnTerminal } : {}),
   };
 }
 

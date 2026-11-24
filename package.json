@@ -29,6 +29,7 @@
     "bundle:check": "node scripts/check-bundle-budget.mjs",
     "rassam": "tsx src/cli/index.ts",
     "build:cli": "node scripts/build-cli.mjs",
+    "pack:cli": "node scripts/pack-cli.mjs",
     "blueprint:schema": "tsx scripts/generate-blueprint-schema.ts",
     "blueprint:check": "tsx src/cli/index.ts check",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run bundle:check"

@@ -2,6 +2,7 @@
 // Supports `--flag value`, `--flag=value`, boolean flags, `--no-flag`,
 // `-h/--help`, `-v/--version` and `--` to end flag parsing.
 
+import { ENGINE_VERSION, PACKAGE_NAME } from "../blueprint/constants";
 import { UsageError } from "./io";
 
 export type FlagType = "boolean" | "string" | "number";
@@ -59,18 +60,28 @@ const FORMAT_TEXT_JSON: FlagSpec = {
 export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "init",
-    summary: "Derive a draft blueprint from the working tree",
+    summary: "Draft a blueprint from the code, then wire up agents and CI",
     flags: [
-      { name: "force", type: "boolean", description: "Overwrite an existing .rassam/blueprint.json" },
+      { name: "force", type: "boolean", description: "Replace an existing .rassam/blueprint.json with a fresh draft" },
       { name: "name", type: "string", valueName: "name", description: "System name (default: the directory name)" },
-      { name: "dry-run", type: "boolean", description: "Print the draft instead of writing it" },
+      { name: "dry-run", type: "boolean", description: "Print the draft instead of writing anything" },
+      { name: "yes", type: "boolean", description: "Also write all three: the MCP entry, the AGENTS.md rules and the workflow" },
+      { name: "mcp", type: "boolean", description: "Add the rassam MCP server to .mcp.json (--no-mcp to skip)" },
+      { name: "agents", type: "boolean", description: "Write the contract as rules in AGENTS.md and point CLAUDE.md at it (--no-agents to skip)" },
+      { name: "workflow", type: "boolean", description: "Add .github/workflows/rassam.yml, the pull request gate (--no-workflow to skip)" },
       ROOT_FLAG,
     ],
     details: [
       "The draft only records what static analysis can see. Intent, rules and",
       "invariants are yours to write: they are what agents cannot infer.",
+      "",
+      "In a terminal, init asks before writing each of .mcp.json, AGENTS.md (plus a",
+      "pointer in CLAUDE.md) and .github/workflows/rassam.yml. Elsewhere it writes",
+      "only what the flags ask for. Every file is written idempotently: text outside",
+      "Rassam's markers and existing settings are never changed. With a blueprint",
+      "already in place, init skips the draft and only wires what you ask for.",
     ],
-    examples: ["rassam init", "rassam init --name Payments --dry-run"],
+    examples: ["rassam init", "rassam init --yes", "rassam init --name Payments --dry-run", "rassam init --agents --no-workflow"],
   },
   {
     name: "check",
@@ -82,12 +93,12 @@ export const COMMANDS: readonly CommandSpec[] = [
       { name: "sarif-output", type: "string", valueName: "file", description: "Additionally write a SARIF report to a file" },
       { name: "fail-on", type: "string", valueName: "level", choices: ["error", "warning", "never"], default: "error", description: "Exit 1 when findings at or above this severity exist: error, warning or never" },
       { name: "budget", type: "number", valueName: "n", description: "Maximum number of findings to show (attention budget)" },
-      { name: "approved", type: "boolean", description: "A human approved the contract changes in this change" },
+      { name: "approved", type: "boolean", description: "A human approved this change's weakening of the contract or the tests" },
       { name: "run-invariants", type: "boolean", description: "Run invariant check commands (taken from the base blueprint in diff mode)" },
       { name: "invariant-timeout", type: "number", valueName: "seconds", default: 300, description: "Timeout for each invariant command" },
       { name: "github", type: "boolean", description: "GitHub Actions mode: PR context, annotations, step summary" },
       { name: "comment", type: "boolean", description: "With --github: create or update one sticky PR comment" },
-      { name: "approve-label", type: "string", valueName: "label", default: "rassam:approved", description: "With --github: PR label that counts as human approval" },
+      { name: "approve-label", type: "string", valueName: "label", default: "rassam:approved", description: "With --github: PR label that counts as human approval of contract or test weakening" },
       { name: "verbose", type: "boolean", description: "Show pre-existing findings and extra detail" },
       { name: "color", type: "boolean", default: true, description: "Colored output (disable with --no-color or NO_COLOR)" },
       ROOT_FLAG,
@@ -236,6 +247,28 @@ export const COMMANDS: readonly CommandSpec[] = [
     examples: ['rassam do "forbid ui from importing db because pages go through the API"', 'rassam do "add a component Payments for src/payments/**" --write'],
   },
   {
+    name: "instructions",
+    summary: "Write the contract's rules as prose into AGENTS.md, for every agent to read",
+    flags: [
+      { name: "write", type: "boolean", description: "Create or refresh the block in the file (default: print it)" },
+      { name: "check", type: "boolean", description: "Exit 1 when the block is missing or out of date (for CI or a pre-commit hook)" },
+      { name: "file", type: "string", valueName: "path", description: "Instruction file to keep current (default: AGENTS.md, in whatever case it exists)" },
+      { name: "command", type: "string", valueName: "cmd", description: "How agents run the CLI in this repository (default: the pinned npx command)" },
+      { name: "no-mcp", type: "boolean", description: "Leave out the sentences about the MCP tools (included when .mcp.json configures rassam)" },
+      ROOT_FLAG,
+    ],
+    details: [
+      "The block between <!-- rassam:agents:start --> and <!-- rassam:agents:end -->",
+      "states the rules, protected paths and invariants in plain language, plus the",
+      "standing orders: never weaken a test or a check, and stop and report when a",
+      "task needs a rule broken. It is generated from the blueprint alone, so run",
+      "this again whenever the contract changes. Text outside the markers is kept.",
+      "",
+      "Exit codes: 0 ok, 1 with --check when the block is missing or stale, 2 usage or configuration error.",
+    ],
+    examples: ["rassam instructions", "rassam instructions --write", "rassam instructions --check"],
+  },
+  {
     name: "reach",
     summary: "Summarize what coding agents can reach (MCP servers, permissions, secrets)",
     flags: [FORMAT_TEXT_JSON, ROOT_FLAG],
@@ -255,8 +288,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: "Start the MCP server on stdio (for coding agents)",
     flags: [ROOT_FLAG],
     details: [
-      "Add it to an agent with .mcp.json:",
-      '  {"mcpServers":{"rassam":{"command":"npx","args":["rassam","mcp"]}}}',
+      "Add it to an agent with .mcp.json (rassam init --mcp writes this for you):",
+      `  {"mcpServers":{"rassam":{"command":"npx","args":["-y","${PACKAGE_NAME}@${ENGINE_VERSION}","mcp"]}}}`,
     ],
   },
 ];

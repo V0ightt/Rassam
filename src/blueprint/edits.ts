@@ -173,6 +173,7 @@ export const blueprintEditSchema = z.discriminatedUnion("op", [
     unmappedFiles: z.enum(["off", "info", "warning"]).optional(),
     includeTypeOnly: z.boolean().optional(),
     verificationHeuristics: z.boolean().optional(),
+    verificationWeakening: z.enum(["require-approval", "warn"]).optional(),
     ignoreAdd: z.array(globSchema).max(500).optional(),
     ignoreRemove: z.array(globSchema).max(500).optional(),
   }),
@@ -1065,6 +1066,11 @@ function setPolicy(context: EditContext, edit: EditOf<"set_policy">): EditOutcom
     if (!value) weakens = true;
     changes.push(key === "includeTypeOnly" ? `type-only imports ${value ? "counted" : "ignored"}` : `verification heuristics ${value ? "on" : "off"}`);
     policy[key] = value;
+  }
+  if (edit.verificationWeakening !== undefined && edit.verificationWeakening !== policy.verificationWeakening) {
+    if (edit.verificationWeakening === "warn") weakens = true;
+    changes.push(edit.verificationWeakening === "warn" ? "weakened tests only warn" : "weakened tests need a human's approval");
+    policy.verificationWeakening = edit.verificationWeakening;
   }
   const added = [...new Set(edit.ignoreAdd ?? [])].filter((glob) => !policy.ignore.includes(glob));
   if (added.length) {

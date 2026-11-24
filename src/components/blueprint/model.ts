@@ -24,11 +24,25 @@ export const HUMAN_NUDGE_THRESHOLD = 0.5;
 
 export type Verdict = 'pass' | 'warn' | 'fail';
 
+/**
+ * Pre-existing findings (a fresh draft's rules that the code already broke)
+ * existed before the contract did: they are listed, but they do not make the
+ * project "failing" or count as rulings.
+ */
+export function needsRuling(finding: Finding): boolean {
+  return finding.isNew !== false && (finding.severity === 'error' || finding.severity === 'warning');
+}
+
 export function reportVerdict(report: CheckReport | null): Verdict | null {
   if (!report) return null;
-  if (report.findings.some((finding) => finding.severity === 'error')) return 'fail';
-  if (report.findings.some((finding) => finding.severity === 'warning')) return 'warn';
+  if (report.findings.some((finding) => finding.isNew !== false && finding.severity === 'error')) return 'fail';
+  if (report.findings.some((finding) => finding.isNew !== false && finding.severity === 'warning')) return 'warn';
   return 'pass';
+}
+
+/** Errors and warnings the code had before the contract existed. */
+export function preExistingCount(report: CheckReport | null): number {
+  return (report?.findings ?? []).filter((finding) => finding.isNew === false && finding.severity !== 'info').length;
 }
 
 export const VERDICT_LABEL: Record<Verdict, string> = {

@@ -44,6 +44,7 @@
           "defaults": true
         },
         "verificationHeuristics": true,
+        "verificationWeakening": "require-approval",
         "ignore": []
       },
       "type": "object",
@@ -96,6 +97,14 @@
         "verificationHeuristics": {
           "default": true,
           "type": "boolean"
+        },
+        "verificationWeakening": {
+          "default": "require-approval",
+          "type": "string",
+          "enum": [
+            "require-approval",
+            "warn"
+          ]
         },
         "ignore": {
           "default": [],
