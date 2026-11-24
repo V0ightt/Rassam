@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "The architecture contract for agent-built software: a human-owned blueprint, a CI gate, an MCP server and a live system design.",
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/V0ightt/Rassam.git"

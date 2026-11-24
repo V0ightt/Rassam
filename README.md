@@ -5,7 +5,7 @@
   One place where you and your coding agents check before changing anything.</p>
 
   [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
-  ![AGPL v3](https://img.shields.io/badge/license-AGPL%20v3-blue?style=flat-square)
+  ![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
 </div>
 
 <p align="center">
@@ -263,6 +263,10 @@ Why we built it this way, with sources: [the research report](reports/Rassam%20p
 
 ## Say hi
 
-Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/)
+Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/) · [mrwipbussiness@gmail.com](mailto:mrwipbussiness@gmail.com)
+
+## License
+
+[Apache License 2.0](LICENSE). Use it at work, change it, ship it; keep the license and the [notice](NOTICE) with it.
 
 Built with Claude. Thanks to the GitHub Student Developer Pack.

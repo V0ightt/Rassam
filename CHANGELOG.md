@@ -17,6 +17,9 @@ All notable changes are documented here. Rassam follows Semantic Versioning once
 
 ### Changed
 
+- **License:** Rassam is now released under the Apache License 2.0 (previously AGPL-3.0-only). Earlier releases keep the license they were published under.
+- Contact and security reports go to the maintainer's email in `SECURITY.md`; links to the retired rassam.dev site are gone and the blueprint `$schema` URL now resolves on GitHub.
+
 - The 1.0 release is scoped to public GitHub.com repositories and local browser persistence.
 
 ### Removed
