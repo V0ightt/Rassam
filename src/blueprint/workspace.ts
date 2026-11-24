@@ -1,7 +1,7 @@
 import { runCheck, buildSnapshotModel, type CheckInput } from "./check";
 import { DEFAULT_TRIPWIRES } from "./constants";
 import { compileGlob } from "./glob";
-import { assignComponents, buildComponentGraph } from "./graph";
+import { assignComponents, buildComponentGraph, cyclePath } from "./graph";
 import { computeImpact } from "./impact";
 import { buildFileGraph, languageOf, normalizePackageName } from "./imports";
 import * as paths from "./paths";
@@ -108,11 +108,30 @@ export interface BlueprintOverview {
 
 export type GraphEdgeStatus = "declared" | "undeclared" | "forbidden" | "missing";
 
-export interface WorkspaceGraphView {
-  /** `files` is the number of files the component owns in the analyzed snapshot. */
-  components: Array<{ id: string; name: string; kind?: string; external?: boolean; findings?: number; files?: number }>;
-  edges: Array<{ from: string; to: string; status: GraphEdgeStatus; count?: number }>;
+/** A dependency cycle found by a `no-cycles` rule, shown once: on its edges and in a summary line. */
+export interface GraphCycle {
+  ruleId?: string;
+  severity: Severity;
+  /** Component ids around one concrete loop, the first repeated at the end: ["api", "apps", "api"]. */
+  path: string[];
 }
+
+export interface WorkspaceGraphView {
+  /**
+   * `files` is the number of files the component owns in the analyzed snapshot.
+   * `findings` counts the rule violations that involve the component, except
+   * dependency cycles (see `cycles`); `severity` is the worst of them.
+   */
+  components: Array<{ id: string; name: string; kind?: string; external?: boolean; findings?: number; severity?: Severity; files?: number }>;
+  /** `cycle` marks an edge on the path of a dependency cycle. */
+  edges: Array<{ from: string; to: string; status: GraphEdgeStatus; count?: number; cycle?: true }>;
+  /** Dependency cycles, each once; absent when there are none. */
+  cycles?: GraphCycle[];
+}
+
+const SEVERITY_RANK: Record<Severity, number> = { info: 0, warning: 1, error: 2 };
+/** Violations of a rule about one dependency; their `components` are [from, to]. */
+const EDGE_VIOLATIONS = new Set<string>(["forbidden-dependency", "allow-only-violation", "layer-violation"]);
 
 export interface Workspace {
   blueprint: Blueprint | null;
@@ -447,30 +466,58 @@ export function createWorkspace(files: SourceFile[], blueprint: Blueprint | null
     const violations = evaluateRules(model, compiled);
     const forbiddenPairs = new Set<string>();
     const findingCounts = new Map<string, number>();
+    const worst = new Map<string, Severity>();
+    const cycles = new Map<string, NonNullable<WorkspaceGraphView["cycles"]>[number]>();
     for (const violation of violations) {
-      if (violation.components.length >= 2) forbiddenPairs.add(`${violation.components[0]}\u0000${violation.components[1]}`);
-      for (const id of violation.components) findingCounts.set(id, (findingCounts.get(id) ?? 0) + 1);
+      if (violation.kind === "dependency-cycle") {
+        // A cycle lists every member of its strongly connected component; counting it on each
+        // card would paint most of the system red for one warning. Show one concrete loop instead.
+        const entry = compiled.find((candidate) => candidate.rule.id === violation.ruleId);
+        const includeTypeOnly = entry && "includeTypeOnly" in entry ? entry.includeTypeOnly : blueprint.policy.includeTypeOnly;
+        const path = cyclePath(violation.components, componentGraph.edges.filter((edge) => includeTypeOnly || !edge.typeOnly));
+        const key = path.join("\u0000");
+        const known = cycles.get(key);
+        if (!known) cycles.set(key, { ...(violation.ruleId ? { ruleId: violation.ruleId } : {}), severity: violation.severity, path });
+        else if (SEVERITY_RANK[violation.severity] > SEVERITY_RANK[known.severity]) known.severity = violation.severity;
+        continue;
+      }
+      // Only a rule about one dependency marks that dependency, from its actual source to its target.
+      if (EDGE_VIOLATIONS.has(violation.kind) && violation.components.length === 2) forbiddenPairs.add(`${violation.components[0]}\u0000${violation.components[1]}`);
+      for (const id of new Set(violation.components)) {
+        findingCounts.set(id, (findingCounts.get(id) ?? 0) + 1);
+        const current = worst.get(id);
+        if (!current || SEVERITY_RANK[violation.severity] > SEVERITY_RANK[current]) worst.set(id, violation.severity);
+      }
+    }
+    const cycleEdges = new Set<string>();
+    for (const cycle of cycles.values()) {
+      for (let index = 0; index + 1 < cycle.path.length; index += 1) cycleEdges.add(`${cycle.path[index]}\u0000${cycle.path[index + 1]}`);
     }
     const edges: WorkspaceGraphView["edges"] = componentGraph.edges.map((edge) => {
       const key = `${edge.from}\u0000${edge.to}`;
       const open = declared.has(key) || Boolean(componentById.get(edge.to)?.public) || componentById.get(edge.from)?.kind === "test";
       const status: GraphEdgeStatus = forbiddenPairs.has(key) ? "forbidden" : open ? "declared" : "undeclared";
-      return { from: edge.from, to: edge.to, status, count: edge.count };
+      return { from: edge.from, to: edge.to, status, count: edge.count, ...(cycleEdges.has(key) ? { cycle: true as const } : {}) };
     });
     const observed = new Set(componentGraph.edges.map((edge) => `${edge.from}\u0000${edge.to}`));
     for (const dependency of blueprint.dependencies) {
       if (!observed.has(`${dependency.from}\u0000${dependency.to}`)) edges.push({ from: dependency.from, to: dependency.to, status: "missing" });
     }
     return {
-      components: blueprint.components.map((component) => ({
-        id: component.id,
-        name: component.name,
-        kind: component.kind,
-        external: Boolean(component.external),
-        findings: findingCounts.get(component.id) ?? 0,
-        files: membership.componentFiles.get(component.id)?.length ?? 0,
-      })),
+      components: blueprint.components.map((component) => {
+        const severity = worst.get(component.id);
+        return {
+          id: component.id,
+          name: component.name,
+          kind: component.kind,
+          external: Boolean(component.external),
+          findings: findingCounts.get(component.id) ?? 0,
+          ...(severity ? { severity } : {}),
+          files: membership.componentFiles.get(component.id)?.length ?? 0,
+        };
+      }),
       edges,
+      ...(cycles.size ? { cycles: [...cycles.values()] } : {}),
     };
   };
 

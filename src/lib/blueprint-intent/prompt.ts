@@ -26,7 +26,7 @@ export const EDIT_OP_CATALOGUE: ReadonlyArray<{ op: string; fields: string; mean
   { op: "remove_invariant", fields: "id", meaning: "Delete an invariant." },
   { op: "add_decision", fields: 'title, decision, id?, context?, consequences?, status?: "proposed"|"accepted"|"superseded"|"deprecated", components?: id[], date?', meaning: "Record an architecture decision." },
   { op: "remove_decision", fields: "id", meaning: "Delete a decision." },
-  { op: "set_policy", fields: 'undeclaredDependencies?: "off"|"info"|"warning"|"error", unmappedFiles?: "off"|"info"|"warning", includeTypeOnly?, verificationHeuristics?, ignoreAdd?: glob[], ignoreRemove?: glob[]', meaning: "Change the check policy." },
+  { op: "set_policy", fields: 'undeclaredDependencies?: "off"|"info"|"warning"|"error", unmappedFiles?: "off"|"info"|"warning", includeTypeOnly?, verificationHeuristics?, verificationWeakening?: "require-approval"|"warn", ignoreAdd?: glob[], ignoreRemove?: glob[]', meaning: "Change the check policy." },
   { op: "set_runtime", fields: 'id, health?: { url, method?: "GET"|"HEAD", expectStatus?, timeoutMs? } | null, deployment?: { environment } | null, workflow?: { file } | null', meaning: "Say where a component runs so its live status can be probed." },
 ];
 

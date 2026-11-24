@@ -16,6 +16,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import AttentionTab from './AttentionTab';
+import { needsRuling } from './model';
 import ComponentsTab from './ComponentsTab';
 import IntentTab from './IntentTab';
 import ReachTab from './ReachTab';
@@ -136,7 +137,7 @@ export default function BlueprintPanel({
     loaded && githubProject && session.source?.kind === 'github'
     && (session.source.owner !== githubProject.owner || session.source.repo !== githubProject.repo || session.source.commitSha !== githubProject.commitSha),
   );
-  const attentionCount = report ? report.summary.errors + report.summary.warnings : 0;
+  const attentionCount = report ? report.findings.filter(needsRuling).length : 0;
   const githubName = githubProject ? `${githubProject.owner}/${githubProject.repo}@${githubProject.commitSha.slice(0, 7)}` : null;
 
   const loadButton = githubProject && (

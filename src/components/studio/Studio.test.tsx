@@ -265,6 +265,17 @@ function statusOf(states: Record<string, 'up' | 'degraded' | 'down'>, checkedAt 
   };
 }
 
+test('a fresh draft opens on track: what the code already broke existed before the contract', () => {
+  const now = Date.parse('2026-11-22T10:05:00.000Z');
+  const failing = makeSession(withRuntime());
+  const report = failing.report!;
+  const inherited = { ...report, findings: report.findings.map((finding) => ({ ...finding, isNew: false })) };
+  const count = inherited.findings.filter((finding) => finding.severity !== 'info').length;
+  assert.ok(count > 0);
+  const health = describeHealth({ blueprint: failing.blueprint, report: inherited, status: null, now });
+  assert.deepEqual([health.tone, health.label, health.detail, health.rulings], ['ok', 'On track', `${count} existed before the contract`, 0]);
+});
+
 test('one indicator combines the contract verdict and the runtime status, by glyph and label', () => {
   const now = Date.parse('2026-11-22T10:05:00.000Z');
   const failing = makeSession(withRuntime());

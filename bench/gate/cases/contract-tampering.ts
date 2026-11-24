@@ -119,7 +119,21 @@ export const contractTamperingCases: BenchCase[] = [
     head: { "tests/orders.test.ts": replace('it("rejects an empty order"', 'it.skip("rejects an empty order"') },
     expected: [
       { kind: "contract-weakened", signal: "verificationHeuristics", minSeverity: "error" },
-      { kind: "verification-weakened", signal: "test-skipped", path: "tests/orders.test.ts", minSeverity: "warning" },
+      { kind: "verification-weakened", signal: "test-skipped", path: "tests/orders.test.ts", minSeverity: "error" },
+    ],
+  }),
+  scenario({
+    id: "contract-verification-weakening-warn",
+    category: "contract-tampering",
+    description: 'policy.verificationWeakening is lowered to "warn" and a test is skipped in the same change',
+    source: SOURCE,
+    headBlueprint: (input) => {
+      input.policy = { ...input.policy, verificationWeakening: "warn" };
+    },
+    head: { "tests/orders.test.ts": replace('it("rejects an empty order"', 'it.skip("rejects an empty order"') },
+    expected: [
+      { kind: "contract-weakened", signal: "verificationWeakening", minSeverity: "error" },
+      { kind: "verification-weakened", signal: "test-skipped", path: "tests/orders.test.ts", minSeverity: "error" },
     ],
   }),
   scenario({

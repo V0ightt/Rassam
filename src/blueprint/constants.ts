@@ -2,6 +2,12 @@
 
 export const ENGINE_NAME = "rassam" as const;
 export const ENGINE_VERSION = "0.4.0";
+/**
+ * The npm package that ships the CLI and MCP server (`packages/rassam/`).
+ * Generated files (`.mcp.json`, workflows, agent instructions) run it with npx,
+ * so it must match the published name. A test keeps the manifest in step.
+ */
+export const PACKAGE_NAME = "@v0ightt/rassam";
 
 /** Files larger than this are listed but not parsed. */
 export const MAX_ANALYZED_FILE_BYTES = 512 * 1024;

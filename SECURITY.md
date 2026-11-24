@@ -6,7 +6,7 @@ Security fixes are applied to the latest stable release and the active release-c
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Email `contact@rassam.dev` with:
+Do not open a public issue for a suspected vulnerability. Email `mrwipbussiness@gmail.com` with:
 
 - Affected version or commit
 - Reproduction steps

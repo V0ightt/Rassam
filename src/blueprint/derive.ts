@@ -20,7 +20,7 @@ export interface DeriveOptions {
   author?: string;
   /** Target maximum number of source files per component before splitting. */
   maxFilesPerComponent?: number;
-  /** Upper bound on derived components. */
+  /** Upper bound on derived components, not counting the tests component (default 20). */
   maxComponents?: number;
 }
 
@@ -67,6 +67,10 @@ const KIND_BY_SEGMENT: Record<string, string> = {
   utils: "utility",
   util: "utility",
   helpers: "utility",
+  scripts: "utility",
+  tools: "utility",
+  docs: "documentation",
+  doc: "documentation",
   lib: "core",
   libs: "core",
   core: "core",
@@ -85,14 +89,37 @@ const KIND_BY_SEGMENT: Record<string, string> = {
   proxy: "proxy",
 };
 
-interface Cluster {
-  key: string;
-  globs: string[];
-  files: string[];
-  directory: string;
-}
-
 const PROVENANCE_SOURCE = "derived" as const;
+
+/** A folder with fewer source files than this is folded into its parent's leftovers instead of drawn on its own. */
+const MIN_FOLDER_FILES = 2;
+/** At most this many components come out of one folder; past it only substantial children stay separate. */
+const MAX_CHILDREN = 10;
+/** Size-based splitting stops at this folder depth. */
+const MAX_SPLIT_DEPTH = 6;
+/** Folders that hold one concern however many subfolders they have: never split per child. */
+const NO_SPLIT = new Set(["benchmarks", "benchmark", "bench", "examples", "example", "demo", "demos", "docs", "doc", "scripts", "e2e", "fixtures", "__fixtures__", "testdata", "migrations"]);
+/** `src/main/java` and friends, at the repository root or inside a module of a multi-module build. */
+const JVM_SOURCE_ROOT = /(?:^|\/)src\/main\/(?:java|kotlin|scala)$/;
+
+/** Files at the repository root that configure tools rather than make up the product. */
+const CONFIG_FILE_PATTERNS: readonly RegExp[] = [
+  /\.config\.[cm]?[jt]sx?$/i,
+  /^\.[\w.-]+rc\.[cm]?[jt]s$/i,
+  /\.conf\.[cm]?[jt]s$/i,
+  /^(?:gulpfile|gruntfile|jakefile|dangerfile)\.[cm]?[jt]s$/i,
+  /^(?:webpack|rollup|vite|vitest|jest|babel|playwright|cypress|tailwind|postcss|esbuild|tsup|eslint|prettier|commitlint|lint-staged|stylelint)\.[\w.-]+\.[cm]?[jt]s$/i,
+  /^(?:setupTests|setup-tests|test-setup|global-?setup|global-?teardown)\.[cm]?[jt]sx?$/i,
+  /\.(?:setup|workspace|preset)\.[cm]?[jt]sx?$/i,
+  /^(?:setup|conf|noxfile|fabfile|tasks|dodo|manage|conftest)\.py$/i,
+  /^build\.rs$/i,
+  /^magefile\.go$/i,
+];
+
+function isConfigFile(path: string): boolean {
+  const base = paths.basename(path);
+  return CONFIG_FILE_PATTERNS.some((pattern) => pattern.test(base));
+}
 
 function kindFor(directory: string): string {
   const segments = directory.split("/").filter(Boolean).reverse();
@@ -108,16 +135,43 @@ function directoryOfFile(path: string): string {
   return dir === "." ? "" : dir;
 }
 
-/** Recursively split the directory tree into clusters of reasonable size. */
-function clusterFiles(sourceFiles: string[], maxFiles: number): Cluster[] {
+/** Segment-wise ordinal comparison, so a folder sorts right before its own subfolders; `null` sorts after every name. */
+function compareSegments(left: ReadonlyArray<string | null>, right: ReadonlyArray<string | null>): number {
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (a === b) continue;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return a < b ? -1 : 1;
+  }
+  return left.length - right.length;
+}
+
+const segmentsOf = (directory: string): string[] => (directory ? directory.split("/") : []);
+const comparePaths = (left: string, right: string): number => compareSegments(segmentsOf(left), segmentsOf(right));
+
+// ── The folder tree of production source files ────────────────
+
+interface DirectoryTree {
+  count(dir: string): number;
+  direct(dir: string): string[];
+  children(dir: string): string[];
+  directories(): string[];
+  filesUnder(dir: string): string[];
+}
+
+function buildTree(sourceFiles: readonly string[]): DirectoryTree {
   const counts = new Map<string, number>();
   const direct = new Map<string, string[]>();
   const children = new Map<string, Set<string>>();
   for (const file of sourceFiles) {
     const dir = directoryOfFile(file);
-    direct.set(dir, [...(direct.get(dir) ?? []), file]);
-    let current = dir;
+    const own = direct.get(dir);
+    if (own) own.push(file);
+    else direct.set(dir, [file]);
     counts.set("", (counts.get("") ?? 0) + 1);
+    let current = dir;
     while (current) {
       counts.set(current, (counts.get(current) ?? 0) + 1);
       const parent = directoryOfFile(current);
@@ -127,34 +181,145 @@ function clusterFiles(sourceFiles: string[], maxFiles: number): Cluster[] {
       current = parent;
     }
   }
-
-  const filesUnder = (dir: string): string[] => sourceFiles.filter((file) => paths.isWithin(file, dir));
-  const clusters: Cluster[] = [];
-
-  const visit = (dir: string, depth: number): void => {
-    const total = counts.get(dir) ?? 0;
-    const subdirs = [...(children.get(dir) ?? [])].sort();
-    const directFiles = direct.get(dir) ?? [];
-    const mustSplit = dir === "" && subdirs.length > 0;
-    if (!mustSplit && (total <= maxFiles || subdirs.length === 0 || depth >= 6)) {
-      clusters.push({ key: dir || "root", globs: [dir ? `${dir}/**` : "/*"], files: dir ? filesUnder(dir) : directFiles, directory: dir });
-      return;
-    }
-    // Pass-through: a single subdirectory and no files of its own.
-    const small: string[] = [];
-    for (const sub of subdirs) {
-      if ((counts.get(sub) ?? 0) < 2 && subdirs.length > 1) small.push(sub);
-      else visit(sub, depth + 1);
-    }
-    if (directFiles.length || small.length) {
-      const globs = [...(directFiles.length ? [dir ? `${dir}/*` : "/*"] : []), ...small.map((sub) => `${sub}/**`)];
-      const files = [...directFiles, ...small.flatMap((sub) => filesUnder(sub))];
-      clusters.push({ key: dir ? `${dir}:root` : "root", globs, files, directory: dir });
-    }
+  const sorted = new Map([...children].map(([dir, set]) => [dir, [...set].sort(comparePaths)]));
+  return {
+    count: (dir) => counts.get(dir) ?? 0,
+    direct: (dir) => direct.get(dir) ?? [],
+    children: (dir) => sorted.get(dir) ?? [],
+    directories: () => [...counts.keys()].sort(comparePaths),
+    filesUnder: (dir) => sourceFiles.filter((file) => paths.isWithin(file, dir)),
   };
-  visit("", 0);
-  return clusters.filter((cluster) => cluster.files.length > 0);
 }
+
+// ── Clusters ──────────────────────────────────────────────────
+
+interface Cluster {
+  directory: string;
+  /** "whole": everything under `directory`. "rest": its own files plus the small folders folded into it. */
+  shape: "whole" | "rest";
+  /** Child folders folded into a "rest" cluster. */
+  merged: string[];
+  size: number;
+}
+
+interface Clustering {
+  tree: DirectoryTree;
+  clusters: Cluster[];
+  /** Base package directories of JVM source roots (`src/main/java/org/acme/app`) → the module path in front of `src/main/…`. */
+  jvmBases: Map<string, string>;
+}
+
+/**
+ * Split the source tree into components.
+ *
+ * The root is always split into its top-level folders. Then the largest folder
+ * over `maxFiles` is split into its children, again and again, while the
+ * total stays within `maxComponents`: big folders are refined first, and a
+ * small library never explodes into one component per sibling folder.
+ *  - A split must produce at least two substantial pieces (`minSplit` files),
+ *    otherwise the folder stays whole (eight 5-file adapters are one "Adapters").
+ *  - One folder yields at most MAX_CHILDREN pieces; past that, only children
+ *    with `minSplit` files stay separate and the rest join "<Folder> (other)".
+ *  - Folders like `benchmarks`, `examples`, `docs` and `scripts` are never split.
+ *  - Standard JVM layouts are split by the subpackages of their base package
+ *    (`src/main/java/org/acme/app/{owner,vet}`), whatever their size.
+ */
+function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxComponents: number): Clustering {
+  const tree = buildTree(sourceFiles);
+  const minSplit = Math.max(4, Math.round(maxFiles / 4));
+
+  const jvmBases = new Map<string, string>();
+  const jvmChain = new Set<string>();
+  for (const dir of tree.directories()) {
+    const match = JVM_SOURCE_ROOT.exec(dir);
+    if (!match) continue;
+    let base = dir;
+    while (!tree.direct(base).length && tree.children(base).length === 1) base = tree.children(base)[0];
+    if (tree.children(base).length < 2) continue;
+    jvmBases.set(base, dir.slice(0, match.index));
+    for (let current = base; ; current = directoryOfFile(current)) {
+      jvmChain.add(current);
+      if (!current) break;
+    }
+  }
+
+  const whole = (dir: string): Cluster => ({ directory: dir, shape: "whole", merged: [], size: tree.count(dir) });
+  const split = (dir: string, cap: number): Cluster[] => {
+    const subs = tree.children(dir);
+    let own = subs.filter((sub) => subs.length === 1 || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
+    if (own.length > cap) {
+      const keep = new Set(
+        own
+          .filter((sub) => tree.count(sub) >= minSplit || jvmChain.has(sub))
+          .sort((left, right) => tree.count(right) - tree.count(left) || comparePaths(left, right))
+          .slice(0, Math.max(1, cap - 1)),
+      );
+      own = own.filter((sub) => keep.has(sub));
+    }
+    const merged = subs.filter((sub) => !own.includes(sub));
+    const pieces = own.map(whole);
+    const directCount = tree.direct(dir).length;
+    if (!directCount && merged.length === 1) pieces.push(whole(merged[0]));
+    else if (directCount || merged.length) {
+      pieces.push({ directory: dir, shape: "rest", merged, size: directCount + merged.reduce((sum, sub) => sum + tree.count(sub), 0) });
+    }
+    return pieces;
+  };
+
+  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)));
+  const settled = new Set<string>();
+  const splittable = (cluster: Cluster): boolean => {
+    if (cluster.shape !== "whole" || settled.has(cluster.directory) || !tree.children(cluster.directory).length) return false;
+    if (jvmChain.has(cluster.directory)) return true;
+    return cluster.size > maxFiles
+      && segmentsOf(cluster.directory).length < MAX_SPLIT_DEPTH
+      && !NO_SPLIT.has(paths.basename(cluster.directory).toLowerCase());
+  };
+  for (;;) {
+    const next = clusters
+      .filter(splittable)
+      .sort((left, right) => (
+        Number(jvmChain.has(right.directory)) - Number(jvmChain.has(left.directory))
+        || right.size - left.size
+        || comparePaths(left.directory, right.directory)
+      ))[0];
+    if (!next) break;
+    settled.add(next.directory);
+    let pieces: Cluster[];
+    if (jvmChain.has(next.directory)) {
+      // Walk down the JVM chain one folder at a time, whatever the size.
+      pieces = split(next.directory, MAX_CHILDREN);
+      if (!(pieces.length >= 2 || (pieces.length === 1 && pieces[0].shape === "whole"))) continue;
+    } else {
+      // A folder that only wraps another (packages/x → packages/x/src) is split where that chain ends, or not at all.
+      let target = next.directory;
+      while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+      if (segmentsOf(target).length >= MAX_SPLIT_DEPTH || NO_SPLIT.has(paths.basename(target).toLowerCase())) continue;
+      pieces = split(target, MAX_CHILDREN);
+      if (pieces.length < 2 || pieces.filter((piece) => piece.size >= minSplit).length < 2) continue;
+    }
+    if (clusters.length - 1 + pieces.length > maxComponents) continue;
+    clusters = clusters.flatMap((cluster) => (cluster === next ? pieces : [cluster]));
+  }
+
+  // Folders before their leftovers, the repository root last.
+  const orderKey = (cluster: Cluster): Array<string | null> => (cluster.shape === "whole" ? segmentsOf(cluster.directory) : [...segmentsOf(cluster.directory), null]);
+  clusters.sort((left, right) => compareSegments(orderKey(left), orderKey(right)));
+  return { tree, clusters: clusters.filter((cluster) => cluster.size > 0), jvmBases };
+}
+
+function clusterGlobs(cluster: Cluster, tree: DirectoryTree): string[] {
+  const dir = cluster.directory;
+  if (cluster.shape === "whole") return [dir ? `${dir}/**` : "/*"];
+  return [...(tree.direct(dir).length ? [dir ? `${dir}/*` : "/*"] : []), ...cluster.merged.map((sub) => `${sub}/**`)];
+}
+
+function clusterSourceFiles(cluster: Cluster, tree: DirectoryTree): string[] {
+  if (cluster.shape === "whole") return tree.filesUnder(cluster.directory);
+  return [...tree.direct(cluster.directory), ...cluster.merged.flatMap((sub) => tree.filesUnder(sub))];
+}
+
+// ── Names ─────────────────────────────────────────────────────
 
 function readJson(files: readonly SourceFile[], path: string): Record<string, unknown> | null {
   const file = files.find((candidate) => candidate.path === path);
@@ -167,18 +332,82 @@ function readJson(files: readonly SourceFile[], path: string): Record<string, un
   }
 }
 
+const fileText = (files: readonly SourceFile[], path: string): string | null => files.find((file) => file.path === path)?.content ?? null;
+
+/** "github.com/gin-gonic/gin" → "gin"; "example.com/tool/v2" → "tool". */
+function goModuleName(goMod: string | null): string | null {
+  const modulePath = goMod?.match(/^module\s+(\S+)/m)?.[1];
+  if (!modulePath) return null;
+  const segments = modulePath.split("/").filter(Boolean);
+  if (segments.length > 1 && /^v\d+$/.test(segments[segments.length - 1])) segments.pop();
+  return segments[segments.length - 1] ?? modulePath;
+}
+
+/** `key = "value"` inside one `[section]` of a TOML file. */
+function tomlValue(text: string | null, section: string, key: string): string | null {
+  if (!text) return null;
+  let inside = false;
+  for (const line of text.split(/\r?\n/)) {
+    const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (header) {
+      inside = header[1].trim() === section;
+      continue;
+    }
+    if (!inside) continue;
+    const value = new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`).exec(line)?.[1];
+    if (value) return value;
+  }
+  return null;
+}
+
 export function detectSystemName(files: readonly SourceFile[]): string | null {
   const pkg = readJson(files, "package.json");
   if (typeof pkg?.name === "string" && pkg.name.trim()) return pkg.name.trim();
-  const text = (path: string) => files.find((file) => file.path === path)?.content ?? null;
-  const goModule = text("go.mod")?.match(/^module\s+(\S+)/m)?.[1];
-  if (goModule) return goModule.split("/").pop() ?? goModule;
-  const cargo = text("Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  const goModule = goModuleName(fileText(files, "go.mod"));
+  if (goModule) return goModule;
+  const cargo = fileText(files, "Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
   if (cargo) return cargo;
-  const pyproject = text("pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  const pyproject = fileText(files, "pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
   if (pyproject) return pyproject;
   return null;
 }
+
+/** The package that root-level code belongs to, in the language of that code. */
+function rootPackageName(files: readonly SourceFile[], rootCode: readonly string[]): string | null {
+  const extensions = new Set(rootCode.map((path) => paths.extname(path).toLowerCase()));
+  if (extensions.has(".go")) {
+    const name = goModuleName(fileText(files, "go.mod"));
+    if (name) return name;
+  }
+  if (extensions.has(".rs")) {
+    const name = tomlValue(fileText(files, "Cargo.toml"), "package", "name");
+    if (name) return name;
+  }
+  if (extensions.has(".py")) {
+    const pyproject = fileText(files, "pyproject.toml");
+    const name = tomlValue(pyproject, "project", "name")
+      ?? tomlValue(pyproject, "tool.poetry", "name")
+      ?? fileText(files, "setup.py")?.match(/\bname\s*=\s*["']([^"']+)["']/)?.[1]
+      ?? null;
+    if (name) return name;
+  }
+  return detectSystemName(files)?.replace(/^@[^/]+\//, "") ?? null;
+}
+
+/** The package whose sources live in the top-level `src`; null for a workspace root, whose `src` is not one package. */
+function srcPackageName(files: readonly SourceFile[]): string | null {
+  const cargo = fileText(files, "Cargo.toml");
+  if (cargo && /^\s*\[package\]/m.test(cargo)) return tomlValue(cargo, "package", "name");
+  const pyproject = fileText(files, "pyproject.toml");
+  const python = tomlValue(pyproject, "project", "name") ?? tomlValue(pyproject, "tool.poetry", "name");
+  if (python) return python;
+  const pkg = readJson(files, "package.json");
+  if (pkg && !pkg.workspaces && typeof pkg.name === "string" && pkg.name.trim()) return pkg.name.trim().replace(/^@[^/]+\//, "");
+  return null;
+}
+
+/** "gin" → "Gin", "socket.io" → "Socket Io": a package name has no file extension to drop. */
+const packageTitle = (name: string): string => titleCase(name.replace(/\./g, "-"));
 
 function uniqueId(base: string, used: Set<string>): string {
   let candidate = base || "component";
@@ -188,21 +417,79 @@ function uniqueId(base: string, used: Set<string>): string {
   return candidate;
 }
 
-function componentIdFor(directory: string, isRootCluster: boolean): string {
+function componentIdFor(directory: string): string {
   const segments = directory.split("/").filter(Boolean).filter((segment) => !["src", "source", "packages", "apps"].includes(segment.toLowerCase()) || directory.split("/").length === 1);
   const tail = segments.slice(-2).join("-");
-  const base = slugify(tail || directory || "root");
-  return isRootCluster && directory ? `${base}-root` : base;
+  return slugify(tail || directory || "root");
 }
 
-function componentName(directory: string, isRootCluster: boolean): string {
+function componentName(directory: string): string {
   const segments = directory.split("/").filter(Boolean);
   const last = segments[segments.length - 1] ?? "Root";
   const parent = segments.length > 1 ? segments[segments.length - 2] : "";
-  const base = parent && !["src", "app", "packages", "apps"].includes(parent) && segments.length > 2
+  return parent && !["src", "app", "packages", "apps"].includes(parent) && segments.length > 2
     ? `${titleCase(parent)} ${titleCase(last)}`
     : titleCase(last);
-  return isRootCluster && directory ? `${base} (top-level files)` : base;
+}
+
+interface ClusterIdentity {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+interface NamingContext {
+  tree: DirectoryTree;
+  jvmBases: Map<string, string>;
+  /** Root-level files that are code rather than tool configuration. */
+  rootCode: string[];
+  rootPackage: string | null;
+  /** The package whose sources live in the top-level `src` (a single-package repository). */
+  srcPackage: string | null;
+}
+
+/** `src` holding one package and nothing else (Python's src layout) is named after that package. */
+function displayDirectory(dir: string, tree: DirectoryTree): string {
+  if (!/^(?:src|source)$/i.test(paths.basename(dir))) return dir;
+  let current = dir;
+  while (!tree.direct(current).length && tree.children(current).length === 1) current = tree.children(current)[0];
+  return current;
+}
+
+/** A JVM base package or one of its subpackages, named after the package (with the module in multi-module builds). */
+function jvmName(dir: string, context: NamingContext): string | null {
+  const modulePath = context.jvmBases.get(dir) ?? context.jvmBases.get(directoryOfFile(dir));
+  if (modulePath === undefined) return null;
+  const moduleName = modulePath ? paths.basename(modulePath) : "";
+  return [moduleName ? titleCase(moduleName) : "", titleCase(paths.basename(dir))].filter(Boolean).join(" ");
+}
+
+function identify(cluster: Cluster, context: NamingContext): ClusterIdentity {
+  const dir = cluster.directory;
+  if (cluster.shape === "whole") {
+    const jvm = jvmName(dir, context);
+    if (jvm) return { id: slugify(jvm), name: jvm, kind: kindFor(dir) };
+    const shown = displayDirectory(dir, context.tree);
+    if (shown === "src" && context.srcPackage) return { id: slugify(context.srcPackage), name: packageTitle(context.srcPackage), kind: "core" };
+    return { id: componentIdFor(shown), name: componentName(shown), kind: kindFor(shown) };
+  }
+  if (!dir) {
+    // Root-level code is the root package (a Go module, a Python or Rust package), not configuration.
+    if (!context.rootCode.length) return { id: "root", name: "Root", kind: "config" };
+    const name = context.rootPackage ? packageTitle(context.rootPackage) : "Root";
+    return { id: context.rootPackage ? slugify(context.rootPackage) : "root", name, kind: "core" };
+  }
+  const merged = cluster.merged.length > 0;
+  const jvm = context.jvmBases.has(dir) ? jvmName(dir, context) : null;
+  if (jvm) return { id: slugify(merged ? `${jvm} other` : jvm), name: merged ? `${jvm} (other)` : jvm, kind: kindFor(dir) };
+  const pkg = dir === "src" && context.srcPackage ? context.srcPackage : null;
+  const baseName = pkg ? packageTitle(pkg) : componentName(dir);
+  const baseId = pkg ? slugify(pkg) : componentIdFor(dir);
+  return {
+    id: `${baseId}-${merged ? "other" : "root"}`,
+    name: `${baseName} (${merged ? "other" : "top-level files"})`,
+    kind: kindFor(dir),
+  };
 }
 
 export function deriveBlueprint(files: readonly SourceFile[], options: DeriveOptions = {}): Blueprint {
@@ -214,29 +501,33 @@ export function deriveBlueprint(files: readonly SourceFile[], options: DeriveOpt
     ...(options.commit ? { commit: options.commit } : {}),
   };
   const maxFiles = options.maxFilesPerComponent ?? 40;
-  const maxComponents = options.maxComponents ?? 40;
+  const maxComponents = options.maxComponents ?? 20;
 
   const graph = buildFileGraph(files);
   const sourceFiles = [...graph.facts.values()].map((facts) => facts.path).sort();
   const testFiles = sourceFiles.filter((path) => graph.facts.get(path)?.isTest);
   const productionFiles = sourceFiles.filter((path) => !graph.facts.get(path)?.isTest);
 
-  let clusters = clusterFiles(productionFiles, maxFiles);
-  let budget = maxFiles;
-  while (clusters.length > maxComponents && budget < 5_000) {
-    budget = Math.ceil(budget * 1.6);
-    clusters = clusterFiles(productionFiles, budget);
-  }
+  const { tree, clusters, jvmBases } = clusterFiles(productionFiles, maxFiles, maxComponents);
+  const rootCode = tree.direct("").filter((path) => !isConfigFile(path));
+  const context: NamingContext = {
+    tree,
+    jvmBases,
+    rootCode,
+    rootPackage: rootCode.length ? rootPackageName(files, rootCode) : null,
+    srcPackage: tree.count("src") ? srcPackageName(files) : null,
+  };
 
   const used = new Set<string>();
   const components: BlueprintComponent[] = clusters.map((cluster) => {
-    const isRootCluster = cluster.key.endsWith(":root") || cluster.key === "root";
+    const identity = identify(cluster, context);
+    const count = clusterSourceFiles(cluster, tree).length;
     return {
-      id: uniqueId(componentIdFor(cluster.directory, isRootCluster && cluster.globs.some((glob) => glob.endsWith("/*"))), used),
-      name: componentName(cluster.directory, isRootCluster && cluster.globs.some((glob) => glob.endsWith("/*"))),
-      kind: cluster.directory ? kindFor(cluster.directory) : "config",
-      description: `${cluster.files.length} source file${cluster.files.length === 1 ? "" : "s"} under ${cluster.directory || "the repository root"}`,
-      paths: cluster.globs,
+      id: uniqueId(identity.id, used),
+      name: identity.name,
+      kind: identity.kind,
+      description: `${count} source file${count === 1 ? "" : "s"} under ${cluster.directory || "the repository root"}`,
+      paths: clusterGlobs(cluster, tree),
       provenance,
     };
   });

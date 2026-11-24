@@ -14,6 +14,7 @@ import { BLUEPRINT_PATH } from "../../blueprint/schema";
 import type { CheckReport } from "../../blueprint/types";
 import { booleanFlag, numberFlag, stringFlag } from "../args";
 import type { ParsedArgs } from "../args";
+import { agentsState, cliName, defaultBranch, hasRassamMcp } from "../agent-files";
 import { formatIssues, loadContext, resolveRoot } from "../context";
 import type { RepoContext } from "../context";
 import { runGate } from "../gate";
@@ -61,15 +62,17 @@ async function githubBaseRef(context: RepoContext, github: GithubContext, io: Io
 
 interface RenderOptions {
   color: boolean;
+  /** The label that counts as human approval, named in the advice. */
+  approveLabel: string;
   budget?: number;
   verbose: boolean;
   failOn: FailOn;
   github?: GithubContext;
 }
 
-function markdown(report: CheckReport, options: Pick<RenderOptions, "budget" | "failOn" | "github">): string {
-  const { budget, failOn, github } = options;
-  return renderMarkdown(report, { budget, failOn, marker: COMMENT_MARKER, repoUrl: github?.repoHtmlUrl, headSha: report.head?.sha ?? github?.headSha });
+function markdown(report: CheckReport, options: Pick<RenderOptions, "budget" | "failOn" | "github" | "approveLabel">): string {
+  const { budget, failOn, github, approveLabel } = options;
+  return renderMarkdown(report, { budget, failOn, approveLabel, marker: COMMENT_MARKER, repoUrl: github?.repoHtmlUrl, headSha: report.head?.sha ?? github?.headSha });
 }
 
 function render(report: CheckReport, format: Format, options: RenderOptions): string {
@@ -81,7 +84,7 @@ function render(report: CheckReport, format: Format, options: RenderOptions): st
     case "markdown":
       return asText(markdown(report, options));
     default:
-      return asText(renderText(report, { color: options.color, budget: options.budget, verbose: options.verbose, failOn: options.failOn }));
+      return asText(renderText(report, { color: options.color, budget: options.budget, verbose: options.verbose, failOn: options.failOn, approveLabel: options.approveLabel }));
   }
 }
 
@@ -139,7 +142,7 @@ export async function checkCommand(args: ParsedArgs, io: Io): Promise<number> {
   });
   const { report } = gate;
 
-  const options: RenderOptions = { color: colorEnabled(args, io), budget, verbose: booleanFlag(args, "verbose"), failOn, github };
+  const options: RenderOptions = { color: colorEnabled(args, io), approveLabel: label, budget, verbose: booleanFlag(args, "verbose"), failOn, github };
   const rendered = render(report, format, options);
   if (output) await writeOutput(io, output, rendered);
   else io.stdout(rendered);
@@ -147,6 +150,17 @@ export async function checkCommand(args: ParsedArgs, io: Io): Promise<number> {
   if (sarifOutput) await writeOutput(io, sarifOutput, asText(renderSarif(report)));
   if (github) await publishToGithub(report, github, args, io, options, !output && (format === "json" || format === "sarif"));
 
+  if (context.blueprint) {
+    // The rules agents read in AGENTS.md are generated from the contract; say when they fell behind it.
+    const agents = await agentsState(context.root, context.blueprint, {
+      baseBranch: context.isGit ? await defaultBranch(context.root) : undefined,
+      mcp: await hasRassamMcp(context.root),
+    }).catch(() => null);
+    if (agents?.status === "stale") {
+      const message = `${agents.file} states an older version of the contract. Refresh it with: ${cliName(io.env)} instructions --write`;
+      io.stderr(github ? `::notice title=Rassam::${message}\n` : `rassam: ${message}\n`);
+    }
+  }
   if (context.blueprintState === "missing" && gate.mode === "full") {
     io.stderr(`rassam: no blueprint at ${BLUEPRINT_PATH}; nothing constrains this repository yet. Create a draft with: rassam init\n`);
   }

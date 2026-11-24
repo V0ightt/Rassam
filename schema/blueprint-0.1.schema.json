@@ -1,7 +1,7 @@
 {
-  "$id": "https://rassam.dev/schema/blueprint-0.1.json",
+  "$id": "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json",
   "title": "Rassam Blueprint",
-  "description": "A human-owned architecture contract for agent-built software. See https://rassam.dev",
+  "description": "A human-owned architecture contract for agent-built software. See https://github.com/V0ightt/Rassam",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -44,6 +44,7 @@
           "defaults": true
         },
         "verificationHeuristics": true,
+        "verificationWeakening": "require-approval",
         "ignore": []
       },
       "type": "object",
@@ -96,6 +97,14 @@
         "verificationHeuristics": {
           "default": true,
           "type": "boolean"
+        },
+        "verificationWeakening": {
+          "default": "require-approval",
+          "type": "string",
+          "enum": [
+            "require-approval",
+            "warn"
+          ]
         },
         "ignore": {
           "default": [],

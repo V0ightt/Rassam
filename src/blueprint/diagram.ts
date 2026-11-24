@@ -1,6 +1,6 @@
 import type { ArchitectureDiff } from "./arch-diff";
 import { layoutGraph, type LayoutDirection, type LayoutPoint, type LayoutResult } from "./layout";
-import type { Blueprint } from "./schema";
+import type { Blueprint, Severity } from "./schema";
 import { overallStatus, type ComponentState, type OverallStatus, type SystemStatus } from "./status";
 import { hash53, plural } from "./util";
 import type { GraphEdgeStatus, WorkspaceGraphView } from "./workspace";
@@ -256,6 +256,17 @@ function edgeStroke(status: GraphEdgeStatus, palette: DiagramPalette): { color: 
   }
 }
 
+/** A declared dependency on a cycle: warning colour and a dash-dot line, so the loop does not rely on colour alone. */
+function cycleStroke(palette: DiagramPalette): { color: string; label: string; attrs: string } {
+  return { color: palette.warn, label: palette.warnText, attrs: ' stroke-width="1.8" stroke-dasharray="9 3 2 3"' };
+}
+
+/** How an edge is drawn: its status, except that a declared edge on a cycle is drawn as part of the cycle. */
+const drawsAsCycle = (edge: { status: GraphEdgeStatus; cycle?: boolean }): boolean => Boolean(edge.cycle) && edge.status === "declared";
+
+/** Drawing order: quiet edges first, so whatever needs attention is drawn on top. */
+const edgeRank = (edge: { status: GraphEdgeStatus; cycle?: boolean }): number => (drawsAsCycle(edge) ? 1.5 : EDGE_RANK[edge.status]);
+
 /** Smooth path through route points: curves between layers, straight across them. */
 function routePath(points: LayoutPoint[], horizontal: boolean): string {
   let d = `M${n(points[0].x)} ${n(points[0].y)}`;
@@ -294,6 +305,8 @@ interface Card {
   kind: string;
   external: boolean;
   findings: number;
+  /** Worst severity among the findings; unknown is drawn as an error, as before severities were reported. */
+  severity: Severity | null;
   files: number | null;
   state: ShownState | null;
   /** Verified by a person (check), or not human-authored ("derived" / "agent"). Human-authored facts carry no tag. */
@@ -302,6 +315,8 @@ interface Card {
   shared: boolean;
   change: "added" | "removed" | null;
 }
+
+const badgeTone = (severity: Severity | null): Severity => severity ?? "error";
 
 function renderCard(card: Card, box: Box, palette: DiagramPalette): string {
   const inner = CARD_WIDTH - CARD_PAD * 2;
@@ -319,9 +334,13 @@ function renderCard(card: Card, box: Box, palette: DiagramPalette): string {
     const label = card.findings > 99 ? "99+" : String(card.findings);
     const width = Math.max(20, Math.ceil(estimateTextWidth(label, 10.5, 700) + 12));
     const x = CARD_WIDTH - CARD_PAD - width;
+    // Errors are a solid red pill; warnings an outlined amber one, so shape tells them apart too.
+    const tone = badgeTone(card.severity);
     parts.push(
-      `<rect data-badge="violations" x="${n(x)}" y="11" width="${width}" height="18" rx="9" fill="${palette.error}"/>` +
-        text(x + width / 2, 23.8, label, { size: 10.5, weight: 700, fill: palette.onError, anchor: "middle" }),
+      (tone === "error"
+        ? `<rect data-badge="violations" data-severity="error" x="${n(x)}" y="11" width="${width}" height="18" rx="9" fill="${palette.error}"/>`
+        : `<rect data-badge="violations" data-severity="${tone}" x="${n(x + 0.5)}" y="11.5" width="${width - 1}" height="17" rx="8.5" fill="${tone === "warning" ? palette.warn : palette.muted}" fill-opacity="0.14" stroke="${tone === "warning" ? palette.warn : palette.muted}"/>`) +
+        text(x + width / 2, 23.8, label, { size: 10.5, weight: 700, fill: tone === "error" ? palette.onError : tone === "warning" ? palette.warnText : palette.muted, anchor: "middle" }),
     );
     nameRoom -= width + 8;
   }
@@ -453,8 +472,9 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   const sharedComponents = new Set<string>();
   if (calm) {
     const changedEdges = new Set([...(diff?.edges.statusChanged ?? []).map(edgeKey), ...addedEdges]);
-    /** Never simplified away: anything that is not a plain declared dependency, and anything the commit touched. */
-    const keep = (edge: { from: string; to: string; status: GraphEdgeStatus }): boolean => edge.status !== "declared" || changedEdges.has(edgeKey(edge));
+    /** Never simplified away: anything that is not a plain declared dependency, an edge on a cycle, and anything the commit touched. */
+    const keep = (edge: { from: string; to: string; status: GraphEdgeStatus; cycle?: true }): boolean =>
+      edge.status !== "declared" || Boolean(edge.cycle) || changedEdges.has(edgeKey(edge));
     const pinned = new Set<string>();
     for (const edge of viewEdges.values()) {
       if (!keep(edge)) continue;
@@ -535,6 +555,7 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
       kind: component.kind ?? "",
       external: Boolean(component.external),
       findings: Math.max(0, Math.floor(component.findings ?? 0) || 0),
+      severity: component.severity ?? null,
       files: typeof files === "number" && Number.isFinite(files) && files >= 0 ? Math.floor(files) : null,
       state,
       mark: declared?.verified ? "verified" : source === "derived" || source === "agent" ? source : null,
@@ -544,7 +565,7 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   }
   const removedCards: Card[] = (diff?.components.removed ?? [])
     .filter((id, index, all) => !cards.has(id) && all.indexOf(id) === index)
-    .map((id) => ({ id, name: id, kind: "", external: false, findings: 0, files: null, state: null, mark: null, shared: false, change: "removed" as const }));
+    .map((id) => ({ id, name: id, kind: "", external: false, findings: 0, severity: null, files: null, state: null, mark: null, shared: false, change: "removed" as const }));
 
   const live = [...cards.values()];
   const hasFooter = live.some((card) => card.state !== null || card.mark !== null);
@@ -554,19 +575,21 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
     from: string;
     to: string;
     status: GraphEdgeStatus;
+    /** On the path of a dependency cycle. */
+    cycle: boolean;
     change: "added" | "removed" | null;
   }
   const drawn = new Map<string, DrawnEdge>();
   for (const edge of viewEdges.values()) {
     if (!cards.has(edge.from) || !cards.has(edge.to)) continue;
-    drawn.set(edgeKey(edge), { from: edge.from, to: edge.to, status: edge.status, change: addedEdges.has(edgeKey(edge)) ? "added" : null });
+    drawn.set(edgeKey(edge), { from: edge.from, to: edge.to, status: edge.status, cycle: Boolean(edge.cycle), change: addedEdges.has(edgeKey(edge)) ? "added" : null });
   }
   /** Removed edges are drawn as direct ghost curves: they must not influence the layout of what exists. */
   const ghostEdges: DrawnEdge[] = [];
   const removedIds = new Set(removedCards.map((card) => card.id));
   for (const edge of diff?.edges.removed ?? []) {
     if (edge.from === edge.to || drawn.has(edgeKey(edge))) continue;
-    const entry: DrawnEdge = { from: edge.from, to: edge.to, status: edge.status, change: "removed" };
+    const entry: DrawnEdge = { from: edge.from, to: edge.to, status: edge.status, cycle: false, change: "removed" };
     if ((cards.has(edge.from) || removedIds.has(edge.from)) && (cards.has(edge.to) || removedIds.has(edge.to))) ghostEdges.push(entry);
   }
 
@@ -587,6 +610,12 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   const showStatus = monitored > 0 || Boolean(input.status);
   const overallLabel = overall === "unknown" && monitored > 0 ? "No data" : OVERALL_LABEL[overall];
   const componentsWithFindings = live.filter((card) => card.findings > 0).length;
+
+  // A dependency cycle is stated once, in words, rather than as a badge on every member.
+  const viewNames = new Map(input.view.components.map((component) => [component.id, component.name || component.id]));
+  const cycles = (input.view.cycles ?? []).filter((cycle) => cycle.path.length > 1);
+  const cyclePaths = cycles.map((cycle) => cycle.path.map((id) => viewNames.get(id) ?? id).join(" → "));
+  const cycleLead = cycles.length === 1 ? "Dependency cycle:" : `${cycles.length} dependency cycles:`;
 
   // ── Header ──
   const pills: Pill[] = [];
@@ -623,6 +652,15 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
       const metaWidth = metaText ? estimateTextWidth(metaText, 11) + 16 : 0;
       if (input.subtitle) body.push(text(OUTER, cursor + 13, truncateText(input.subtitle, contentWidth - metaWidth, 13), { size: 13, fill: palette.muted }));
       if (metaText) body.push(text(width - OUTER, cursor + 13, metaText, { size: 11, fill: palette.muted, anchor: "end" }));
+      cursor += 22;
+    }
+    if (cycles.length) {
+      const lead = escapeXml(cycleLead);
+      const summary = truncateText(cyclePaths.join("; "), contentWidth - estimateTextWidth(`${cycleLead} `, 12, 600), 12);
+      const tone = cycles.some((cycle) => cycle.severity === "error") ? palette.errorText : palette.warnText;
+      body.push(
+        `<text x="${OUTER}" y="${n(cursor + 13)}" font-size="12" fill="${palette.text}" data-cycle="summary"><tspan font-weight="600" fill="${tone}">${lead}</tspan> ${escapeXml(summary)}</text>`,
+      );
       cursor += 22;
     }
     if (diff) {
@@ -718,12 +756,13 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   routes.sort(
     (a, b) =>
       Number(b.edge.change === "removed") - Number(a.edge.change === "removed") ||
-      EDGE_RANK[a.edge.status] - EDGE_RANK[b.edge.status] ||
+      edgeRank(a.edge) - edgeRank(b.edge) ||
       (edgeKey(a.edge) < edgeKey(b.edge) ? -1 : edgeKey(a.edge) > edgeKey(b.edge) ? 1 : 0),
   );
 
   const usedEdgeStatuses = new Set<GraphEdgeStatus>();
   const usedMarkers = new Set<string>();
+  let anyCycleEdge = false;
   const edgeSvg: string[] = [];
   const labelSvg: string[] = [];
   const labelBoxes: Box[] = [];
@@ -733,19 +772,23 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   for (const route of routes) {
     const { edge } = route;
     const removed = edge.change === "removed";
-    const style = removed ? { color: palette.error, label: palette.errorText, attrs: ' stroke-width="1.5" stroke-dasharray="4 4" opacity="0.55"' } : edgeStroke(edge.status, palette);
-    const marker = removed ? "removed" : edge.status;
+    const asCycle = !removed && drawsAsCycle(edge);
+    const style = removed
+      ? { color: palette.error, label: palette.errorText, attrs: ' stroke-width="1.5" stroke-dasharray="4 4" opacity="0.55"' }
+      : asCycle ? cycleStroke(palette) : edgeStroke(edge.status, palette);
+    const marker = removed ? "removed" : asCycle ? "cycle" : edge.status;
     usedMarkers.add(marker);
     if (removed) anyRemoved = true;
+    else if (asCycle) anyCycleEdge = true;
     else usedEdgeStatuses.add(edge.status);
     if (edge.change === "added") anyAdded = true;
     const d = routePath(route.points, !route.vertical);
     if (edge.change === "added") edgeSvg.push(`<path d="${d}" fill="none" stroke="${palette.ok}" stroke-width="7" stroke-opacity="0.28" stroke-linecap="round"/>`);
     edgeSvg.push(
-      `<path data-edge="${removed ? "removed" : edge.status}" d="${d}" fill="none" stroke="${style.color}"${style.attrs} marker-end="url(#${uid}-arrow-${marker})"/>`,
+      `<path data-edge="${removed ? "removed" : edge.status}"${edge.cycle && !removed ? ' data-cycle="true"' : ""} d="${d}" fill="none" stroke="${style.color}"${style.attrs} marker-end="url(#${uid}-arrow-${marker})"/>`,
     );
 
-    const label = removed ? "removed" : [edge.change === "added" ? "+ new" : "", EDGE_LABEL[edge.status]].filter(Boolean).join(" · ");
+    const label = removed ? "removed" : [edge.change === "added" ? "+ new" : "", EDGE_LABEL[edge.status], edge.cycle ? "cycle" : ""].filter(Boolean).join(" · ");
     if (!label) continue;
     const labelWidth = Math.ceil(estimateTextWidth(label, 10, 600) + 14);
     // Candidates: the middle of each stretch between layers, nearest the route's middle first.
@@ -791,6 +834,10 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
       const style = edgeStroke(status, palette);
       entries.push({ key: status, label: EDGE_LEGEND[status], icon: (x, y) => `<path d="M${n(x)} ${n(y)}H${n(x + 24)}" fill="none" stroke="${style.color}"${style.attrs}/>` });
     }
+    if (anyCycleEdge || cycles.length) {
+      const style = cycleStroke(palette);
+      entries.push({ key: "cycle", label: "Dependency cycle", icon: (x, y) => `<path d="M${n(x)} ${n(y)}H${n(x + 24)}" fill="none" stroke="${style.color}"${style.attrs}/>` });
+    }
     for (const state of ["up", "degraded", "down", "unknown"] as const) {
       if (!statusCounts[state]) continue;
       entries.push({ key: state, label: STATE_LABEL[state], icon: (x, y) => stateShape(state, x + 12, y, palette).replace(/ data-state="[a-z]+"/, "") });
@@ -799,7 +846,12 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
       `<rect x="${n(x + 2)}" y="${n(y - 6)}" width="20" height="12" rx="3.5" fill="${palette.card}" stroke="${stroke}"${extra}/>`;
     if (live.some((card) => card.external)) entries.push({ key: "external", label: "External system", icon: box(palette.muted, ' stroke-dasharray="3 2.5"') });
     if (live.some((card) => card.mark === "verified")) entries.push({ key: "verified", label: "Verified by a human", icon: (x, y) => checkMark(x + 7, y + 0.4, palette.ok) });
-    if (componentsWithFindings) entries.push({ key: "violations", label: "Violations", icon: (x, y) => `<rect x="${n(x + 3)}" y="${n(y - 6.5)}" width="18" height="13" rx="6.5" fill="${palette.error}"/>` });
+    if (live.some((card) => card.findings > 0 && badgeTone(card.severity) === "error")) {
+      entries.push({ key: "violations", label: "Violations", icon: (x, y) => `<rect x="${n(x + 3)}" y="${n(y - 6.5)}" width="18" height="13" rx="6.5" fill="${palette.error}"/>` });
+    }
+    if (live.some((card) => card.findings > 0 && badgeTone(card.severity) !== "error")) {
+      entries.push({ key: "warnings", label: "Warnings", icon: (x, y) => `<rect x="${n(x + 3.5)}" y="${n(y - 6)}" width="17" height="12" rx="6" fill="${palette.warn}" fill-opacity="0.14" stroke="${palette.warn}"/>` });
+    }
     if (anyAdded) entries.push({ key: "added", label: "Added", icon: box(palette.ok, ' stroke-width="1.8"') });
     if (anyRemoved) entries.push({ key: "removed", label: "Removed", icon: box(palette.error, ' stroke-dasharray="3 2.5" opacity="0.7"') });
 
@@ -829,14 +881,19 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
 
   // ── Accessible description ──
   const edgeCounts = { declared: 0, undeclared: 0, forbidden: 0, missing: 0 };
-  for (const edge of drawn.values()) if (edge.change !== "removed") edgeCounts[edge.status] += 1;
+  let onCycle = 0;
+  for (const edge of drawn.values()) {
+    if (edge.change === "removed") continue;
+    edgeCounts[edge.status] += 1;
+    if (edge.cycle) onCycle += 1;
+  }
   const liveEdges = edgeCounts.declared + edgeCounts.undeclared + edgeCounts.forbidden + edgeCounts.missing;
   const externals = live.filter((card) => card.external).length;
   const sentences: string[] = [];
   sentences.push(
     `${plural(live.length, "component")}${externals ? ` (${externals} external)` : ""} and ${plural(liveEdges, "dependency", "dependencies")}` +
       (liveEdges
-        ? ` (${[`${edgeCounts.declared} declared`, edgeCounts.undeclared ? `${edgeCounts.undeclared} undeclared` : "", edgeCounts.forbidden ? `${edgeCounts.forbidden} forbidden` : "", edgeCounts.missing ? `${edgeCounts.missing} declared but not observed` : ""].filter(Boolean).join(", ")})`
+        ? ` (${[`${edgeCounts.declared} declared`, edgeCounts.undeclared ? `${edgeCounts.undeclared} undeclared` : "", edgeCounts.forbidden ? `${edgeCounts.forbidden} forbidden` : "", edgeCounts.missing ? `${edgeCounts.missing} declared but not observed` : "", onCycle ? `${onCycle} on a dependency cycle` : ""].filter(Boolean).join(", ")})`
         : ""),
   );
   if (showStatus) {
@@ -848,10 +905,11 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   }
   if (input.findings) sentences.push(`Violations: ${violationText(input.findings).replace(" · ", ", ")}`);
   else if (componentsWithFindings) sentences.push(`${plural(componentsWithFindings, "component")} with violations`);
+  if (cycles.length) sentences.push(`${cycleLead} ${cyclePaths.join("; ")}`);
   if (diff) sentences.push(`Changed: ${diff.summary}`);
   if (footnote) sentences.push(footnote);
   const listed = live.slice(0, 40).map((card) => {
-    const notes = [card.state ? STATE_LABEL[card.state].toLowerCase() : "", card.findings ? plural(card.findings, "violation") : "", card.change === "added" ? "new" : ""].filter(Boolean);
+    const notes = [card.state ? STATE_LABEL[card.state].toLowerCase() : "", card.findings ? plural(card.findings, badgeTone(card.severity) === "error" ? "violation" : card.severity === "info" ? "note" : "warning") : "", card.change === "added" ? "new" : ""].filter(Boolean);
     return notes.length ? `${card.name} (${notes.join(", ")})` : card.name;
   });
   if (listed.length) sentences.push(`Components: ${listed.join(", ")}${live.length > listed.length ? `, and ${live.length - listed.length} more` : ""}`);
@@ -860,8 +918,8 @@ export function renderSystemDiagram(input: SystemDiagramInput, options: SystemDi
   const description = `${sentences.join(". ")}.`;
 
   // ── Document ──
-  const markerColor = (marker: string): string => (marker === "removed" ? palette.error : edgeStroke(marker as GraphEdgeStatus, palette).color);
-  const defs = ["declared", "missing", "undeclared", "forbidden", "removed"]
+  const markerColor = (marker: string): string => (marker === "removed" ? palette.error : marker === "cycle" ? cycleStroke(palette).color : edgeStroke(marker as GraphEdgeStatus, palette).color);
+  const defs = ["declared", "missing", "cycle", "undeclared", "forbidden", "removed"]
     .filter((marker) => usedMarkers.has(marker))
     .map(
       (marker) =>

@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "The architecture contract for agent-built software: a human-owned blueprint, a CI gate, an MCP server and a live system design.",
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/V0ightt/Rassam.git"
@@ -29,6 +29,7 @@
     "bundle:check": "node scripts/check-bundle-budget.mjs",
     "rassam": "tsx src/cli/index.ts",
     "build:cli": "node scripts/build-cli.mjs",
+    "pack:cli": "node scripts/pack-cli.mjs",
     "blueprint:schema": "tsx scripts/generate-blueprint-schema.ts",
     "blueprint:check": "tsx src/cli/index.ts check",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run bundle:check"

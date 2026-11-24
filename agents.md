@@ -8,7 +8,7 @@ Read this before making changes. Rassam is checked against its own architecture 
 
 1. **The blueprint** (`.rassam/blueprint.json`, spec in `docs/blueprint-spec.md`, schema in `src/blueprint/schema.ts`): components and the files they own, human-written intent, declared dependencies, rules, invariants, decisions and sign-offs.
 2. **The engine** (`src/blueprint/`): import graph, component membership, rule evaluation, the change gate, reach analysis and report rendering. It must stay isomorphic: no `node:` imports, no DOM, no React/Next, no imports from the rest of the app. Only `zod`.
-3. **The Node host** (`src/cli/`): the `rassam` CLI, git and GitHub Actions integration, and the dual-era MCP server. Bundled to `action/dist/rassam.mjs` (`npm run build:cli`; CI checks the bundle is fresh).
+3. **The Node host** (`src/cli/`): the `rassam` CLI, git and GitHub Actions integration, and the dual-era MCP server. Bundled to `action/dist/rassam.mjs` (`npm run build:cli`; CI checks the bundle is fresh). The same bundle is the npm package `@v0ightt/rassam` (`packages/rassam/`, staged by `npm run pack:cli`, published only by `.github/workflows/release.yml` on a version tag; see `docs/releasing.md`). `PACKAGE_NAME` and `ENGINE_VERSION` in `src/blueprint/constants.ts` must match the package manifest (a test enforces it).
 4. **The Studio** (Next.js app at `/`): one screen that answers "is the project on track?" for a local folder or a public GitHub repository (`src/components/studio/`, `src/components/blueprint/`, `src/components/ui/`, `src/hooks/useBlueprint.ts`, `src/lib/blueprint-client/`, `src/lib/blueprint-intent/`, `src/app/api/blueprint/**`, `src/app/api/live/**`), plus a settings page for the optional model.
 
 ### Engine module map (`src/blueprint/`)
@@ -24,13 +24,26 @@ Read this before making changes. Rassam is checked against its own architecture 
 | `rules.ts`, `stats.ts`, `impact.ts` | Rule and policy evaluation; human-authored ratio; blast radius |
 | `diff.ts`, `blueprint-diff.ts`, `agents.ts` | Unified diff parsing, tripwires, verification-weakening heuristics; semantic contract diff; agent authorship |
 | `check.ts` | `runCheck`: full and diff mode, base-contract judging, new-vs-existing, scoring |
-| `workspace.ts` | Query layer for MCP/CLI/canvas: `explainPath`, `checkDependency`, `impact`, `componentSummary`, `overview`, `graphView` |
+| `workspace.ts` | Query layer for MCP/CLI/canvas: `explainPath`, `checkDependency`, `impact`, `componentSummary`, `overview`, `graphView` (cards with finding counts and worst severity; a dependency cycle is reported once in `cycles` and on its edges, never as a badge on every member) |
 | `derive.ts`, `verify.ts`, `snapshot.ts` | Draft blueprints (`rassam init`); sign-off stamps; compact graph transport |
+| `prose.ts` | The contract as plain-language rules for `AGENTS.md` (the block between `<!-- rassam:agents:start -->` and `<!-- rassam:agents:end -->`); pure and deterministic, so a stale block is found by regenerating it |
 | `report.ts` | Text, Markdown sticky comment, SARIF, GitHub annotations, JSON, Mermaid, DOT |
+
+### Node host map (`src/cli/`)
+
+| Module | Responsibility |
+| --- | --- |
+| `main.ts`, `args.ts`, `io.ts` | Dispatch, flags and help, process seams (`Io.ask` exists only in an interactive terminal; commands must work without it) |
+| `commands/init.ts` | Draft the blueprint, report drafted rules the code already breaks ("existed before the contract did"), then offer the wiring below |
+| `agent-files.ts` | Idempotent writers for `.mcp.json`, the `AGENTS.md` block, the `CLAUDE.md` pointer and `.github/workflows/rassam.yml`; never touch text outside their markers or overwrite a person's own settings |
+| `commands/instructions.ts` | `rassam instructions` (`--write`, `--check`): keep the `AGENTS.md` block in step with the contract |
+| `gate.ts`, `commands/check.ts` | Assemble the change (git, merge-base, base blueprint) and run the engine; `check` also notes a stale `AGENTS.md` block |
+| `mcp/` | The MCP server and its tools |
 
 ### Non-negotiable behaviors
 
 - A change is judged by the **base** blueprint. Contract-weakening edits are errors until a human applies the approval label. Invariant commands run only from the base blueprint.
+- Under the default `policy.verificationWeakening: "require-approval"`, the strong verification-weakening signals (skipped or focused tests, removed or trivialized assertions, deleted test files, lowered or removed coverage thresholds, forced success exits; the split is `WEAKENING_SIGNALS` in `diff.ts`) are errors until a human applies the same label. Weak signals and the generic test tripwire stay warnings, and no negative case in `bench/gate` may fail.
 - Only **new** violations fail a change; fingerprints must stay stable (no line numbers in fingerprints).
 - Static analysis is the only source of dependency edges. LLM output never becomes a blueprint fact without human acceptance, and agent proposals go to `.rassam/proposals/`, never into `blueprint.json`.
 - Secrets are never printed: reports carry redacted previews only.

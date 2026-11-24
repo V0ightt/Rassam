@@ -23,6 +23,7 @@ const LOADERS: Record<string, () => Promise<CommandHandler>> = {
   status: async () => (await import("./commands/status")).statusCommand,
   do: async () => (await import("./commands/do")).doCommand,
   proposals: async () => (await import("./commands/proposals")).proposalsCommand,
+  instructions: async () => (await import("./commands/instructions")).instructionsCommand,
   schema: async () => (await import("./commands/schema")).schemaCommand,
   mcp: async () => (await import("./commands/mcp")).mcpCommand,
 };

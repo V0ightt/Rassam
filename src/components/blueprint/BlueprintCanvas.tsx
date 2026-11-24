@@ -28,7 +28,7 @@ import {
   type SystemStatus,
 } from '@/blueprint';
 import { cx } from '@/components/ui/cx';
-import BlueprintEdge, { EDGE_STATUS_STYLE, EdgeActivateContext, type BlueprintEdgeData, type EdgeDiff, type EdgeStatus } from './BlueprintEdge';
+import BlueprintEdge, { CYCLE_EDGE_STYLE, EDGE_STATUS_STYLE, EdgeActivateContext, type BlueprintEdgeData, type EdgeDiff, type EdgeStatus } from './BlueprintEdge';
 import BlueprintNode, { type BlueprintNodeData, type NodeDiff } from './BlueprintNode';
 import EdgePrompt, { type EdgePromptTarget } from './EdgePrompt';
 import type { BlueprintSession } from './session';
@@ -97,19 +97,17 @@ export interface BlueprintCanvasProps {
 
 /** Key to the line patterns. Shown from the zoom cluster. */
 export function CanvasLegend() {
+  const lines = [...STATUS_ORDER.map((status) => ({ key: status, style: EDGE_STATUS_STYLE[status] })), { key: 'cycle', style: CYCLE_EDGE_STYLE }];
   return (
     <ul className="space-y-2" aria-label="Legend">
-      {STATUS_ORDER.map((status) => {
-        const style = EDGE_STATUS_STYLE[status];
-        return (
-          <li key={status} className="flex items-center gap-2.5 text-meta text-fg-2">
-            <svg width="34" height="8" aria-hidden="true" className="shrink-0">
-              <line x1="1" y1="4" x2="33" y2="4" stroke={style.stroke} strokeWidth={style.width + 0.5} strokeDasharray={style.dash} strokeLinecap={status === 'missing' ? 'round' : undefined} style={{ stroke: style.stroke }} />
-            </svg>
-            <span><span className="font-medium text-fg">{style.label}</span> · {style.description}</span>
-          </li>
-        );
-      })}
+      {lines.map(({ key, style }) => (
+        <li key={key} className="flex items-center gap-2.5 text-meta text-fg-2">
+          <svg width="34" height="8" aria-hidden="true" className="shrink-0">
+            <line x1="1" y1="4" x2="33" y2="4" stroke={style.stroke} strokeWidth={style.width + 0.5} strokeDasharray={style.dash} strokeLinecap={key === 'missing' ? 'round' : undefined} style={{ stroke: style.stroke }} />
+          </svg>
+          <span><span className="font-medium text-fg">{style.label}</span> · {style.description}</span>
+        </li>
+      ))}
       <li className="flex items-center gap-2.5 text-meta text-fg-2">
         <span className="h-2.5 w-[34px] shrink-0 rounded-xs border border-dashed border-line-strong" aria-hidden="true" />
         <span><span className="font-medium text-fg">dashed box</span> · external system</span>

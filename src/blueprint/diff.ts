@@ -6,7 +6,7 @@
 
 import { DEFAULT_TRIPWIRES, TEST_PATTERNS, type TripwireCategory } from "./constants";
 import { compileGlob, matchesAny } from "./glob";
-import { basename, extname } from "./paths";
+import { basename, dirname, extname, join } from "./paths";
 import type { Severity } from "./schema";
 import type { ChangedFile, ChangeStatus, DiffLine } from "./types";
 
@@ -440,13 +440,60 @@ export function matchTripwires(changes: readonly ChangedFile[], options: Tripwir
 
 // ── Verification-weakening heuristics ─────────────────────────
 
+/**
+ * Every verification-weakening signal and its strength, the one place the
+ * split is defined. A strong signal removes or disables a check outright: a
+ * skipped, focused, deleted or gutted test, a lowered or removed coverage
+ * bar, a forced zero exit. Under `policy.verificationWeakening:
+ * "require-approval"` (the default) a strong signal is an error until a human
+ * approves the change with the approval label. Weak signals loosen
+ * verification in ways that are routine often enough to stay warnings (or
+ * info) for a reviewer.
+ */
+export const WEAKENING_SIGNALS = {
+  "test-skipped": "strong",
+  "test-focused": "strong",
+  "assertions-removed": "strong",
+  "assertion-trivialized": "strong",
+  "test-file-deleted": "strong",
+  "coverage-threshold-lowered": "strong",
+  "coverage-threshold-removed": "strong",
+  "exit-zero": "strong",
+  "ci-weakened": "weak",
+  "tests-excluded": "weak",
+  "test-script-changed": "weak",
+  "suppression-added": "weak",
+  "test-special-casing": "weak",
+  "snapshots-mass-updated": "weak",
+} as const satisfies Record<string, "strong" | "weak">;
+
+export type WeakeningSignalName = keyof typeof WEAKENING_SIGNALS;
+
+/** Appended to a strong signal's message while it waits for a human. */
+export const WEAKENING_NEEDS_APPROVAL =
+  "This weakens the checks agents are graded by, so a human must approve it: apply the approval label (rassam:approved by default), or restore the check.";
+/** Appended to a strong signal's message once a human approved the change. */
+export const WEAKENING_APPROVED = "A human approved this change to the tests.";
+
 export interface WeakeningSignal {
   path: string;
   line?: number;
-  signal: string;
+  signal: WeakeningSignalName;
+  /** Severity when no approval is required: the `"warn"` policy, and weak signals under any policy. */
   severity: Severity;
+  /**
+   * Needs a human approval under `policy.verificationWeakening:
+   * "require-approval"`. Follows WEAKENING_SIGNALS, except that context can
+   * clear it, never set it: a test file deleted together with the code it
+   * tests, assertions removed together with the functions they called. Such
+   * signals are still reported, at their usual severity.
+   */
+  strong: boolean;
   message: string;
 }
+
+/** What a detector returns; `strong` is filled in from WEAKENING_SIGNALS unless context cleared it. */
+type RawSignal = Omit<WeakeningSignal, "strong"> & { strong?: false };
 
 const SNAPSHOT_PATTERNS = ["**/__snapshots__/**", "*.snap"];
 const CI_PATTERNS = [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "azure-pipelines.yml", "Jenkinsfile"];
@@ -526,6 +573,13 @@ const SKIP_PATTERNS: readonly RegExp[] = [
   /\.skip\s*\(/,
   /\b(?:it|test|describe|context|suite)\.skip\b/,
   /\.skipIf\s*\(/,
+  // node:test options, wherever they sit in the object: test('name', { skip: true }, fn)
+  // or { timeout: 500, todo: 'reason' }. The span before the object may not cross a
+  // closing parenthesis or an arrow, so object literals inside a test body are left alone.
+  // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
+  /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*\b(?:skip|todo)\s*:(?!\s*false\b)/,
+  /\b(?:t|ctx)\.todo\s*\(/,
+  /\b(?:it|test|describe)\.fixme\b/,
   /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
   /@pytest\.mark\.(?:skip|skipif|xfail)\b/,
   /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/,
@@ -535,6 +589,11 @@ const SKIP_PATTERNS: readonly RegExp[] = [
   /#\[ignore\b/,
 ];
 
+/** A test call whose options object is still open at the end of the line: `test('name', {`. */
+const TEST_OPTIONS_OPEN = /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*$/;
+/** A `skip:` or `todo:` property on a line of its own. Only meaningful inside such an options object. */
+const SKIP_OPTION_LINE = /^\s*(?:skip|todo)\s*:(?!\s*false\b)/;
+
 const FOCUS_PATTERNS: readonly RegExp[] = [/\.only\s*\(/, /\b(?:fit|fdescribe|fcontext)\s*\(/];
 
 const ASSERTION_PATTERN =
@@ -543,6 +602,8 @@ const ASSERTION_PATTERN =
 const LITERAL = String.raw`(?:true|false|null|undefined|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;
 const TRIVIAL_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`\bexpect\s*\(\s*${LITERAL}\s*\)\s*\.(?:not\.)?to\w+\s*\(`),
+  // A value compared with itself: expect(value).toBe(value).
+  /\bexpect\s*\(\s*([A-Za-z_$][\w$.]*)\s*\)\s*\.to(?:Be|Equal|StrictEqual)\s*\(\s*\1\s*\)/,
   /^\s*assert\s+(?:True|1|not\s+False)\s*(?:,|#|$)/,
   /^\s*assert\s+(\w+|"[^"]*"|'[^']*')\s*==\s*\1\s*(?:,|#|$)/,
   /\bassert(?:True|_true|\.ok|\.isTrue)?\s*\(\s*(?:true|True|1)\s*[,)]/,
@@ -634,8 +695,222 @@ const NAMED_TEST_PATTERNS: readonly string[] = [
   "**/*Test.java", "**/*Tests.java", "**/*Test.kt", "**/*Tests.cs", "**/*_spec.rb",
 ];
 
-function detectDeletedTest(change: ChangedFile): WeakeningSignal[] {
+// ── Context across the change ─────────────────────────────────
+//
+// A strong signal is downgraded, or not raised, only when the rest of the
+// change shows that no verification was lost or that what it verified is
+// gone too. Each rule below is evidence read from the same diff.
+
+/** Assertion text as a key for matching moves: whitespace-insensitive, strings kept. */
+function assertionKey(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function realAssertions(change: ChangedFile, lines: readonly DiffLine[]): DiffLine[] {
+  return lines.filter((entry) => isAssertion(codeOnly(change.path, entry.text)));
+}
+
+/** Moving a test keeps it running only if the destination is picked up the same way. */
+function staysInRunner(from: string, to: string): boolean {
+  return isTestFile(to) && (!matchesAny(from, NAMED_TEST_PATTERNS) || matchesAny(to, NAMED_TEST_PATTERNS));
+}
+
+/**
+ * Removed assertions that reappear verbatim in another test file of the same
+ * change: tests moved between files or split out of one. A file can only
+ * lend the assertions it gained beyond its own removals, so one added line
+ * never accounts for two removals and a file that lost its own assertions
+ * cannot hide that by receiving someone else's.
+ */
+function planAssertionMoves(changes: readonly ChangedFile[]): Map<ChangedFile, Set<DiffLine>> {
+  const files = changes
+    .filter((change) => !change.binary && isTestFile(change.path))
+    .sort((left, right) => compareText(left.path, right.path))
+    .map((change) => ({ change, removed: realAssertions(change, change.removed), added: realAssertions(change, change.added) }));
+  const spare = new Map<ChangedFile, number>();
+  const pool = new Map<string, ChangedFile[]>();
+  for (const file of files) {
+    const surplus = file.added.length - file.removed.length;
+    if (surplus <= 0) continue;
+    spare.set(file.change, surplus);
+    for (const entry of file.added) {
+      const key = assertionKey(entry.text);
+      pool.set(key, [...(pool.get(key) ?? []), file.change]);
+    }
+  }
+  const moved = new Map<ChangedFile, Set<DiffLine>>();
+  for (const file of files) {
+    for (const entry of file.removed) {
+      const owners = pool.get(assertionKey(entry.text));
+      if (!owners) continue;
+      const index = owners.findIndex((owner) => (
+        owner !== file.change && (spare.get(owner) ?? 0) > 0 && staysInRunner(file.change.previousPath ?? file.change.path, owner.path)
+      ));
+      if (index < 0) continue;
+      const [owner] = owners.splice(index, 1);
+      spare.set(owner, (spare.get(owner) ?? 0) - 1);
+      const set = moved.get(file.change) ?? new Set<DiffLine>();
+      set.add(entry);
+      moved.set(file.change, set);
+    }
+  }
+  return moved;
+}
+
+const DEFINITION_PATTERNS: readonly RegExp[] = [
+  /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*[<(]/g,
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_$][\w$]*\s*=>)/g,
+  /\bclass\s+([A-Za-z_$][\w$]*)/g,
+  /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/g,
+  /\bfunc\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*[[(]/g,
+  /\bfn\s+([A-Za-z_]\w*)\s*[<(]/g,
+];
+
+function definedNames(path: string, lines: readonly DiffLine[]): Set<string> {
+  const names = new Set<string>();
+  for (const { text } of lines) {
+    const code = codeOnly(path, text);
+    if (COMMENTED_LINE.test(code)) continue;
+    for (const pattern of DEFINITION_PATTERNS) {
+      for (const match of code.matchAll(pattern)) if (match[1].length >= 3) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+interface ChangeContext {
+  /** Removed assertion lines that moved verbatim to another runnable test file. */
+  moved: Map<ChangedFile, Set<DiffLine>>;
+  /**
+   * Functions and classes whose definitions left non-test code and whose
+   * names appear nowhere in the code the change adds (not redefined, not
+   * wrapped, not called from new code).
+   */
+  removedDefinitions: Set<string>;
+  /** Non-test source files deleted by the change. */
+  deletedSources: string[];
+}
+
+function changeContext(changes: readonly ChangedFile[]): ChangeContext {
+  const removed = new Set<string>();
+  const mentioned = new Set<string>();
+  const deletedSources: string[] = [];
+  for (const change of changes) {
+    if (change.binary || isTestFile(change.path) || !CODE_EXTENSIONS.has(extname(change.path).toLowerCase())) continue;
+    if (change.status === "deleted") deletedSources.push(change.path);
+    for (const name of definedNames(change.path, change.removed)) removed.add(name);
+    for (const { text } of change.added) {
+      for (const name of codeOnly(change.path, text).match(IDENTIFIER) ?? []) mentioned.add(name);
+    }
+  }
+  return {
+    moved: planAssertionMoves(changes),
+    removedDefinitions: new Set([...removed].filter((name) => !mentioned.has(name))),
+    deletedSources: deletedSources.sort(compareText),
+  };
+}
+
+// `(?<![.\w$])` keeps method calls such as /pattern/.test(value) out.
+const TEST_DECLARATION =
+  /(?<![.\w$])(?:it|test|describe|context|suite|specify)(?:\.\w+)*\s*\(|^\s*(?:async\s+)?def\s+test\w*\s*\(|\bfunc\s+(?:Test|Benchmark|Fuzz)\w*\s*\(|@Test\b|#\[(?:\w+::)?test\]|\[(?:Fact|Theory|Test|TestMethod)\]/;
+
+/** Does a deleted file hold tests, or only helpers, fixtures or data that tests use? */
+function heldTests(change: ChangedFile): boolean {
+  if (matchesAny(change.path, NAMED_TEST_PATTERNS)) return true;
+  return change.removed.some(({ text }) => {
+    const code = codeOnly(change.path, text);
+    return !COMMENTED_LINE.test(code) && (isAssertion(code) || TEST_DECLARATION.test(code));
+  });
+}
+
+const IMPORT_SPECIFIER = /\b(?:import|from|require|export)\b[^"'`]*?\(?\s*["'`]([^"'`\s]+)["'`]/g;
+const PYTHON_IMPORT = /^\s*(?:from\s+(\.*[\w.]*)\s+import\b|import\s+([\w.]+))/;
+
+function withoutExtension(path: string): string {
+  const extension = extname(path);
+  return extension ? path.slice(0, -extension.length) : path;
+}
+
+/**
+ * Repository paths (without extension) a test file's import lines may refer
+ * to. "*\/x/y" stands for a bare or aliased specifier that matches any path
+ * ending in /x/y.
+ */
+function importTargets(change: ChangedFile): string[] {
+  const directory = dirname(change.path);
+  const python = extname(change.path).toLowerCase() === ".py";
+  const targets: string[] = [];
+  for (const { text } of change.removed) {
+    if (!python) {
+      for (const match of text.matchAll(IMPORT_SPECIFIER)) {
+        const specifier = match[1];
+        if (specifier.startsWith(".")) targets.push(withoutExtension(join(directory, specifier)));
+        else targets.push(`*/${withoutExtension(specifier.replace(/^[@~#]\//, ""))}`);
+      }
+      continue;
+    }
+    const statement = PYTHON_IMPORT.exec(text);
+    const dotted = statement?.[1] ?? statement?.[2];
+    if (dotted) {
+      const dots = /^\.*/.exec(dotted)?.[0].length ?? 0;
+      const rest = dotted.slice(dots).replace(/\./g, "/");
+      if (dots > 0) {
+        const base = [...Array(dots - 1)].reduce<string>((current) => dirname(current), directory);
+        if (rest) targets.push(join(base, rest));
+      } else if (rest) {
+        targets.push(join(directory, rest), `*/${rest}`);
+      }
+    }
+  }
+  return targets;
+}
+
+/** A test's subject from its file name: orders.test.ts, test_orders.py, orders_test.go and OrdersTest.java → orders. */
+function testStem(path: string): string {
+  return basename(path)
+    .replace(/\.[^.]+$/, "")
+    .replace(/[._-](?:test|spec)$/i, "")
+    .replace(/(?<=[a-z0-9])Tests?$/, "")
+    .replace(/^test_/i, "")
+    .toLowerCase();
+}
+
+/** The deleted source file a deleted test file imported or sat next to, if any. */
+function deletedSubject(change: ChangedFile, context: ChangeContext): string | null {
+  if (context.deletedSources.length === 0) return null;
+  const targets = importTargets(change);
+  for (const source of context.deletedSources) {
+    const bare = withoutExtension(source);
+    const imported = targets.some((target) => {
+      if (!target.startsWith("*/")) return bare === target || bare === `${target}/index`;
+      const tail = target.slice(2);
+      return bare === tail || bare.endsWith(`/${tail}`) || bare.endsWith(`/${tail}/index`);
+    });
+    const colocated = dirname(source) === dirname(change.path) && withoutExtension(basename(source)).toLowerCase() === testStem(change.path);
+    if (imported || colocated) return source;
+  }
+  return null;
+}
+
+function detectDeletedTest(change: ChangedFile, context: ChangeContext): RawSignal[] {
   if (change.status === "deleted" && isTestFile(change.path)) {
+    // Helpers, fixtures and data under a test directory verify nothing on their own;
+    // the tests tripwire still surfaces their deletion for review.
+    if (!heldTests(change)) return [];
+    const subject = deletedSubject(change, context);
+    if (subject) {
+      return [{
+        path: change.path,
+        signal: "test-file-deleted",
+        severity: "warning",
+        strong: false,
+        message: `Test file deleted together with ${subject}, the code it tests`,
+      }];
+    }
+    // A test file split into others, or folded into one: every assertion still runs.
+    const moved = context.moved.get(change)?.size ?? 0;
+    const assertions = realAssertions(change, change.removed).length;
+    if (assertions > 0 && moved === assertions) return [];
     return [{ path: change.path, signal: "test-file-deleted", severity: "warning", message: "Test file deleted" }];
   }
   // A runner picks tests up by file name (*.test.*, test_*.py, *_test.go, ...);
@@ -656,11 +931,21 @@ function detectDeletedTest(change: ChangedFile): WeakeningSignal[] {
   return [];
 }
 
-function detectTestLineSignals(change: ChangedFile): WeakeningSignal[] {
-  const signals: WeakeningSignal[] = [];
+function detectTestLineSignals(change: ChangedFile): RawSignal[] {
+  const signals: RawSignal[] = [];
+  // The next added line that would still be inside a test call's options object
+  // opened on an earlier added line:
+  //   test('name', {
+  //     timeout: 500,
+  //     skip: true,
+  //   }, fn)
+  // Outside such an object a `skip:` property is ordinary data (pagination, fixtures).
+  let optionsLine = -1;
   for (const { line, text } of change.added) {
     const code = codeOnly(change.path, text);
-    if (SKIP_PATTERNS.some((pattern) => pattern.test(code))) {
+    const insideOptions = line === optionsLine;
+    optionsLine = (insideOptions && !code.includes("}")) || TEST_OPTIONS_OPEN.test(code) ? line + 1 : -1;
+    if (SKIP_PATTERNS.some((pattern) => pattern.test(code)) || (insideOptions && SKIP_OPTION_LINE.test(code))) {
       signals.push({
         path: change.path,
         line,
@@ -700,28 +985,115 @@ function isAssertion(text: string): boolean {
   return ASSERTION_PATTERN.test(text) && !TRIVIAL_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function detectRemovedAssertions(change: ChangedFile): WeakeningSignal[] {
+function isTrivialAssertion(text: string): boolean {
+  return !COMMENTED_LINE.test(text) && TRIVIAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** Test constructs that run one body over a table of cases. */
+const PARAMETRIZED_PATTERNS: readonly RegExp[] = [
+  /\b(?:it|test|describe|suite|bench)(?:\.\w+)*\.each\s*[(`]/,
+  /@pytest\.mark\.parametrize\b/,
+  /@ParameterizedTest\b|@(?:Csv|Value|Method)Source\b/,
+  /\[(?:Theory|InlineData|TestCase)\b/,
+  /#\[(?:rstest|case|test_case)\b/,
+  /\bfor\s+_\s*,\s*\w+\s*:=\s*range\b/,
+  /\bt\.Run\s*\(/,
+];
+
+const NUMBER_LITERAL = /(?<![\w$.])-?\d+(?:\.\d+)?(?![\w$])/g;
+const COMMON_NUMBERS = new Set(["0", "1", "-1"]);
+const IDENTIFIER = /[A-Za-z_$][\w$]*/g;
+
+/** Values a line checks: numbers in code and the contents of single-line, non-interpolated strings. */
+function literalsOf(path: string, text: string): { numbers: string[]; strings: string[] } {
+  const strings = [...text.matchAll(STRING_LITERAL)]
+    .map((match) => match[0].slice(1, -1))
+    .filter((value) => value.trim() !== "" && !value.includes("${"));
+  const numbers = [...codeOnly(path, text).matchAll(NUMBER_LITERAL)].map((match) => match[0]);
+  return { numbers, strings };
+}
+
+/**
+ * Folding near-identical tests into one parametrized test (it.each,
+ * pytest.mark.parametrize, a Go table) removes assertion lines but keeps
+ * the cases. A removed assertion counts as folded into the table when the
+ * change adds a parametrized test with a real assertion in the same file and
+ * every value the removed assertion checked appears in the added lines.
+ */
+function foldedIntoTable(change: ChangedFile): ((entry: DiffLine) => boolean) | null {
+  const addsTable = change.added.some((entry) => PARAMETRIZED_PATTERNS.some((pattern) => pattern.test(codeOnly(change.path, entry.text))));
+  if (!addsTable || realAssertions(change, change.added).length === 0) return null;
+  const numbers = new Set<string>();
+  const strings = new Set<string>();
+  for (const entry of change.added) {
+    const literals = literalsOf(change.path, entry.text);
+    for (const value of literals.numbers) numbers.add(value);
+    for (const value of literals.strings) strings.add(value);
+  }
+  return (entry) => {
+    const literals = literalsOf(change.path, entry.text);
+    const distinctive = literals.strings.length > 0 || literals.numbers.some((value) => !COMMON_NUMBERS.has(value));
+    return distinctive && literals.numbers.every((value) => numbers.has(value)) && literals.strings.every((value) => strings.has(value));
+  };
+}
+
+/** Removed lines grouped into contiguous blocks of the old file (a deleted test, a deleted describe). */
+function removedBlocks(lines: readonly DiffLine[]): DiffLine[][] {
+  const blocks: DiffLine[][] = [];
+  for (const entry of lines) {
+    const last = blocks[blocks.length - 1];
+    if (last && entry.line === last[last.length - 1].line + 1) last.push(entry);
+    else blocks.push([entry]);
+  }
+  return blocks;
+}
+
+function detectRemovedAssertions(change: ChangedFile, context: ChangeContext): RawSignal[] {
   if (change.status !== "modified" && change.status !== "renamed") return [];
   const assertion = (entry: DiffLine) => isAssertion(codeOnly(change.path, entry.text));
-  const removed = change.removed.filter(assertion);
+  const moved = context.moved.get(change);
+  const folded = foldedIntoTable(change);
+  // Assertions that moved to another test file or into a parametrized table still run.
+  const removed = change.removed.filter((entry) => assertion(entry) && !moved?.has(entry) && !folded?.(entry));
   if (removed.length === 0) return [];
   const added = change.added.filter(assertion).length;
+  // An assertion replaced by one that cannot fail is reported once, as assertion-trivialized.
+  const trivialized = change.added.filter((entry) => isTrivialAssertion(codeOnly(change.path, entry.text))).length;
   const otherAdded = change.added.some((entry) => entry.text.trim() && !assertion(entry));
   const otherRemoved = change.removed.some((entry) => entry.text.trim() && !assertion(entry));
-  // "Code remained": the surrounding test body was kept or rewritten rather than deleted wholesale.
-  const strippedOnly = added === 0 && (otherAdded || !otherRemoved);
-  if (removed.length - added < 3 && !strippedOnly) return [];
+  // "Stripped": the surrounding test body was kept or rewritten rather than deleted wholesale.
+  const triggers = (count: number) => {
+    const lost = count - trivialized;
+    return lost > 0 && (lost - added >= 3 || (added === 0 && (otherAdded || !otherRemoved)));
+  };
+  if (!triggers(removed.length)) return [];
+
+  // Test blocks deleted together with the functions they called (a feature removed
+  // with its tests) still lose verification, but of code that no longer exists.
+  const subjects = new Set<string>();
+  const withCode = new Set<DiffLine>();
+  if (context.removedDefinitions.size > 0) {
+    for (const block of removedBlocks(change.removed)) {
+      const names = block.flatMap((entry) => codeOnly(change.path, entry.text).match(IDENTIFIER) ?? [])
+        .filter((name) => context.removedDefinitions.has(name));
+      if (names.length === 0) continue;
+      for (const name of names) subjects.add(name);
+      for (const entry of block) withCode.add(entry);
+    }
+  }
+  const strong = triggers(removed.filter((entry) => !withCode.has(entry)).length);
+
   const noun = removed.length === 1 ? "assertion" : "assertions";
+  const counts = added === 0 ? `${removed.length} ${noun} removed and none added` : `${removed.length} ${noun} removed, only ${added} added`;
+  const names = [...subjects].sort(compareText).slice(0, 3).join(", ");
   return [
     {
       path: change.path,
       line: removed[0].line,
       signal: "assertions-removed",
       severity: "warning",
-      message:
-        added === 0
-          ? `${removed.length} ${noun} removed and none added`
-          : `${removed.length} ${noun} removed, only ${added} added`,
+      ...(strong ? {} : { strong: false as const }),
+      message: strong ? counts : `${counts}, together with the code they tested (${names})`,
     },
   ];
 }
@@ -742,11 +1114,11 @@ function shellExitFakesSuccess(text: string, hook: boolean): boolean {
   return commandClasses(command).some((kind) => kind === "test" || kind === "lint" || kind === "typecheck" || kind === "check");
 }
 
-function detectExitZero(change: ChangedFile): WeakeningSignal[] {
+function detectExitZero(change: ChangedFile): RawSignal[] {
   const isPackageJson = basename(change.path) === "package.json";
   if (!isPackageJson && !isVerificationFile(change.path)) return [];
   const shell = isCiFile(change.path) || isShellLike(change.path) || matchesAny(change.path, HOOK_PATTERNS);
-  const signals: WeakeningSignal[] = [];
+  const signals: RawSignal[] = [];
   for (const { line, text } of change.added) {
     if (isPackageJson) {
       // Only verification scripts count, e.g. "test": "exit 0".
@@ -765,7 +1137,7 @@ function detectExitZero(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
-function detectSuppressions(change: ChangedFile): WeakeningSignal[] {
+function detectSuppressions(change: ChangedFile): RawSignal[] {
   if (DOC_EXTENSIONS.has(extname(change.path).toLowerCase())) return [];
   const found: Array<{ line: number; label: string; text: string }> = [];
   for (const { line, text } of change.added) {
@@ -802,8 +1174,8 @@ const TEST_EXCLUSION_PATTERNS: readonly RegExp[] = [
   /\bnorecursedirs\b|\baddopts\b[^\n]*(?:--ignore|-k\s+["']?not\b)/,
 ];
 
-function detectTestExclusion(change: ChangedFile): WeakeningSignal[] {
-  const signals: WeakeningSignal[] = [];
+function detectTestExclusion(change: ChangedFile): RawSignal[] {
+  const signals: RawSignal[] = [];
   for (const { line, text } of change.added) {
     if (COMMENTED_LINE.test(text) || !TEST_EXCLUSION_PATTERNS.some((pattern) => pattern.test(text))) continue;
     signals.push({
@@ -817,8 +1189,8 @@ function detectTestExclusion(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
-function detectCiWeakening(change: ChangedFile): WeakeningSignal[] {
-  const signals: WeakeningSignal[] = [];
+function detectCiWeakening(change: ChangedFile): RawSignal[] {
+  const signals: RawSignal[] = [];
   for (const { line, text } of change.added) {
     if (text.trim().startsWith("#")) continue;
     const match = CI_WEAKENING_PATTERNS.find((entry) => entry.pattern.test(text));
@@ -880,7 +1252,7 @@ function detectCiWeakening(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
-function detectCoverageLowered(change: ChangedFile): WeakeningSignal[] {
+function detectCoverageLowered(change: ChangedFile): RawSignal[] {
   const addedByKey = new Map<string, Array<{ line: number; value: number }>>();
   for (const { line, text } of change.added) {
     const threshold = thresholdOf(text);
@@ -889,7 +1261,7 @@ function detectCoverageLowered(change: ChangedFile): WeakeningSignal[] {
     list.push({ line, value: threshold.value });
     addedByKey.set(threshold.key, list);
   }
-  const signals: WeakeningSignal[] = [];
+  const signals: RawSignal[] = [];
   const cursor = new Map<string, number>();
   for (const { text } of change.removed) {
     const threshold = thresholdOf(text);
@@ -923,7 +1295,7 @@ function detectCoverageLowered(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
-function detectScriptChanges(change: ChangedFile): WeakeningSignal[] {
+function detectScriptChanges(change: ChangedFile): RawSignal[] {
   const scripts = new Map<string, { added?: DiffLine; removed?: DiffLine; before?: string; after?: string }>();
   for (const entry of change.removed) {
     const script = scriptOf(entry.text);
@@ -937,7 +1309,7 @@ function detectScriptChanges(change: ChangedFile): WeakeningSignal[] {
     if (existing.added) continue;
     scripts.set(script.name, { ...existing, added: entry, after: script.command });
   }
-  const signals: WeakeningSignal[] = [];
+  const signals: RawSignal[] = [];
   for (const [name, entry] of scripts) {
     // A moved or re-indented line is not a change, and a new script weakens nothing.
     if (entry.before !== undefined && entry.before === entry.after) continue;
@@ -961,7 +1333,7 @@ function detectScriptChanges(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
-function detectSnapshotChurn(changes: readonly ChangedFile[]): WeakeningSignal[] {
+function detectSnapshotChurn(changes: readonly ChangedFile[]): RawSignal[] {
   const snapshots = changes
     .filter((change) => (change.status === "modified" || change.status === "deleted") && isSnapshotFile(change.path))
     .map((change) => change.path)
@@ -977,10 +1349,6 @@ function detectSnapshotChurn(changes: readonly ChangedFile[]): WeakeningSignal[]
   ];
 }
 
-/**
- * Heuristics for changes that make verification easier to pass rather than
- * making the code correct. Signals are sorted by path, line, then signal.
- */
 /**
  * Production code that detects it is running under a test runner. Special-
  * casing tests is a documented reward hack (return the expected value only
@@ -999,10 +1367,10 @@ const TEST_DETECTION_PATTERNS: readonly RegExp[] = [
   /\bimport\.meta\.env\.(?:MODE|NODE_ENV)\s*[!=]==?\s*["'`]test["'`]/,
 ];
 
-function detectTestSpecialCasing(change: ChangedFile): WeakeningSignal[] {
+function detectTestSpecialCasing(change: ChangedFile): RawSignal[] {
   if (!CODE_EXTENSIONS.has(extname(change.path).toLowerCase()) || isVerificationFile(change.path)) return [];
   if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) return [];
-  const signals: WeakeningSignal[] = [];
+  const signals: RawSignal[] = [];
   for (const { line, text } of change.added) {
     // The match must start in code: fixtures that quote these patterns do not count.
     const masked = codeOnly(change.path, text);
@@ -1022,15 +1390,22 @@ function detectTestSpecialCasing(change: ChangedFile): WeakeningSignal[] {
   return signals;
 }
 
+/**
+ * Heuristics for changes that make verification easier to pass rather than
+ * making the code correct. Signals are sorted by path, line, then signal.
+ * Each carries `strong` (see WEAKENING_SIGNALS): whether, under
+ * `policy.verificationWeakening: "require-approval"`, it needs a human.
+ */
 export function detectVerificationWeakening(changes: readonly ChangedFile[]): WeakeningSignal[] {
-  const signals: WeakeningSignal[] = [];
+  const context = changeContext(changes);
+  const signals: RawSignal[] = [];
   for (const change of changes) {
-    signals.push(...detectDeletedTest(change));
+    signals.push(...detectDeletedTest(change, context));
     if (change.binary) continue;
     const testFile = isTestFile(change.path) || basename(change.path) === "conftest.py";
     if (testFile) {
       signals.push(...detectTestLineSignals(change));
-      signals.push(...detectRemovedAssertions(change));
+      signals.push(...detectRemovedAssertions(change, context));
     } else {
       signals.push(...detectTestSpecialCasing(change));
     }
@@ -1042,11 +1417,13 @@ export function detectVerificationWeakening(changes: readonly ChangedFile[]): We
     if (basename(change.path) === "package.json") signals.push(...detectScriptChanges(change));
   }
   signals.push(...detectSnapshotChurn(changes));
-  return signals.sort(
-    (left, right) =>
-      compareText(left.path, right.path) ||
-      (left.line ?? 0) - (right.line ?? 0) ||
-      compareText(left.signal, right.signal) ||
-      compareText(left.message, right.message),
-  );
+  return signals
+    .map((signal): WeakeningSignal => ({ ...signal, strong: signal.strong !== false && WEAKENING_SIGNALS[signal.signal] === "strong" }))
+    .sort(
+      (left, right) =>
+        compareText(left.path, right.path) ||
+        (left.line ?? 0) - (right.line ?? 0) ||
+        compareText(left.signal, right.signal) ||
+        compareText(left.message, right.message),
+    );
 }

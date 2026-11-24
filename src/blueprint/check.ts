@@ -2,7 +2,7 @@ import { detectAgentActivity } from "./agents";
 import { diffBlueprints } from "./blueprint-diff";
 import { BLUEPRINT_PATH, type Blueprint, type BlueprintComponent, type BlueprintIssue, type Selector, type Severity } from "./schema";
 import { ENGINE_NAME, ENGINE_VERSION } from "./constants";
-import { detectVerificationWeakening, matchTripwires } from "./diff";
+import { detectVerificationWeakening, matchTripwires, WEAKENING_APPROVED, WEAKENING_NEEDS_APPROVAL } from "./diff";
 import { compileGlob } from "./glob";
 import { assignComponents, buildComponentGraph, componentForPath } from "./graph";
 import { computeImpact, dependentCounts } from "./impact";
@@ -39,8 +39,20 @@ export interface CheckInput {
   /** Diff mode: merge-base contents of modified, deleted and renamed files. */
   baseFiles?: SourceFile[];
   commits?: CommitInfo[];
-  /** A human approved contract changes (e.g. a PR label). */
+  /**
+   * A human approved the change (e.g. a PR label). Contract-weakening
+   * findings, and verification-weakening findings that need approval under
+   * `policy.verificationWeakening`, are then reported as info.
+   */
   approved?: boolean;
+  /**
+   * Full mode only: the blueprint was just drafted from exactly these files
+   * (`rassam init`, the Studio). Every rule and policy violation found is
+   * reported as pre-existing (`isNew: false`) rather than new, with a note in
+   * its message, because it existed before the contract did. Reach findings
+   * and invalid-blueprint findings are unaffected. Ignored in diff mode.
+   */
+  preExisting?: boolean;
   refs?: { base?: { ref: string; sha?: string }; head?: { ref: string; sha?: string } };
   invariantResults?: Array<{ id: string; ok: boolean; output: string }>;
   now?: string;
@@ -395,16 +407,39 @@ function tripwireFindings(changes: readonly ChangedFile[], judge: Blueprint | nu
   return findings;
 }
 
-function weakeningFindings(changes: readonly ChangedFile[]): Violation[] {
-  return detectVerificationWeakening(changes).map((signal) => ({
-    id: fingerprint("verification-weakened", signal.signal, signal.path, signal.line),
-    kind: "verification-weakened" as const,
-    severity: signal.severity,
-    title: `Verification weakened (${signal.signal}): ${signal.path}`,
-    message: signal.message,
-    components: [],
-    locations: [{ path: signal.path, line: signal.line }],
-  }));
+/** Appended to rule and policy violations of a blueprint drafted from the code it is checked against. */
+const DRAFTED_NOTE = "This existed before the contract did: the blueprint was drafted from this code.";
+
+function withSentence(message: string, sentence: string): string {
+  const trimmed = message.trimEnd();
+  if (!trimmed) return sentence;
+  return `${trimmed}${/[.!?…]$/.test(trimmed) ? "" : "."} ${sentence}`;
+}
+
+/**
+ * Verification-weakening signals as findings. Under "require-approval" a
+ * strong signal is an error until a human approves the change; under "warn"
+ * it keeps the detector's severity. A forced zero exit is an error under
+ * both settings and an approval clears it under both, so "warn" is never
+ * stricter than "require-approval". The fingerprint ignores severity.
+ */
+function weakeningFindings(
+  changes: readonly ChangedFile[],
+  mode: Blueprint["policy"]["verificationWeakening"],
+  approved: boolean,
+): Violation[] {
+  return detectVerificationWeakening(changes).map((signal) => {
+    const needsApproval = signal.strong && (mode === "require-approval" || signal.signal === "exit-zero");
+    return {
+      id: fingerprint("verification-weakened", signal.signal, signal.path, signal.line),
+      kind: "verification-weakened" as const,
+      severity: needsApproval ? (approved ? "info" as const : "error" as const) : signal.severity,
+      title: `Verification weakened (${signal.signal}): ${signal.path}`,
+      message: needsApproval ? withSentence(signal.message, approved ? WEAKENING_APPROVED : WEAKENING_NEEDS_APPROVAL) : signal.message,
+      components: [],
+      locations: [{ path: signal.path, line: signal.line }],
+    };
+  });
 }
 
 function reachFindings(reach: ReachReport, changed: Set<string> | null): Array<{ violation: Violation; isNew: boolean }> {
@@ -532,6 +567,9 @@ export function runCheck(input: CheckInput): CheckReport {
           locations: newUnmapped.slice(0, 50).map((path) => ({ path })),
         }]);
       }
+    } else if (input.preExisting) {
+      // A draft describes the code as it is, so whatever it already finds predates it.
+      add(headViolations.map((violation) => ({ ...violation, message: withSentence(violation.message, DRAFTED_NOTE) })), () => false);
     } else {
       add(headViolations);
     }
@@ -547,7 +585,9 @@ export function runCheck(input: CheckInput): CheckReport {
   if (diffMode) {
     if (input.commits?.length) agentActivity = detectAgentActivity(input.commits);
     add(tripwireFindings(changes, judge));
-    if (judge?.policy.verificationHeuristics ?? true) add(weakeningFindings(changes));
+    if (judge?.policy.verificationHeuristics ?? true) {
+      add(weakeningFindings(changes, judge?.policy.verificationWeakening ?? "require-approval", Boolean(input.approved)));
+    }
     if (!input.blueprintIssues?.length && (input.baseBlueprint !== undefined || head)) {
       const base = input.baseBlueprint ?? null;
       contractChanges = diffBlueprints(base, head);
@@ -562,8 +602,15 @@ export function runCheck(input: CheckInput): CheckReport {
     if (model) {
       const changedPaths = [...changedPathSet(changes)];
       impact = computeImpact(changedPaths, judge, model.componentGraph);
-      const touched = new Set(impact.touchedComponents.map((item) => item.id));
-      for (const path of changedPaths) {
+      // A blueprint edit the contract diff cannot see ($schema, formatting, key
+      // order) changes no component, rule or invariant, so even when a component
+      // claims the blueprint file it puts no sign-off or invariant in scope. A
+      // semantic edit still counts as a change to the component that owns the file.
+      const inertContractEdit = contractChanges?.length === 0 && Boolean(input.baseBlueprint) && Boolean(head);
+      const scoped = inertContractEdit ? changedPaths.filter((path) => path !== BLUEPRINT_PATH) : changedPaths;
+      const scopedImpact = scoped.length === changedPaths.length ? impact : computeImpact(scoped, judge, model.componentGraph);
+      const touched = new Set(scopedImpact.touchedComponents.map((item) => item.id));
+      for (const path of scoped) {
         const owner = componentForPath(path, judge);
         if (owner) touched.add(owner);
       }
@@ -579,7 +626,7 @@ export function runCheck(input: CheckInput): CheckReport {
           locations: [{ path: BLUEPRINT_PATH }],
         }]);
       }
-      add(invariantFindings(judge!, touched, changed, input.invariantResults));
+      add(invariantFindings(judge!, touched, new Set(scoped), input.invariantResults));
     }
   } else if (judge && input.invariantResults?.length) {
     add(invariantFindings(judge, new Set(), null, input.invariantResults));

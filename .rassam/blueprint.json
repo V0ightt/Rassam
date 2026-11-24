@@ -1,5 +1,5 @@
 {
-  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
+  "$schema": "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json",
   "version": "0.1",
   "system": {
     "name": "Rassam",
@@ -207,12 +207,13 @@
       "id": "tooling",
       "name": "Build tooling",
       "kind": "config",
-      "intent": "Build, lint, test and bundling configuration, including the CLI bundle consumed by the GitHub Action.",
+      "intent": "Build, lint, test, bundling and release configuration: the CLI bundle consumed by the GitHub Action, and the npm package (packages/rassam) that ships the same bundle and nothing else. The package version must equal ENGINE_VERSION, and it is published only by the release workflow on a version tag.",
       "paths": [
         "/*.ts",
         "/*.mts",
         "/*.mjs",
-        "scripts/**"
+        "scripts/**",
+        "packages/**"
       ]
     },
     {
@@ -508,6 +509,27 @@
   ],
   "invariants": [
     {
+      "id": "weakened-tests-need-a-human",
+      "statement": "Under the default policy, a change that skips, focuses, deletes or guts tests, lowers a coverage threshold or forces a success exit fails until a human applies the approval label, and no legitimate change in the benchmark's negatives fails.",
+      "components": [
+        "blueprint-engine"
+      ],
+      "check": {
+        "run": "npx vitest run src/blueprint/check.test.ts src/blueprint/bench.test.ts",
+        "tests": [
+          "src/blueprint/check.test.ts",
+          "src/blueprint/diff.test.ts",
+          "src/blueprint/bench.test.ts"
+        ]
+      },
+      "provenance": {
+        "source": "agent",
+        "by": "Claude Opus 5.5",
+        "at": "2026-11-24",
+        "note": "Added with the require-approval policy; a human should verify it."
+      }
+    },
+    {
       "id": "pr-judged-by-base-contract",
       "statement": "A change is judged by the base branch's blueprint; it cannot relax the contract it is checked against, and weakening edits are errors until a human approves them.",
       "components": [
@@ -517,7 +539,8 @@
         "run": "npx vitest run src/blueprint/engine.test.ts",
         "tests": [
           "src/blueprint/engine.test.ts",
-          "src/blueprint/blueprint-diff.test.ts"
+          "src/blueprint/blueprint-diff.test.ts",
+          "src/blueprint/check.test.ts"
         ]
       }
     },

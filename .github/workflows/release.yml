@@ -1,0 +1,230 @@
+name: Release
+
+# Publishes the rassam CLI and MCP server to npm and creates the GitHub release
+# when a version tag (v1.2.3) is pushed. See docs/releasing.md.
+#
+# The jobs are split by privilege: `build` installs dependencies, runs every
+# check and packs the tarball with read-only access; `publish` only uploads
+# that exact tarball to npm (OIDC trusted publishing, no token, behind the `npm`
+# environment); `release` only creates the GitHub release. A manual run
+# (workflow_dispatch) is a dry run: it builds, checks and packs, uploads the
+# files as a workflow artifact, and publishes nothing.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+      version: ${{ steps.version.outputs.version }}
+      dist-tag: ${{ steps.version.outputs.dist-tag }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          # Never restore a cache into a release build.
+          package-manager-cache: false
+
+      - name: Check the tag matches the package version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          name="$(node -p 'require("./packages/rassam/package.json").name')"
+          version="$(node -p 'require("./packages/rassam/package.json").version')"
+          engine="$(sed -nE 's/^export const ENGINE_VERSION *= *"([^"]+)".*/\1/p' src/blueprint/constants.ts)"
+          if [ -z "$engine" ]; then
+            echo "::error::ENGINE_VERSION not found in src/blueprint/constants.ts."
+            exit 1
+          fi
+          if [ "$version" != "$engine" ]; then
+            echo "::error::packages/rassam/package.json is $version but ENGINE_VERSION is $engine."
+            exit 1
+          fi
+          if [ "$REF_TYPE" = "tag" ]; then
+            if [ "$REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $REF_NAME does not match the package version v$version (ENGINE_VERSION $engine)."
+              exit 1
+            fi
+            # Release only what is on the default branch.
+            if ! git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH"; then
+              echo "::error::Tag $REF_NAME points at a commit that is not on $DEFAULT_BRANCH."
+              exit 1
+            fi
+          fi
+          if [ "$EVENT_NAME" != "push" ]; then
+            echo "::notice::Manual run on $REF_NAME: dry run, nothing is published."
+          fi
+          case "$version" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          {
+            echo "name=$name"
+            echo "version=$version"
+            echo "dist-tag=$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check the release notes exist
+        if: github.ref_type == 'tag'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/$REF_NAME.md"
+          if [ ! -s "$notes" ]; then
+            echo "::error::$notes is missing or empty. Write the release notes before tagging."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+      # The GitHub Action and the npm package run the committed bundle, so it
+      # must match the source (the same check as ci.yml).
+      - name: Verify the committed CLI bundle is fresh
+        run: |
+          npm run build:cli
+          git diff --exit-code -- action/dist
+          if [ -n "$(git status --porcelain -- action/dist)" ]; then
+            echo "::error::action/dist is not committed. Run npm run build:cli and commit the result."
+            exit 1
+          fi
+
+      - name: Stage and pack the npm package
+        id: pack
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          out="$RUNNER_TEMP/release"
+          rm -rf "$out"
+          mkdir -p "$out/files"
+          node scripts/pack-cli.mjs --pack "$out/files"
+          shopt -s nullglob
+          tarballs=("$out"/files/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "::error::Expected one tarball, found ${#tarballs[@]}."
+            exit 1
+          fi
+          tarball="$(basename "${tarballs[0]}")"
+          cp action/dist/rassam.mjs "$out/files/rassam.mjs"
+          (cd "$out/files" && sha256sum -- "$tarball" rassam.mjs > SHA256SUMS && cat SHA256SUMS && tar -tzvf "$tarball")
+          if [ "$REF_TYPE" = "tag" ]; then
+            cp "docs/releases/$REF_NAME.md" "$out/notes.md"
+          fi
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish to npm
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Add required reviewers to this environment to approve each publish.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/${{ needs.build.outputs.name }}/v/${{ needs.build.outputs.version }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Trusted publishing (OIDC) needs npm 11.5.1 or newer; Node 22 ships npm 10.
+      - name: Upgrade npm
+        run: |
+          npm install --global npm@^11.5.1
+          npm --version
+
+      - name: Publish the tarball built and checked above
+        env:
+          NAME: ${{ needs.build.outputs.name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIST_TAG: ${{ needs.build.outputs.dist-tag }}
+          TARBALL: release/files/${{ needs.build.outputs.tarball }}
+        run: |
+          local_integrity="$(node -e 'const { createHash } = require("node:crypto"); const { readFileSync } = require("node:fs"); process.stdout.write("sha512-" + createHash("sha512").update(readFileSync(process.argv[1])).digest("base64"));' "$TARBALL")"
+          # A re-run, or a version published by hand to create the package,
+          # must not be published twice. It must be the same tarball, though:
+          # the GitHub release attaches this file and its checksum.
+          if published="$(npm view "$NAME@$VERSION" dist.integrity 2> view-error.log)"; then
+            :
+          elif grep -q E404 view-error.log; then
+            published=""
+          else
+            cat view-error.log
+            echo "::error::Could not ask the registry whether $NAME@$VERSION exists."
+            exit 1
+          fi
+          if [ -n "$published" ]; then
+            if [ "$published" = "$local_integrity" ]; then
+              echo "::notice::$NAME@$VERSION is already on npm with the same contents; not publishing again."
+              exit 0
+            fi
+            echo "::error::$NAME@$VERSION is already on npm with different contents ($published, this build: $local_integrity). Release a new version."
+            exit 1
+          fi
+          npm publish "$TARBALL" --provenance --access public --tag "$DIST_TAG"
+
+  release:
+    name: GitHub release
+    needs: [build, publish]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - name: Create the release with the tarball, the bundle and their checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          flags=(--verify-tag --title "$TAG" --notes-file release/notes.md)
+          case "$VERSION" in
+            *-*) flags+=(--prerelease) ;;
+          esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" release/files/*

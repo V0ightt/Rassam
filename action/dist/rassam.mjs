@@ -16,7 +16,19 @@ var __export = (target, all) => {
 };
 
 // src/cli/io.ts
+async function askOnTerminal(question, defaultYes) {
+  const { createInterface } = await import("node:readline/promises");
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await terminal.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"} `)).trim().toLowerCase();
+    if (!answer) return defaultYes;
+    return /^y(es)?$/.test(answer);
+  } finally {
+    terminal.close();
+  }
+}
 function processIo() {
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   return {
     stdout: (text4) => void process.stdout.write(text4),
     stderr: (text4) => void process.stderr.write(text4),
@@ -25,7 +37,8 @@ function processIo() {
     isTTY: Boolean(process.stdout.isTTY),
     stdin: process.stdin,
     stdoutStream: process.stdout,
-    fetch: typeof fetch === "function" ? fetch : void 0
+    fetch: typeof fetch === "function" ? fetch : void 0,
+    ...interactive && !process.env.CI ? { ask: askOnTerminal } : {}
   };
 }
 function ensureTrailingNewline(text4) {
@@ -58,12 +71,13 @@ var init_io = __esm({
 });
 
 // src/blueprint/constants.ts
-var ENGINE_NAME, ENGINE_VERSION, MAX_ANALYZED_FILE_BYTES, DEFAULT_IGNORE, TEST_PATTERNS, DEFAULT_TRIPWIRES;
+var ENGINE_NAME, ENGINE_VERSION, PACKAGE_NAME, MAX_ANALYZED_FILE_BYTES, DEFAULT_IGNORE, TEST_PATTERNS, DEFAULT_TRIPWIRES;
 var init_constants = __esm({
   "src/blueprint/constants.ts"() {
     "use strict";
     ENGINE_NAME = "rassam";
     ENGINE_VERSION = "0.4.0";
+    PACKAGE_NAME = "@v0ightt/rassam";
     MAX_ANALYZED_FILE_BYTES = 512 * 1024;
     DEFAULT_IGNORE = [
       "**/node_modules/**",
@@ -323,6 +337,7 @@ var ROOT_FLAG, FORMAT_TEXT_JSON, COMMANDS;
 var init_args = __esm({
   "src/cli/args.ts"() {
     "use strict";
+    init_constants();
     init_io();
     ROOT_FLAG = {
       name: "root",
@@ -341,18 +356,28 @@ var init_args = __esm({
     COMMANDS = [
       {
         name: "init",
-        summary: "Derive a draft blueprint from the working tree",
+        summary: "Draft a blueprint from the code, then wire up agents and CI",
         flags: [
-          { name: "force", type: "boolean", description: "Overwrite an existing .rassam/blueprint.json" },
+          { name: "force", type: "boolean", description: "Replace an existing .rassam/blueprint.json with a fresh draft" },
           { name: "name", type: "string", valueName: "name", description: "System name (default: the directory name)" },
-          { name: "dry-run", type: "boolean", description: "Print the draft instead of writing it" },
+          { name: "dry-run", type: "boolean", description: "Print the draft instead of writing anything" },
+          { name: "yes", type: "boolean", description: "Also write all three: the MCP entry, the AGENTS.md rules and the workflow" },
+          { name: "mcp", type: "boolean", description: "Add the rassam MCP server to .mcp.json (--no-mcp to skip)" },
+          { name: "agents", type: "boolean", description: "Write the contract as rules in AGENTS.md and point CLAUDE.md at it (--no-agents to skip)" },
+          { name: "workflow", type: "boolean", description: "Add .github/workflows/rassam.yml, the pull request gate (--no-workflow to skip)" },
           ROOT_FLAG
         ],
         details: [
           "The draft only records what static analysis can see. Intent, rules and",
-          "invariants are yours to write: they are what agents cannot infer."
+          "invariants are yours to write: they are what agents cannot infer.",
+          "",
+          "In a terminal, init asks before writing each of .mcp.json, AGENTS.md (plus a",
+          "pointer in CLAUDE.md) and .github/workflows/rassam.yml. Elsewhere it writes",
+          "only what the flags ask for. Every file is written idempotently: text outside",
+          "Rassam's markers and existing settings are never changed. With a blueprint",
+          "already in place, init skips the draft and only wires what you ask for."
         ],
-        examples: ["rassam init", "rassam init --name Payments --dry-run"]
+        examples: ["rassam init", "rassam init --yes", "rassam init --name Payments --dry-run", "rassam init --agents --no-workflow"]
       },
       {
         name: "check",
@@ -364,12 +389,12 @@ var init_args = __esm({
           { name: "sarif-output", type: "string", valueName: "file", description: "Additionally write a SARIF report to a file" },
           { name: "fail-on", type: "string", valueName: "level", choices: ["error", "warning", "never"], default: "error", description: "Exit 1 when findings at or above this severity exist: error, warning or never" },
           { name: "budget", type: "number", valueName: "n", description: "Maximum number of findings to show (attention budget)" },
-          { name: "approved", type: "boolean", description: "A human approved the contract changes in this change" },
+          { name: "approved", type: "boolean", description: "A human approved this change's weakening of the contract or the tests" },
           { name: "run-invariants", type: "boolean", description: "Run invariant check commands (taken from the base blueprint in diff mode)" },
           { name: "invariant-timeout", type: "number", valueName: "seconds", default: 300, description: "Timeout for each invariant command" },
           { name: "github", type: "boolean", description: "GitHub Actions mode: PR context, annotations, step summary" },
           { name: "comment", type: "boolean", description: "With --github: create or update one sticky PR comment" },
-          { name: "approve-label", type: "string", valueName: "label", default: "rassam:approved", description: "With --github: PR label that counts as human approval" },
+          { name: "approve-label", type: "string", valueName: "label", default: "rassam:approved", description: "With --github: PR label that counts as human approval of contract or test weakening" },
           { name: "verbose", type: "boolean", description: "Show pre-existing findings and extra detail" },
           { name: "color", type: "boolean", default: true, description: "Colored output (disable with --no-color or NO_COLOR)" },
           ROOT_FLAG
@@ -518,6 +543,28 @@ var init_args = __esm({
         examples: ['rassam do "forbid ui from importing db because pages go through the API"', 'rassam do "add a component Payments for src/payments/**" --write']
       },
       {
+        name: "instructions",
+        summary: "Write the contract's rules as prose into AGENTS.md, for every agent to read",
+        flags: [
+          { name: "write", type: "boolean", description: "Create or refresh the block in the file (default: print it)" },
+          { name: "check", type: "boolean", description: "Exit 1 when the block is missing or out of date (for CI or a pre-commit hook)" },
+          { name: "file", type: "string", valueName: "path", description: "Instruction file to keep current (default: AGENTS.md, in whatever case it exists)" },
+          { name: "command", type: "string", valueName: "cmd", description: "How agents run the CLI in this repository (default: the pinned npx command)" },
+          { name: "no-mcp", type: "boolean", description: "Leave out the sentences about the MCP tools (included when .mcp.json configures rassam)" },
+          ROOT_FLAG
+        ],
+        details: [
+          "The block between <!-- rassam:agents:start --> and <!-- rassam:agents:end -->",
+          "states the rules, protected paths and invariants in plain language, plus the",
+          "standing orders: never weaken a test or a check, and stop and report when a",
+          "task needs a rule broken. It is generated from the blueprint alone, so run",
+          "this again whenever the contract changes. Text outside the markers is kept.",
+          "",
+          "Exit codes: 0 ok, 1 with --check when the block is missing or stale, 2 usage or configuration error."
+        ],
+        examples: ["rassam instructions", "rassam instructions --write", "rassam instructions --check"]
+      },
+      {
         name: "reach",
         summary: "Summarize what coding agents can reach (MCP servers, permissions, secrets)",
         flags: [FORMAT_TEXT_JSON, ROOT_FLAG]
@@ -537,8 +584,8 @@ var init_args = __esm({
         summary: "Start the MCP server on stdio (for coding agents)",
         flags: [ROOT_FLAG],
         details: [
-          "Add it to an agent with .mcp.json:",
-          '  {"mcpServers":{"rassam":{"command":"npx","args":["rassam","mcp"]}}}'
+          "Add it to an agent with .mcp.json (rassam init --mcp writes this for you):",
+          `  {"mcpServers":{"rassam":{"command":"npx","args":["-y","${PACKAGE_NAME}@${ENGINE_VERSION}","mcp"]}}}`
         ]
       }
     ];
@@ -620,6 +667,292 @@ var init_util = __esm({
   }
 });
 
+// src/blueprint/agents.ts
+function knownByIdentity(name, email3) {
+  const trimmedName = name.trim();
+  const trimmedEmail = email3.trim();
+  for (const agent of KNOWN_AGENTS) {
+    if (agent.identity.test(trimmedName) || trimmedEmail && agent.identity.test(trimmedEmail)) return agent.name;
+  }
+  return null;
+}
+function knownByLabel(label) {
+  const trimmed = label.trim();
+  return KNOWN_AGENTS.find((agent) => agent.label.test(trimmed))?.name ?? null;
+}
+function parseTrailers(message) {
+  const trailers = [];
+  for (const line of message.split(/\r?\n/).slice(1)) {
+    const match = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*:\s*(\S.*)$/.exec(line);
+    if (match) trailers.push({ key: match[1].toLowerCase(), value: match[2].trim() });
+  }
+  return trailers;
+}
+function splitIdentity(value) {
+  const match = /^(.*?)\s*<([^>]*)>\s*$/.exec(value);
+  return match ? { name: match[1].trim(), email: match[2].trim() } : { name: value.trim(), email: "" };
+}
+function fromCoAuthor(value) {
+  const { name, email: email3 } = splitIdentity(value);
+  const known = knownByIdentity(name, email3) ?? knownByLabel(name);
+  if (known) return known;
+  if (/\[bot\]@/i.test(email3) || /\[bot\]$/i.test(name)) {
+    const label = (name || email3.replace(/^\d+\+/, "").replace(/@.*$/, "")).replace(/\[bot\]$/i, "").trim();
+    if (label && !NON_AGENT_BOTS.test(label)) return label;
+  }
+  return null;
+}
+function fromGenericTrailer(value) {
+  const label = splitIdentity(value).name.split(":")[0].replace(/\s*\(.*\)\s*$/, "").trim();
+  if (!label || NEGATIVE_VALUES.test(label)) return null;
+  if (AFFIRMATIVE_VALUES.test(label)) return UNNAMED_AGENT;
+  return knownByLabel(label) ?? label;
+}
+function fromTrailer(trailer) {
+  if (trailer.key === "co-authored-by") return fromCoAuthor(trailer.value);
+  if (GENERIC_TRAILERS.has(trailer.key)) return fromGenericTrailer(trailer.value);
+  if (trailer.key.startsWith("codex-")) return "Codex";
+  if (trailer.key.startsWith("amp-") || trailer.key.startsWith("ampcode-")) return "Amp";
+  if (trailer.key.startsWith("claude-")) return "Claude";
+  return null;
+}
+function agentsFromCommit(commit) {
+  const agents = [];
+  const add = (agent) => {
+    if (agent && !agents.includes(agent)) agents.push(agent);
+  };
+  add(knownByIdentity(commit.authorName, commit.authorEmail));
+  if (/generated with \[?claude code\b/i.test(commit.message)) add("Claude");
+  if (/^aider:\s/i.test(commit.message)) add("Aider");
+  for (const trailer of parseTrailers(commit.message)) add(fromTrailer(trailer));
+  return agents;
+}
+function detectAgentActivity(commits) {
+  const agents = /* @__PURE__ */ new Set();
+  let agentCommits = 0;
+  for (const commit of commits) {
+    const found = agentsFromCommit(commit);
+    if (found.length > 0) agentCommits += 1;
+    for (const agent of found) agents.add(agent);
+  }
+  return {
+    commits: commits.length,
+    agentCommits,
+    agents: [...agents].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  };
+}
+var KNOWN_AGENTS, NON_AGENT_BOTS, GENERIC_TRAILERS, NEGATIVE_VALUES, AFFIRMATIVE_VALUES, UNNAMED_AGENT;
+var init_agents = __esm({
+  "src/blueprint/agents.ts"() {
+    "use strict";
+    KNOWN_AGENTS = [
+      {
+        name: "Claude",
+        identity: /noreply@anthropic\.com|^claude(?:[ -]code)?(?:\[bot\])?$|\bclaude\[bot\]/i,
+        label: /^(?:anthropic\s+)?claude\b/i
+      },
+      {
+        name: "GitHub Copilot",
+        identity: /copilot-swe-agent|^(?:github\s+)?copilot(?:\[bot\])?$|\+copilot@users\.noreply\.github\.com|\bcopilot\[bot\]/i,
+        label: /^(?:github\s+)?copilot\b/i
+      },
+      {
+        name: "Devin",
+        identity: /devin-ai-integration|^devin(?:\s+ai)?(?:\[bot\])?$/i,
+        label: /^devin\b/i
+      },
+      {
+        name: "Cursor",
+        identity: /cursoragent|^cursor(?:\s+agent)?(?:\[bot\])?$/i,
+        label: /^cursor\b/i
+      },
+      {
+        name: "Codex",
+        identity: /chatgpt-codex-connector|^(?:openai\s+)?codex(?:\[bot\])?$|\bcodex@openai\.com/i,
+        label: /^(?:openai\s+)?codex\b/i
+      },
+      {
+        name: "Jules",
+        identity: /google-labs-jules/i,
+        label: /^(?:google\s+)?jules\b/i
+      },
+      {
+        name: "Gemini",
+        identity: /gemini-code-assist|^gemini(?:[ -]cli)?(?:\[bot\])?$/i,
+        label: /^(?:google\s+)?gemini\b/i
+      },
+      {
+        name: "Aider",
+        identity: /\(aider\)\s*$|^aider\b|@aider\.chat\b/i,
+        label: /^aider\b/i
+      },
+      {
+        name: "Amp",
+        identity: /^amp(?:code)?(?:\[bot\])?$|\bamp@ampcode\.com/i,
+        label: /^amp(?:code)?\b/i
+      },
+      {
+        name: "Factory",
+        identity: /factory-droid/i,
+        label: /^factory(?:[ -]droid)?\b|^droid\b/i
+      }
+    ];
+    NON_AGENT_BOTS = /^(?:dependabot|renovate|github-actions|web-flow|snyk-bot|greenkeeper|mergify|pre-commit-ci|allcontributors|codecov|semantic-release-bot|imgbot|stale|netlify|vercel|release-please|github-merge-queue|pull)\b/i;
+    GENERIC_TRAILERS = /* @__PURE__ */ new Set(["generated-by", "assisted-by", "ai-assisted", "made-with", "generated-with", "ai-generated-by"]);
+    NEGATIVE_VALUES = /^(?:no|none|false|n\/a|0)$/i;
+    AFFIRMATIVE_VALUES = /^(?:yes|true|1)$/i;
+    UNNAMED_AGENT = "AI assistant";
+  }
+});
+
+// src/blueprint/glob.ts
+function escapeRegex(char) {
+  return /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+}
+function braceCloses(pattern2) {
+  const closes = /* @__PURE__ */ new Map();
+  const open3 = [];
+  for (let index = 0; index < pattern2.length; index += 1) {
+    const char = pattern2[index];
+    if (char === "\\") index += 1;
+    else if (char === "[") {
+      const close = pattern2.indexOf("]", index + 1);
+      if (close > index + 1) index = close;
+    } else if (char === "{") open3.push(index);
+    else if (char === "}" && open3.length) closes.set(open3.pop(), index);
+  }
+  for (const index of open3) closes.set(index, pattern2.length);
+  return closes;
+}
+function translate(pattern2) {
+  let regex = "";
+  let index = 0;
+  let braceDepth = 0;
+  const closes = braceCloses(pattern2);
+  const braces = [];
+  const segmentStartAt = (position) => {
+    if (position === 0 || pattern2[position - 1] === "/") return true;
+    const previous = pattern2[position - 1];
+    return (previous === "{" || previous === ",") && braceDepth > 0 && braces[braces.length - 1].start;
+  };
+  const segmentEndAt = (position) => {
+    if (position === pattern2.length || pattern2[position] === "/") return true;
+    return (pattern2[position] === "," || pattern2[position] === "}") && braceDepth > 0 && braces[braces.length - 1].end;
+  };
+  while (index < pattern2.length) {
+    const char = pattern2[index];
+    if (char === "*") {
+      if (pattern2[index + 1] === "*") {
+        const atSegmentStart = segmentStartAt(index);
+        const atSegmentEnd = segmentEndAt(index + 2);
+        if (atSegmentStart && atSegmentEnd) {
+          if (pattern2[index + 2] === "/") {
+            regex += "(?:.*/)?";
+            index += 3;
+          } else {
+            regex += ".*";
+            index += 2;
+          }
+          continue;
+        }
+        regex += "[^/]*";
+        index += 2;
+        continue;
+      }
+      regex += "[^/]*";
+      index += 1;
+      continue;
+    }
+    if (char === "?") {
+      regex += "[^/]";
+      index += 1;
+      continue;
+    }
+    if (char === "[") {
+      const close = pattern2.indexOf("]", index + 1);
+      if (close > index + 1) {
+        let body = pattern2.slice(index + 1, close);
+        const negated = body.startsWith("!") || body.startsWith("^");
+        if (negated) body = body.slice(1);
+        body = body.replace(/\\/g, "\\\\");
+        regex += negated ? `[^/${body}]` : `[${body}]`;
+        index = close + 1;
+        continue;
+      }
+      regex += "\\[";
+      index += 1;
+      continue;
+    }
+    if (char === "{") {
+      const close = closes.get(index) ?? pattern2.length;
+      braces.push({ start: segmentStartAt(index), end: close >= pattern2.length - 1 || pattern2[close + 1] === "/" });
+      braceDepth += 1;
+      regex += "(?:";
+      index += 1;
+      continue;
+    }
+    if (char === "}" && braceDepth > 0) {
+      braces.pop();
+      braceDepth -= 1;
+      regex += ")";
+      index += 1;
+      continue;
+    }
+    if (char === "," && braceDepth > 0) {
+      regex += "|";
+      index += 1;
+      continue;
+    }
+    if (char === "\\" && index + 1 < pattern2.length) {
+      regex += escapeRegex(pattern2[index + 1]);
+      index += 2;
+      continue;
+    }
+    regex += escapeRegex(char);
+    index += 1;
+  }
+  while (braceDepth > 0) {
+    regex += ")";
+    braceDepth -= 1;
+  }
+  return regex;
+}
+function compileGlob(rawPattern) {
+  const cached2 = cache.get(rawPattern);
+  if (cached2) return cached2;
+  let pattern2 = rawPattern.trim().replace(/\\(?=[^*?[\]{}!\\])/g, "/");
+  if (pattern2.startsWith("./")) pattern2 = pattern2.slice(2);
+  const anchored = pattern2.startsWith("/");
+  if (anchored) pattern2 = pattern2.slice(1);
+  if (pattern2.endsWith("/")) pattern2 = `${pattern2}**`;
+  const basenameOnly = !anchored && !pattern2.includes("/");
+  const body = translate(pattern2);
+  const regex = basenameOnly ? new RegExp(`^(?:.*/)?${body}$`) : new RegExp(`^${body}$`);
+  const directoryRegex = !/[*?[{]/.test(pattern2) ? new RegExp(`^${body}/`) : null;
+  const matcher = {
+    pattern: rawPattern,
+    specificity: pattern2.replace(/\*\*|[*?]|\[[^\]]*]|[{},]/g, "").length,
+    test(path) {
+      const candidate = path.replace(/\\/g, "/").replace(/^\.\//, "");
+      return regex.test(candidate) || directoryRegex !== null && directoryRegex.test(candidate);
+    }
+  };
+  if (cache.size > 5e3) cache.clear();
+  cache.set(rawPattern, matcher);
+  return matcher;
+}
+function matchesAny(path, patterns) {
+  if (!patterns?.length) return false;
+  return patterns.some((pattern2) => compileGlob(pattern2).test(path));
+}
+var cache;
+var init_glob = __esm({
+  "src/blueprint/glob.ts"() {
+    "use strict";
+    cache = /* @__PURE__ */ new Map();
+  }
+});
+
 // node_modules/zod/v4/core/util.js
 var util_exports = {};
 __export(util_exports, {
@@ -651,7 +984,7 @@ __export(util_exports, {
   defineLazyInternal: () => defineLazyInternal,
   derived: () => derived,
   esc: () => esc,
-  escapeRegex: () => escapeRegex,
+  escapeRegex: () => escapeRegex2,
   explicitlyAborted: () => explicitlyAborted,
   extend: () => extend,
   finalizeIssue: () => finalizeIssue,
@@ -911,7 +1244,7 @@ function numKeys(data) {
   }
   return keyCount;
 }
-function escapeRegex(str) {
+function escapeRegex2(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
@@ -1261,9 +1594,9 @@ function hexToUint8Array(hex3) {
 function uint8ArrayToHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function members(proto, table2) {
-  for (const key in table2) {
-    const desc = Object.getOwnPropertyDescriptor(table2, key);
+function members(proto, table3) {
+  for (const key in table3) {
+    const desc = Object.getOwnPropertyDescriptor(table3, key);
     if (desc.get)
       Object.defineProperty(proto, key, { ...desc, enumerable: false });
     else
@@ -1278,10 +1611,10 @@ function hide(inst, key, value) {
   return own(inst, key, value, false);
 }
 // @__NO_SIDE_EFFECTS__
-function derived(computes, table2) {
+function derived(computes, table3) {
   for (const key in computes) {
     const compute = computes[key];
-    Object.defineProperty(table2, key, {
+    Object.defineProperty(table3, key, {
       configurable: true,
       enumerable: true,
       get() {
@@ -1292,7 +1625,7 @@ function derived(computes, table2) {
       }
     });
   }
-  return table2;
+  return table3;
 }
 function defineBound(proto, key, fn) {
   Object.defineProperty(proto, key, {
@@ -2105,7 +2438,7 @@ var init_regexes = __esm({
     ipv4 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
     ipv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/;
     mac = (delimiter) => {
-      const escapedDelim = escapeRegex(delimiter ?? ":");
+      const escapedDelim = escapeRegex2(delimiter ?? ":");
       return new RegExp(`^(?:[0-9A-F]{2}${escapedDelim}){5}[0-9A-F]{2}$|^(?:[0-9a-f]{2}${escapedDelim}){5}[0-9a-f]{2}$`);
     };
     cidrv4 = /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/([0-9]|[1-2][0-9]|3[0-2])$/;
@@ -2518,7 +2851,7 @@ var init_checks = __esm({
     });
     $ZodCheckIncludes = /* @__PURE__ */ $constructor("$ZodCheckIncludes", (inst, def) => {
       $ZodCheck.init(inst, def);
-      const escapedRegex = escapeRegex(def.includes);
+      const escapedRegex = escapeRegex2(def.includes);
       const pattern2 = new RegExp(typeof def.position === "number" ? `^.{${def.position},}${escapedRegex}` : escapedRegex);
       def.pattern = pattern2;
       inst._zod.check = (payload) => {
@@ -2537,7 +2870,7 @@ var init_checks = __esm({
     });
     $ZodCheckStartsWith = /* @__PURE__ */ $constructor("$ZodCheckStartsWith", (inst, def) => {
       $ZodCheck.init(inst, def);
-      const pattern2 = new RegExp(`^${escapeRegex(def.prefix)}.*`);
+      const pattern2 = new RegExp(`^${escapeRegex2(def.prefix)}.*`);
       def.pattern ?? (def.pattern = pattern2);
       inst._zod.check = (payload) => {
         if (payload.value.startsWith(def.prefix))
@@ -2555,7 +2888,7 @@ var init_checks = __esm({
     });
     $ZodCheckEndsWith = /* @__PURE__ */ $constructor("$ZodCheckEndsWith", (inst, def) => {
       $ZodCheck.init(inst, def);
-      const pattern2 = new RegExp(`.*${escapeRegex(def.suffix)}$`);
+      const pattern2 = new RegExp(`.*${escapeRegex2(def.suffix)}$`);
       def.pattern ?? (def.pattern = pattern2);
       inst._zod.check = (payload) => {
         if (payload.value.endsWith(def.suffix))
@@ -2818,12 +3151,12 @@ function isIso7064Mod97(iban3) {
   let remainder = 0;
   const len = iban3.length;
   for (let i = 4; i < len; i++) {
-    const code = iban3.charCodeAt(i);
-    remainder = (code >= 65 ? remainder * 100 + (code - 55) : remainder * 10 + (code - 48)) % 97;
+    const code2 = iban3.charCodeAt(i);
+    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
   }
   for (let i = 0; i < 4; i++) {
-    const code = iban3.charCodeAt(i);
-    remainder = (code >= 65 ? remainder * 100 + (code - 55) : remainder * 10 + (code - 48)) % 97;
+    const code2 = iban3.charCodeAt(i);
+    remainder = (code2 >= 65 ? remainder * 100 + (code2 - 55) : remainder * 10 + (code2 - 48)) % 97;
   }
   return remainder === 1;
 }
@@ -4706,7 +5039,7 @@ var init_schemas = __esm({
       inst._zod.values = valuesSet;
       defineLazyInternal(inst, "pattern", (zod) => {
         const patternValues = getEnumValues(zod.def.entries).filter((k) => propertyKeyTypes.has(typeof k));
-        return new RegExp(patternValues.length ? `^(${patternValues.map((o) => escapeRegex(o.toString())).join("|")})$` : "^[^\\s\\S]$");
+        return new RegExp(patternValues.length ? `^(${patternValues.map((o) => escapeRegex2(o.toString())).join("|")})$` : "^[^\\s\\S]$");
       });
       inst._zod.parse = (payload, _ctx) => {
         const input2 = payload.value;
@@ -4728,7 +5061,7 @@ var init_schemas = __esm({
       inst._zod.values = values;
       defineLazyInternal(inst, "pattern", (zod) => {
         const vals = zod.def.values;
-        return new RegExp(vals.length ? `^(${vals.map((o) => typeof o === "string" ? escapeRegex(o) : o ? escapeRegex(o.toString()) : String(o)).join("|")})$` : "^[^\\s\\S]$");
+        return new RegExp(vals.length ? `^(${vals.map((o) => typeof o === "string" ? escapeRegex2(o) : o ? escapeRegex2(o.toString()) : String(o)).join("|")})$` : "^[^\\s\\S]$");
       });
       inst._zod.parse = (payload, _ctx) => {
         const input2 = payload.value;
@@ -5001,7 +5334,7 @@ var init_schemas = __esm({
           }
           regexParts.push(cleanRegex(source));
         } else if (part === null || primitiveTypes.has(typeof part)) {
-          regexParts.push(escapeRegex(`${part}`));
+          regexParts.push(escapeRegex2(`${part}`));
         } else {
           throw new Error(`Invalid template literal part: ${part}`);
         }
@@ -7987,51 +8320,51 @@ var init_he = __esm({
           }
           case "too_big": {
             const sizing = getSizing(issue2.origin);
-            const subject = withDefinite(issue2.origin ?? "value");
+            const subject2 = withDefinite(issue2.origin ?? "value");
             if (issue2.origin === "string") {
-              return `${sizing?.longLabel ?? "ארוך"} מדי: ${subject} צריכה להכיל ${issue2.maximum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או פחות" : "לכל היותר"}`.trim();
+              return `${sizing?.longLabel ?? "ארוך"} מדי: ${subject2} צריכה להכיל ${issue2.maximum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או פחות" : "לכל היותר"}`.trim();
             }
             if (issue2.origin === "number") {
               const comparison = issue2.inclusive ? `קטן או שווה ל-${issue2.maximum}` : `קטן מ-${issue2.maximum}`;
-              return `גדול מדי: ${subject} צריך להיות ${comparison}`;
+              return `גדול מדי: ${subject2} צריך להיות ${comparison}`;
             }
             if (issue2.origin === "array" || issue2.origin === "set") {
               const verb = issue2.origin === "set" ? "צריכה" : "צריך";
               const comparison = issue2.inclusive ? `${issue2.maximum} ${sizing?.unit ?? ""} או פחות` : `פחות מ-${issue2.maximum} ${sizing?.unit ?? ""}`;
-              return `גדול מדי: ${subject} ${verb} להכיל ${comparison}`.trim();
+              return `גדול מדי: ${subject2} ${verb} להכיל ${comparison}`.trim();
             }
             const adj = issue2.inclusive ? "<=" : "<";
             const be = verbFor(issue2.origin ?? "value");
             if (sizing?.unit) {
-              return `${sizing.longLabel} מדי: ${subject} ${be} ${adj}${issue2.maximum.toString()} ${sizing.unit}`;
+              return `${sizing.longLabel} מדי: ${subject2} ${be} ${adj}${issue2.maximum.toString()} ${sizing.unit}`;
             }
-            return `${sizing?.longLabel ?? "גדול"} מדי: ${subject} ${be} ${adj}${issue2.maximum.toString()}`;
+            return `${sizing?.longLabel ?? "גדול"} מדי: ${subject2} ${be} ${adj}${issue2.maximum.toString()}`;
           }
           case "too_small": {
             const sizing = getSizing(issue2.origin);
-            const subject = withDefinite(issue2.origin ?? "value");
+            const subject2 = withDefinite(issue2.origin ?? "value");
             if (issue2.origin === "string") {
-              return `${sizing?.shortLabel ?? "קצר"} מדי: ${subject} צריכה להכיל ${issue2.minimum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או יותר" : "לפחות"}`.trim();
+              return `${sizing?.shortLabel ?? "קצר"} מדי: ${subject2} צריכה להכיל ${issue2.minimum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או יותר" : "לפחות"}`.trim();
             }
             if (issue2.origin === "number") {
               const comparison = issue2.inclusive ? `גדול או שווה ל-${issue2.minimum}` : `גדול מ-${issue2.minimum}`;
-              return `קטן מדי: ${subject} צריך להיות ${comparison}`;
+              return `קטן מדי: ${subject2} צריך להיות ${comparison}`;
             }
             if (issue2.origin === "array" || issue2.origin === "set") {
               const verb = issue2.origin === "set" ? "צריכה" : "צריך";
               if (issue2.minimum === 1 && issue2.inclusive) {
                 const singularPhrase = issue2.origin === "set" ? "לפחות פריט אחד" : "לפחות פריט אחד";
-                return `קטן מדי: ${subject} ${verb} להכיל ${singularPhrase}`;
+                return `קטן מדי: ${subject2} ${verb} להכיל ${singularPhrase}`;
               }
               const comparison = issue2.inclusive ? `${issue2.minimum} ${sizing?.unit ?? ""} או יותר` : `יותר מ-${issue2.minimum} ${sizing?.unit ?? ""}`;
-              return `קטן מדי: ${subject} ${verb} להכיל ${comparison}`.trim();
+              return `קטן מדי: ${subject2} ${verb} להכיל ${comparison}`.trim();
             }
             const adj = issue2.inclusive ? ">=" : ">";
             const be = verbFor(issue2.origin ?? "value");
             if (sizing?.unit) {
-              return `${sizing.shortLabel} מדי: ${subject} ${be} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+              return `${sizing.shortLabel} מדי: ${subject2} ${be} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
             }
-            return `${sizing?.shortLabel ?? "קטן"} מדי: ${subject} ${be} ${adj}${issue2.minimum.toString()}`;
+            return `${sizing?.shortLabel ?? "קטן"} מדי: ${subject2} ${be} ${adj}${issue2.minimum.toString()}`;
           }
           case "invalid_format": {
             const _issue = issue2;
@@ -13591,12 +13924,12 @@ function compileFn(schema, options) {
   doc.write(outputAccessor === null ? `return true;` : `return ${outputAccessor};`);
   const constantNames = ["INVALID", ...ctx.constants.keys()];
   const constantValues = [INVALID, ...ctx.constants.values()];
-  const code = doc.content.join("\n");
+  const code2 = doc.content.join("\n");
   const fullCode = options?.debug ? constantNames.length > 0 ? `// Constants: ${constantNames.join(", ")}
-${code}` : code : "";
+${code2}` : code2 : "";
   const F = Function;
   const factoryCode = `return (input) => {
-${code}
+${code2}
 }`;
   let fn;
   try {
@@ -21152,11 +21485,11 @@ function blueprintJsonSchema() {
   return {
     $id: BLUEPRINT_SCHEMA_URL,
     title: "Rassam Blueprint",
-    description: "A human-owned architecture contract for agent-built software. See https://rassam.dev",
+    description: `A human-owned architecture contract for agent-built software. See ${PROJECT_URL}`,
     ...schema
   };
 }
-var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentRuntimeSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
+var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, PROJECT_URL, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentRuntimeSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
 var init_schema = __esm({
   "src/blueprint/schema.ts"() {
     "use strict";
@@ -21165,7 +21498,8 @@ var init_schema = __esm({
     BLUEPRINT_PATH = ".rassam/blueprint.json";
     BLUEPRINT_PROPOSALS_DIR = ".rassam/proposals";
     BLUEPRINT_ESCALATIONS_DIR = ".rassam/escalations";
-    BLUEPRINT_SCHEMA_URL = "https://rassam.dev/schema/blueprint-0.1.json";
+    PROJECT_URL = "https://github.com/V0ightt/Rassam";
+    BLUEPRINT_SCHEMA_URL = "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json";
     idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
     blueprintIdSchema = external_exports.string().regex(idPattern, "IDs use letters, digits, '.', '_', ':' or '-' and start with a letter or digit (max 80 chars)");
     shortText = external_exports.string().trim().min(1).max(200);
@@ -21337,6 +21671,15 @@ var init_schema = __esm({
       }).strict().default({ defaults: true }),
       /** Heuristics that flag weakened verification (skipped tests, deleted assertions, ...). */
       verificationHeuristics: external_exports.boolean().default(true),
+      /**
+       * What the strong verification-weakening signals do (skipped, focused,
+       * deleted or trivialized tests, removed assertions, lowered or removed
+       * coverage thresholds, a forced zero exit). "require-approval": errors
+       * until a human approves the change with the approval label, the same
+       * mechanism as contract weakening. "warn": warnings, except a forced zero
+       * exit, which stays an error. Weak signals are warnings either way.
+       */
+      verificationWeakening: external_exports.enum(["require-approval", "warn"]).default("require-approval"),
       /** Globs excluded from analysis entirely (generated code, fixtures, vendored code). */
       ignore: external_exports.array(globSchema).max(500).default([])
     }).strict();
@@ -21360,122 +21703,1817 @@ var init_schema = __esm({
   }
 });
 
-// src/blueprint/glob.ts
-function escapeRegex2(char) {
-  return /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+// src/blueprint/blueprint-diff.ts
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
-function translate(pattern2) {
-  let regex = "";
+function quote(values) {
+  return values.map((value) => `"${value}"`).join(", ");
+}
+function entries(selector2) {
+  if (selector2 === void 0) return [];
+  return Array.isArray(selector2) ? selector2 : [selector2];
+}
+function setDiff(base, head) {
+  const baseSet = new Set(base ?? []);
+  const headSet = new Set(head ?? []);
+  return {
+    added: [...headSet].filter((value) => !baseSet.has(value)).sort(compareText),
+    removed: [...baseSet].filter((value) => !headSet.has(value)).sort(compareText)
+  };
+}
+function hasDiff(diff) {
+  return diff.added.length > 0 || diff.removed.length > 0;
+}
+function describeSetDiff(diff) {
+  const parts = [];
+  if (diff.removed.length) parts.push(`removed ${quote(diff.removed)}`);
+  if (diff.added.length) parts.push(`added ${quote(diff.added)}`);
+  return parts.join(", ");
+}
+function selectorDiff(base, head) {
+  const diff = setDiff(entries(base), entries(head));
+  const widened2 = [];
+  const narrowed2 = [];
+  for (const entry of diff.added) (entry.startsWith("!") ? narrowed2 : widened2).push(entry);
+  for (const entry of diff.removed) (entry.startsWith("!") ? widened2 : narrowed2).push(entry);
+  return { widened: widened2.sort(compareText), narrowed: narrowed2.sort(compareText) };
+}
+function selectorWords(values, verbs) {
+  const plain = values.filter((value) => !value.startsWith("!"));
+  const exclusions = values.filter((value) => value.startsWith("!")).map((value) => value.slice(1));
+  const parts = [];
+  if (plain.length) parts.push(`${verbs.plain} ${quote(plain)}`);
+  if (exclusions.length) parts.push(`${verbs.exclusion} ${quote(exclusions)}`);
+  return parts;
+}
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record2 = value;
+    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stable(record2[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function byId(items) {
+  const map2 = /* @__PURE__ */ new Map();
+  for (const item of items) if (!map2.has(item.id)) map2.set(item.id, item);
+  return map2;
+}
+function sortedKeys(...maps) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const map2 of maps) for (const key of map2.keys()) keys.add(key);
+  return [...keys].sort(compareText);
+}
+function ruleSelectors2(rule) {
+  switch (rule.kind) {
+    case "forbid":
+    case "allow-only":
+      return [rule.from, rule.to];
+    case "layers":
+      return rule.layers;
+    case "no-cycles":
+      return rule.scope ? [rule.scope] : [];
+    case "secret-access":
+      return [rule.allow];
+    case "protect":
+      return [];
+  }
+}
+function ruleReferences(blueprint) {
+  const components = /* @__PURE__ */ new Set();
+  const tagPatterns = /* @__PURE__ */ new Set();
+  for (const rule of blueprint.rules) {
+    for (const selector2 of ruleSelectors2(rule)) {
+      for (const ref of selectorComponentRefs(selector2)) components.add(ref);
+      for (const raw of entries(selector2)) {
+        const entry = raw.startsWith("!") ? raw.slice(1) : raw;
+        if (entry.startsWith("tag:")) tagPatterns.add(entry.slice("tag:".length));
+      }
+    }
+  }
+  return { components, tagPatterns: [...tagPatterns].sort(compareText) };
+}
+function tagSelected(tag, refs) {
+  return refs.tagPatterns.some((pattern2) => pattern2 === tag || compileGlob(`/${pattern2}`).test(tag));
+}
+function isReferenced(component2, refs) {
+  return refs.components.has(component2.id) || (component2.tags ?? []).some((tag) => tagSelected(tag, refs));
+}
+function diffLevel(field, base, head) {
+  if (base === head) return [];
+  const lowered = LEVEL_RANK[head] < LEVEL_RANK[base];
+  return [
+    {
+      kind: lowered ? "policy-weakened" : "policy-changed",
+      target: `policy.${field}`,
+      summary: `Policy ${field} ${lowered ? "lowered" : "raised"} from "${base}" to "${head}"`,
+      weakens: lowered
+    }
+  ];
+}
+function diffFlag(field, base, head, offMeaning) {
+  if (base === head) return [];
+  const disabled = base && !head;
+  return [
+    {
+      kind: disabled ? "policy-weakened" : "policy-changed",
+      target: `policy.${field}`,
+      summary: disabled ? `Policy ${field} turned off: ${offMeaning}` : `Policy ${field} turned on`,
+      weakens: disabled
+    }
+  ];
+}
+function diffPolicy(base, head) {
+  const changes = [
+    ...diffLevel("undeclaredDependencies", base.policy.undeclaredDependencies, head.policy.undeclaredDependencies),
+    ...diffLevel("unmappedFiles", base.policy.unmappedFiles, head.policy.unmappedFiles),
+    ...diffFlag(
+      "includeTypeOnly",
+      base.policy.includeTypeOnly,
+      head.policy.includeTypeOnly,
+      "type-only imports no longer count in rules"
+    ),
+    ...diffFlag(
+      "tripwires.defaults",
+      base.policy.tripwires.defaults,
+      head.policy.tripwires.defaults,
+      "built-in tripwires for tests, CI, lockfiles and agent permissions are disabled"
+    )
+  ];
+  const tripwirePaths = setDiff(base.policy.tripwires.paths, head.policy.tripwires.paths);
+  if (hasDiff(tripwirePaths)) {
+    const weakens = tripwirePaths.removed.length > 0;
+    changes.push({
+      kind: weakens ? "policy-weakened" : "policy-changed",
+      target: "policy.tripwires.paths",
+      summary: weakens ? `Policy tripwires no longer protect ${quote(tripwirePaths.removed)}${tripwirePaths.added.length ? ` (added ${quote(tripwirePaths.added)})` : ""}` : `Policy tripwires now also protect ${quote(tripwirePaths.added)}`,
+      weakens
+    });
+  }
+  changes.push(
+    ...diffFlag(
+      "verificationHeuristics",
+      base.policy.verificationHeuristics,
+      head.policy.verificationHeuristics,
+      "weakened verification (skipped tests, removed assertions) is no longer flagged"
+    )
+  );
+  const before = base.policy.verificationWeakening;
+  const after = head.policy.verificationWeakening;
+  if (before !== after) {
+    const loosened = after === "warn";
+    changes.push({
+      kind: loosened ? "policy-weakened" : "policy-changed",
+      target: "policy.verificationWeakening",
+      summary: loosened ? `Policy verificationWeakening lowered from "${before}" to "${after}": skipped, deleted or gutted tests no longer need a human approval` : `Policy verificationWeakening raised from "${before}" to "${after}": skipped, deleted or gutted tests need a human approval`,
+      weakens: loosened
+    });
+  }
+  const ignore = setDiff(base.policy.ignore, head.policy.ignore);
+  if (hasDiff(ignore)) {
+    const weakens = ignore.added.length > 0;
+    changes.push({
+      kind: weakens ? "policy-weakened" : "policy-changed",
+      target: "policy.ignore",
+      summary: weakens ? `Policy ignore now hides ${quote(ignore.added)} from analysis${ignore.removed.length ? ` (removed ${quote(ignore.removed)})` : ""}` : `Policy ignore no longer hides ${quote(ignore.removed)}`,
+      weakens
+    });
+  }
+  return changes;
+}
+function diffComponent(base, head, refs) {
+  const parts = [];
+  let weakens = false;
+  const referenced = isReferenced(base, refs);
+  if (base.name !== head.name) parts.push(`name "${base.name}" → "${head.name}"`);
+  if (base.kind !== head.kind) {
+    parts.push(`kind "${base.kind}" → "${head.kind}"`);
+    if (head.kind === "test" && base.kind !== "test") weakens = true;
+  }
+  if (Boolean(base.public) !== Boolean(head.public)) {
+    parts.push(head.public ? "now public (open to every component)" : "no longer public");
+    if (head.public) weakens = true;
+  }
+  const paths = setDiff(base.paths, head.paths);
+  if (hasDiff(paths)) {
+    parts.push(`paths (${describeSetDiff(paths)})`);
+    if (referenced && paths.removed.length) weakens = true;
+  }
+  const exclude = setDiff(base.exclude, head.exclude);
+  if (hasDiff(exclude)) {
+    parts.push(`exclude (${describeSetDiff(exclude)})`);
+    if (referenced && exclude.added.length) weakens = true;
+  }
+  if (base.priority !== head.priority) {
+    parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
+    if (referenced && (head.priority ?? 0) < (base.priority ?? 0)) weakens = true;
+  }
+  const tags = setDiff(base.tags, head.tags);
+  if (hasDiff(tags)) {
+    parts.push(`tags (${describeSetDiff(tags)})`);
+    if (tags.removed.some((tag) => tagSelected(tag, refs))) weakens = true;
+  }
+  const owners = setDiff(base.owners, head.owners);
+  if (hasDiff(owners)) parts.push(`owners (${describeSetDiff(owners)})`);
+  if ((base.intent ?? "") !== (head.intent ?? "")) parts.push("intent");
+  if (base.assurance !== head.assurance) {
+    const before = base.assurance ?? "unknown";
+    const after = head.assurance ?? "unknown";
+    if (before !== after) {
+      parts.push(`assurance ${before} → ${after}`);
+      if (before !== "unknown" && ASSURANCE_RANK[after] < ASSURANCE_RANK[before]) weakens = true;
+    }
+  }
+  if (Boolean(base.external) !== Boolean(head.external)) {
+    parts.push(head.external ? "now marked external" : "no longer marked external");
+  }
+  if (stable(base.runtime ?? null) !== stable(head.runtime ?? null)) parts.push("runtime");
+  if (parts.length === 0) return null;
+  return {
+    kind: "component-changed",
+    target: base.id,
+    summary: `Component "${base.id}" changed: ${parts.join("; ")}`,
+    weakens
+  };
+}
+function diffComponents(base, head, refs) {
+  const before = byId(base.components);
+  const after = byId(head.components);
+  const changes = [];
+  for (const id of sortedKeys(before, after)) {
+    const old = before.get(id);
+    const next = after.get(id);
+    if (!old && next) {
+      changes.push({ kind: "component-added", target: id, summary: `Component "${id}" added`, weakens: false });
+    } else if (old && !next) {
+      const referenced = isReferenced(old, refs);
+      changes.push({
+        kind: "component-removed",
+        target: id,
+        summary: referenced ? `Component "${id}" removed while rules still reference it` : `Component "${id}" removed`,
+        weakens: referenced
+      });
+    } else if (old && next) {
+      const change = diffComponent(old, next, refs);
+      if (change) changes.push(change);
+    }
+  }
+  return changes;
+}
+function dependencyKey(dependency) {
+  return `${dependency.from}->${dependency.to}`;
+}
+function dependencyMap(blueprint) {
+  const map2 = /* @__PURE__ */ new Map();
+  for (const dependency of blueprint.dependencies) {
+    const key = dependencyKey(dependency);
+    if (!map2.has(key)) map2.set(key, dependency);
+  }
+  return map2;
+}
+function diffDependencies(base, head) {
+  const before = dependencyMap(base);
+  const after = dependencyMap(head);
+  const strict = base.policy.undeclaredDependencies === "error";
+  const changes = [];
+  for (const key of sortedKeys(before, after)) {
+    const old = before.get(key);
+    const next = after.get(key);
+    if (!old && next) {
+      changes.push({
+        kind: "dependency-added",
+        target: key,
+        summary: strict ? `Dependency "${next.from}" → "${next.to}" declared; undeclared dependencies are errors, so this legalizes a new edge` : `Dependency "${next.from}" → "${next.to}" declared`,
+        weakens: strict
+      });
+    } else if (old && !next) {
+      changes.push({
+        kind: "dependency-removed",
+        target: key,
+        summary: `Dependency "${old.from}" → "${old.to}" is no longer declared`,
+        weakens: false
+      });
+    }
+  }
+  return changes;
+}
+function ruleSeverity(rule) {
+  return rule.severity ?? DEFAULT_RULE_SEVERITY[rule.kind];
+}
+function includesTypeOnly(rule) {
+  return "includeTypeOnly" in rule ? rule.includeTypeOnly ?? true : true;
+}
+function layerKey(layer) {
+  return [...entries(layer)].sort(compareText).join(" + ");
+}
+function diffSeverity(base, head, edits) {
+  if (base === head) return;
+  const lowered = SEVERITY_RANK[head] < SEVERITY_RANK[base];
+  (lowered ? edits.weakened : edits.strengthened).push(
+    `severity ${lowered ? "lowered" : "raised"} from "${base}" to "${head}"`
+  );
+}
+function diffRuleBody(base, head, edits) {
+  if (base.kind === "forbid" && head.kind === "forbid") {
+    const from = selectorDiff(base.from, head.from);
+    const to = selectorDiff(base.to, head.to);
+    edits.weakened.push(
+      ...selectorWords(from.narrowed, { plain: "no longer applies to", exclusion: "now exempts" }),
+      ...selectorWords(to.narrowed, { plain: "no longer forbids", exclusion: "now permits" })
+    );
+    edits.strengthened.push(
+      ...selectorWords(from.widened, { plain: "now also applies to", exclusion: "no longer exempts" }),
+      ...selectorWords(to.widened, { plain: "now also forbids", exclusion: "no longer permits" })
+    );
+  } else if (base.kind === "allow-only" && head.kind === "allow-only") {
+    const from = selectorDiff(base.from, head.from);
+    const to = selectorDiff(base.to, head.to);
+    edits.weakened.push(
+      ...selectorWords(from.narrowed, { plain: "no longer restricts", exclusion: "now exempts" }),
+      ...selectorWords(to.widened, { plain: "now also allows", exclusion: "no longer excludes" })
+    );
+    edits.strengthened.push(
+      ...selectorWords(from.widened, { plain: "now also restricts", exclusion: "no longer exempts" }),
+      ...selectorWords(to.narrowed, { plain: "no longer allows", exclusion: "now excludes" })
+    );
+  } else if (base.kind === "layers" && head.kind === "layers") {
+    const before = base.layers.map(layerKey);
+    const after = head.layers.map(layerKey);
+    const removed = before.filter((layer) => !after.includes(layer));
+    const added = after.filter((layer) => !before.includes(layer));
+    const commonBefore = before.filter((layer) => after.includes(layer));
+    const commonAfter = after.filter((layer) => before.includes(layer));
+    if (removed.length) edits.weakened.push(`no longer has layer ${quote(removed)}`);
+    if (commonBefore.join("\0") !== commonAfter.join("\0")) {
+      edits.weakened.push(`layer order changed to ${after.join(" > ")}`);
+    }
+    if (added.length) edits.strengthened.push(`added layer ${quote(added)}`);
+  } else if (base.kind === "protect" && head.kind === "protect") {
+    const paths = setDiff(base.paths, head.paths);
+    if (paths.removed.length) edits.weakened.push(`no longer protects ${quote(paths.removed)}`);
+    if (paths.added.length) edits.strengthened.push(`now also protects ${quote(paths.added)}`);
+  } else if (base.kind === "secret-access" && head.kind === "secret-access") {
+    const allow = selectorDiff(base.allow, head.allow);
+    const secrets = setDiff(base.secrets, head.secrets);
+    edits.weakened.push(
+      ...selectorWords(allow.widened, { plain: "now also lets", exclusion: "no longer excludes" }).map(
+        (part) => part.startsWith("now also lets") ? `${part} read the secrets` : part
+      )
+    );
+    if (secrets.removed.length) edits.weakened.push(`no longer guards ${quote(secrets.removed)}`);
+    edits.strengthened.push(
+      ...selectorWords(allow.narrowed, { plain: "no longer lets", exclusion: "now excludes" }).map(
+        (part) => part.startsWith("no longer lets") ? `${part} read the secrets` : part
+      )
+    );
+    if (secrets.added.length) edits.strengthened.push(`now also guards ${quote(secrets.added)}`);
+  } else if (base.kind === "no-cycles" && head.kind === "no-cycles") {
+    if (base.scope === void 0 && head.scope !== void 0) {
+      edits.weakened.push(`now only checks cycles within ${quote(entries(head.scope))}`);
+    } else if (base.scope !== void 0 && head.scope === void 0) {
+      edits.strengthened.push("now checks cycles across every component");
+    } else {
+      const scope = selectorDiff(base.scope, head.scope);
+      if (scope.narrowed.length) {
+        edits.weakened.push(
+          ...selectorWords(scope.narrowed, { plain: "scope no longer covers", exclusion: "scope now excludes" })
+        );
+      }
+      if (scope.widened.length) {
+        edits.strengthened.push(
+          ...selectorWords(scope.widened, { plain: "scope now also covers", exclusion: "scope no longer excludes" })
+        );
+      }
+    }
+  }
+}
+function diffRule(base, head) {
+  if (base.kind !== head.kind) {
+    return {
+      kind: "rule-changed",
+      target: base.id,
+      summary: `Rule "${base.id}" changed kind from "${base.kind}" to "${head.kind}"`,
+      weakens: true
+    };
+  }
+  const edits = { weakened: [], strengthened: [], neutral: [] };
+  diffSeverity(ruleSeverity(base), ruleSeverity(head), edits);
+  if (includesTypeOnly(base) !== includesTypeOnly(head)) {
+    if (includesTypeOnly(base)) edits.weakened.push("no longer counts type-only imports");
+    else edits.strengthened.push("now counts type-only imports");
+  }
+  diffRuleBody(base, head, edits);
+  if ((base.reason ?? "") !== (head.reason ?? "")) edits.neutral.push("reason reworded");
+  const parts = [...edits.weakened, ...edits.strengthened, ...edits.neutral];
+  if (parts.length === 0) return null;
+  const kind = edits.weakened.length ? "rule-weakened" : edits.strengthened.length ? "rule-strengthened" : "rule-changed";
+  return { kind, target: base.id, summary: `Rule "${base.id}" ${parts.join("; ")}`, weakens: kind === "rule-weakened" };
+}
+function diffRules(base, head) {
+  const before = byId(base.rules);
+  const after = byId(head.rules);
+  const changes = [];
+  for (const id of sortedKeys(before, after)) {
+    const old = before.get(id);
+    const next = after.get(id);
+    if (!old && next) {
+      changes.push({ kind: "rule-added", target: id, summary: `Rule "${id}" (${next.kind}) added`, weakens: false });
+    } else if (old && !next) {
+      changes.push({ kind: "rule-removed", target: id, summary: `Rule "${id}" (${old.kind}) removed`, weakens: true });
+    } else if (old && next) {
+      const change = diffRule(old, next);
+      if (change) changes.push(change);
+    }
+  }
+  return changes;
+}
+function diffInvariant(base, head) {
+  const weakened = [];
+  const other = [];
+  const beforeRun = base.check?.run;
+  const afterRun = head.check?.run;
+  if (beforeRun !== afterRun) {
+    if (beforeRun === void 0) other.push("check command added");
+    else weakened.push(afterRun === void 0 ? "check command removed" : "check command changed");
+  }
+  const tests = setDiff(base.check?.tests, head.check?.tests);
+  if (tests.removed.length) weakened.push(`no longer checked by tests ${quote(tests.removed)}`);
+  if (tests.added.length) other.push(`now also checked by tests ${quote(tests.added)}`);
+  const beforeSeverity = base.severity ?? DEFAULT_INVARIANT_SEVERITY;
+  const afterSeverity = head.severity ?? DEFAULT_INVARIANT_SEVERITY;
+  if (beforeSeverity !== afterSeverity) {
+    const lowered = SEVERITY_RANK[afterSeverity] < SEVERITY_RANK[beforeSeverity];
+    (lowered ? weakened : other).push(
+      `severity ${lowered ? "lowered" : "raised"} from "${beforeSeverity}" to "${afterSeverity}"`
+    );
+  }
+  if (base.statement !== head.statement) other.push("statement reworded");
+  const components = setDiff(base.components, head.components);
+  if (hasDiff(components)) other.push(`components (${describeSetDiff(components)})`);
+  const parts = [...weakened, ...other];
+  if (parts.length === 0) return null;
+  return {
+    kind: "invariant-changed",
+    target: base.id,
+    summary: `Invariant "${base.id}" changed: ${parts.join("; ")}`,
+    weakens: weakened.length > 0
+  };
+}
+function diffInvariants(base, head) {
+  const before = byId(base.invariants);
+  const after = byId(head.invariants);
+  const changes = [];
+  for (const id of sortedKeys(before, after)) {
+    const old = before.get(id);
+    const next = after.get(id);
+    if (!old && next) {
+      changes.push({ kind: "invariant-added", target: id, summary: `Invariant "${id}" added`, weakens: false });
+    } else if (old && !next) {
+      changes.push({ kind: "invariant-removed", target: id, summary: `Invariant "${id}" removed`, weakens: true });
+    } else if (old && next) {
+      const change = diffInvariant(old, next);
+      if (change) changes.push(change);
+    }
+  }
+  return changes;
+}
+function diffDecision(base, head) {
+  const parts = [];
+  if (base.status !== head.status) parts.push(`status "${base.status}" → "${head.status}"`);
+  if (base.title !== head.title) parts.push("title reworded");
+  if (base.decision !== head.decision) parts.push("decision text changed");
+  if (parts.length === 0) return null;
+  return {
+    kind: "decision-changed",
+    target: base.id,
+    summary: `Decision "${base.id}" changed: ${parts.join("; ")}`,
+    weakens: false
+  };
+}
+function diffDecisions(base, head) {
+  const before = byId(base.decisions);
+  const after = byId(head.decisions);
+  const changes = [];
+  for (const id of sortedKeys(before, after)) {
+    const old = before.get(id);
+    const next = after.get(id);
+    if (!old && next) {
+      changes.push({ kind: "decision-added", target: id, summary: `Decision "${id}" added`, weakens: false });
+    } else if (old && !next) {
+      changes.push({ kind: "decision-removed", target: id, summary: `Decision "${id}" removed`, weakens: false });
+    } else if (old && next) {
+      const change = diffDecision(old, next);
+      if (change) changes.push(change);
+    }
+  }
+  return changes;
+}
+function signer(stamp) {
+  return `${stamp.by} at ${stamp.at}`;
+}
+function diffStamps(label, before, after) {
+  const changes = [];
+  for (const key of [...after.keys()].sort(compareText)) {
+    const old = before.get(key)?.verified;
+    const next = after.get(key)?.verified;
+    if (stable(old ?? null) === stable(next ?? null)) continue;
+    let detail;
+    if (!old && next) detail = `added (signed by ${signer(next)})`;
+    else if (old && !next) detail = `removed (was signed by ${signer(old)})`;
+    else if (old && next) detail = `changed (signed by ${signer(next)}; previously ${signer(old)})`;
+    else continue;
+    changes.push({
+      kind: "verification-changed",
+      target: `${label}:${key}`,
+      summary: `Verification of ${label} "${key}" ${detail}`,
+      weakens: false
+    });
+  }
+  return changes;
+}
+function diffVerification(base, head) {
+  return [
+    ...diffStamps("component", byId(base.components), byId(head.components)),
+    ...diffStamps("dependency", dependencyMap(base), dependencyMap(head)),
+    ...diffStamps("rule", byId(base.rules), byId(head.rules)),
+    ...diffStamps("invariant", byId(base.invariants), byId(head.invariants))
+  ];
+}
+function sortedIds(items) {
+  return [...byId(items).keys()].sort(compareText);
+}
+function describeNewBlueprint(head) {
+  const rules = byId(head.rules);
+  return [
+    ...sortedIds(head.components).map((id) => ({
+      kind: "component-added",
+      target: id,
+      summary: `Component "${id}" added`,
+      weakens: false
+    })),
+    ...[...dependencyMap(head).entries()].sort(([left], [right]) => compareText(left, right)).map(([key, dependency]) => ({
+      kind: "dependency-added",
+      target: key,
+      summary: `Dependency "${dependency.from}" → "${dependency.to}" declared`,
+      weakens: false
+    })),
+    ...sortedIds(head.rules).map((id) => ({
+      kind: "rule-added",
+      target: id,
+      summary: `Rule "${id}" (${rules.get(id)?.kind ?? "rule"}) added`,
+      weakens: false
+    })),
+    ...sortedIds(head.invariants).map((id) => ({
+      kind: "invariant-added",
+      target: id,
+      summary: `Invariant "${id}" added`,
+      weakens: false
+    })),
+    ...sortedIds(head.decisions).map((id) => ({
+      kind: "decision-added",
+      target: id,
+      summary: `Decision "${id}" added`,
+      weakens: false
+    }))
+  ];
+}
+function diffBlueprints(base, head) {
+  if (!base && !head) return [];
+  if (base && !head) {
+    return [{ kind: "policy-weakened", target: "blueprint", summary: "The blueprint was deleted", weakens: true }];
+  }
+  if (!base && head) return describeNewBlueprint(head);
+  if (!base || !head) return [];
+  const refs = ruleReferences(base);
+  return [
+    ...diffPolicy(base, head),
+    ...diffComponents(base, head, refs),
+    ...diffDependencies(base, head),
+    ...diffRules(base, head),
+    ...diffInvariants(base, head),
+    ...diffDecisions(base, head),
+    ...diffVerification(base, head)
+  ];
+}
+var SEVERITY_RANK, LEVEL_RANK, ASSURANCE_RANK, DEFAULT_RULE_SEVERITY, DEFAULT_INVARIANT_SEVERITY;
+var init_blueprint_diff = __esm({
+  "src/blueprint/blueprint-diff.ts"() {
+    "use strict";
+    init_glob();
+    init_schema();
+    SEVERITY_RANK = { info: 1, warning: 2, error: 3 };
+    LEVEL_RANK = { off: 0, info: 1, warning: 2, error: 3 };
+    ASSURANCE_RANK = {
+      unknown: 0,
+      untested: 1,
+      tested: 2,
+      "property-tested": 3,
+      "formally-verified": 4
+    };
+    DEFAULT_RULE_SEVERITY = {
+      forbid: "error",
+      "allow-only": "error",
+      layers: "error",
+      "secret-access": "error",
+      "no-cycles": "warning",
+      protect: "warning"
+    };
+    DEFAULT_INVARIANT_SEVERITY = "error";
+  }
+});
+
+// src/blueprint/paths.ts
+function toPosix(value) {
+  return value.replace(/\\/g, "/");
+}
+function normalize(value) {
+  const input2 = toPosix(value);
+  const absolute = input2.startsWith("/");
+  const parts = [];
+  for (const segment of input2.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length && parts[parts.length - 1] !== "..") parts.pop();
+      else if (!absolute) parts.push("..");
+      continue;
+    }
+    parts.push(segment);
+  }
+  const joined = parts.join("/");
+  return absolute ? `/${joined}` : joined || ".";
+}
+function join(...segments) {
+  return normalize(segments.filter((segment) => segment.length > 0).join("/"));
+}
+function dirname(value) {
+  const normalized = toPosix(value).replace(/\/+$/, "");
+  const index = normalized.lastIndexOf("/");
+  if (index < 0) return ".";
+  if (index === 0) return "/";
+  return normalized.slice(0, index);
+}
+function basename(value, extension) {
+  const normalized = toPosix(value).replace(/\/+$/, "");
+  const base = normalized.slice(normalized.lastIndexOf("/") + 1);
+  if (extension && base.endsWith(extension) && base !== extension) return base.slice(0, -extension.length);
+  return base;
+}
+function extname(value) {
+  const base = basename(value);
+  const index = base.lastIndexOf(".");
+  return index <= 0 ? "" : base.slice(index);
+}
+function repoPath(value) {
+  const normalized = normalize(value);
+  return normalized === "." ? "" : normalized.replace(/^\.\//, "");
+}
+function ancestors(filePath) {
+  const result = [];
+  let current = dirname(filePath);
+  while (current !== "." && current !== "/" && current !== "") {
+    result.push(current);
+    current = dirname(current);
+  }
+  result.push("");
+  return result;
+}
+function isWithin(filePath, directory) {
+  if (!directory) return true;
+  return filePath === directory || filePath.startsWith(`${directory}/`);
+}
+var init_paths = __esm({
+  "src/blueprint/paths.ts"() {
+    "use strict";
+  }
+});
+
+// src/blueprint/diff.ts
+function pushCodePoint(bytes, codePoint) {
+  if (codePoint < 128) bytes.push(codePoint);
+  else if (codePoint < 2048) bytes.push(192 | codePoint >> 6, 128 | codePoint & 63);
+  else if (codePoint < 65536) {
+    bytes.push(224 | codePoint >> 12, 128 | codePoint >> 6 & 63, 128 | codePoint & 63);
+  } else {
+    bytes.push(
+      240 | codePoint >> 18,
+      128 | codePoint >> 12 & 63,
+      128 | codePoint >> 6 & 63,
+      128 | codePoint & 63
+    );
+  }
+}
+function decodeUtf8(bytes) {
+  let result = "";
   let index = 0;
-  let braceDepth = 0;
-  while (index < pattern2.length) {
-    const char = pattern2[index];
-    if (char === "*") {
-      if (pattern2[index + 1] === "*") {
-        const atSegmentStart = index === 0 || pattern2[index - 1] === "/";
-        const atSegmentEnd = index + 2 === pattern2.length || pattern2[index + 2] === "/";
-        if (atSegmentStart && atSegmentEnd) {
-          if (pattern2[index + 2] === "/") {
-            regex += "(?:.*/)?";
-            index += 3;
-          } else {
-            regex += ".*";
-            index += 2;
-          }
-          continue;
-        }
-        regex += "[^/]*";
-        index += 2;
+  while (index < bytes.length) {
+    const lead = bytes[index];
+    let needed = 0;
+    let codePoint = lead;
+    if (lead >= 240 && lead < 248) {
+      needed = 3;
+      codePoint = lead & 7;
+    } else if (lead >= 224 && lead < 240) {
+      needed = 2;
+      codePoint = lead & 15;
+    } else if (lead >= 192 && lead < 224) {
+      needed = 1;
+      codePoint = lead & 31;
+    }
+    let valid = lead < 128 || needed > 0;
+    for (let offset = 1; valid && offset <= needed; offset += 1) {
+      const next = bytes[index + offset];
+      if (next === void 0 || (next & 192) !== 128) valid = false;
+      else codePoint = codePoint << 6 | next & 63;
+    }
+    if (!valid || codePoint > 1114111) {
+      result += "�";
+      index += 1;
+      continue;
+    }
+    result += String.fromCodePoint(codePoint);
+    index += needed + 1;
+  }
+  return result;
+}
+function readQuoted(text4, start) {
+  if (text4[start] !== '"') return null;
+  const bytes = [];
+  let index = start + 1;
+  while (index < text4.length) {
+    const char = text4[index];
+    if (char === '"') return { value: decodeUtf8(bytes), end: index + 1 };
+    if (char === "\\") {
+      const next = text4[index + 1];
+      if (next === void 0) return null;
+      const octal = /^[0-7]{1,3}/.exec(text4.slice(index + 1, index + 4));
+      if (octal) {
+        bytes.push(parseInt(octal[0], 8) & 255);
+        index += 1 + octal[0].length;
         continue;
       }
-      regex += "[^/]*";
-      index += 1;
-      continue;
-    }
-    if (char === "?") {
-      regex += "[^/]";
-      index += 1;
-      continue;
-    }
-    if (char === "[") {
-      const close = pattern2.indexOf("]", index + 1);
-      if (close > index + 1) {
-        let body = pattern2.slice(index + 1, close);
-        const negated = body.startsWith("!") || body.startsWith("^");
-        if (negated) body = body.slice(1);
-        body = body.replace(/\\/g, "\\\\");
-        regex += negated ? `[^/${body}]` : `[${body}]`;
-        index = close + 1;
-        continue;
-      }
-      regex += "\\[";
-      index += 1;
-      continue;
-    }
-    if (char === "{") {
-      braceDepth += 1;
-      regex += "(?:";
-      index += 1;
-      continue;
-    }
-    if (char === "}" && braceDepth > 0) {
-      braceDepth -= 1;
-      regex += ")";
-      index += 1;
-      continue;
-    }
-    if (char === "," && braceDepth > 0) {
-      regex += "|";
-      index += 1;
-      continue;
-    }
-    if (char === "\\" && index + 1 < pattern2.length) {
-      regex += escapeRegex2(pattern2[index + 1]);
+      const simple = SIMPLE_ESCAPES[next];
+      if (simple !== void 0) bytes.push(simple);
+      else pushCodePoint(bytes, next.codePointAt(0) ?? 63);
       index += 2;
       continue;
     }
-    regex += escapeRegex2(char);
-    index += 1;
+    const codePoint = text4.codePointAt(index) ?? 63;
+    pushCodePoint(bytes, codePoint);
+    index += codePoint > 65535 ? 2 : 1;
   }
-  while (braceDepth > 0) {
-    regex += ")";
-    braceDepth -= 1;
-  }
-  return regex;
+  return null;
 }
-function compileGlob(rawPattern) {
-  const cached2 = cache.get(rawPattern);
-  if (cached2) return cached2;
-  let pattern2 = rawPattern.trim().replace(/\\(?=[^*?[\]{}!\\])/g, "/");
-  if (pattern2.startsWith("./")) pattern2 = pattern2.slice(2);
-  const anchored = pattern2.startsWith("/");
-  if (anchored) pattern2 = pattern2.slice(1);
-  if (pattern2.endsWith("/")) pattern2 = `${pattern2}**`;
-  const basenameOnly = !anchored && !pattern2.includes("/");
-  const body = translate(pattern2);
-  const regex = basenameOnly ? new RegExp(`^(?:.*/)?${body}$`) : new RegExp(`^${body}$`);
-  const directoryRegex = !/[*?[{]/.test(pattern2) ? new RegExp(`^${body}/`) : null;
-  const matcher = {
-    pattern: rawPattern,
-    specificity: pattern2.replace(/\*\*|[*?]|\[[^\]]*]|[{},]/g, "").length,
-    test(path) {
-      const candidate = path.replace(/\\/g, "/").replace(/^\.\//, "");
-      return regex.test(candidate) || directoryRegex !== null && directoryRegex.test(candidate);
+function unquotePath(raw) {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('"')) {
+    const quoted3 = readQuoted(trimmed, 0);
+    if (quoted3) return quoted3.value;
+  }
+  return trimmed;
+}
+function stripPrefix(path) {
+  return path.replace(PREFIX, "");
+}
+function headerPath(body) {
+  let path;
+  if (body.startsWith('"')) {
+    path = unquotePath(body);
+  } else {
+    const tab = body.indexOf("	");
+    path = tab >= 0 ? body.slice(0, tab) : body;
+    path = path.replace(/\r$/, "");
+  }
+  if (path === "/dev/null") return null;
+  return stripPrefix(path);
+}
+function gitHeaderPaths(rest) {
+  if (rest.startsWith('"')) {
+    const first = readQuoted(rest, 0);
+    if (!first) return null;
+    const remainder = rest.slice(first.end).trim();
+    return { oldPath: stripPrefix(first.value), newPath: stripPrefix(unquotePath(remainder)) };
+  }
+  if (rest.endsWith('"')) {
+    const open3 = rest.indexOf(' "');
+    if (open3 > 0) {
+      return { oldPath: stripPrefix(rest.slice(0, open3)), newPath: stripPrefix(unquotePath(rest.slice(open3 + 1))) };
     }
+  }
+  for (let index = rest.indexOf(" "); index >= 0; index = rest.indexOf(" ", index + 1)) {
+    const left = rest.slice(0, index);
+    const right = rest.slice(index + 1);
+    if (PREFIX.test(left) && PREFIX.test(right) && stripPrefix(left) === stripPrefix(right)) {
+      return { oldPath: stripPrefix(left), newPath: stripPrefix(right) };
+    }
+  }
+  const split = rest.indexOf(" b/");
+  if (split > 0) return { oldPath: stripPrefix(rest.slice(0, split)), newPath: stripPrefix(rest.slice(split + 1)) };
+  return null;
+}
+function newDraft() {
+  return {
+    oldPath: null,
+    newPath: null,
+    isNew: false,
+    isDeleted: false,
+    isRename: false,
+    binary: false,
+    sawFileHeader: false,
+    added: [],
+    removed: []
   };
-  if (cache.size > 5e3) cache.clear();
-  cache.set(rawPattern, matcher);
-  return matcher;
 }
-function matchesAny(path, patterns) {
-  if (!patterns?.length) return false;
-  return patterns.some((pattern2) => compileGlob(pattern2).test(path));
+function finishDraft(draft2) {
+  const path = draft2.isDeleted ? draft2.oldPath ?? draft2.newPath : draft2.newPath ?? draft2.oldPath;
+  if (!path) return null;
+  let status = "modified";
+  if (draft2.isNew) status = "added";
+  else if (draft2.isDeleted) status = "deleted";
+  else if (draft2.isRename || draft2.oldPath !== null && draft2.newPath !== null && draft2.oldPath !== draft2.newPath) {
+    status = "renamed";
+  }
+  const file2 = { path, status, added: draft2.added, removed: draft2.removed };
+  if (status === "renamed" && draft2.oldPath && draft2.oldPath !== path) file2.previousPath = draft2.oldPath;
+  if (draft2.binary) file2.binary = true;
+  return file2;
 }
-var cache;
-var init_glob = __esm({
-  "src/blueprint/glob.ts"() {
+function parseUnifiedDiff(text4) {
+  const files = [];
+  const lines = text4.split("\n");
+  let draft2 = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let oldRemaining = 0;
+  let newRemaining = 0;
+  const flush = () => {
+    if (draft2) {
+      const file2 = finishDraft(draft2);
+      if (file2) files.push(file2);
+    }
+    draft2 = null;
+    oldRemaining = 0;
+    newRemaining = 0;
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index];
+    if (draft2 && (oldRemaining > 0 || newRemaining > 0)) {
+      const marker = raw[0];
+      if (marker === "\\") continue;
+      const content = raw.slice(1).replace(/\r$/, "");
+      if (marker === "+" && newRemaining > 0) {
+        draft2.added.push({ line: newLine, text: content });
+        newLine += 1;
+        newRemaining -= 1;
+        continue;
+      }
+      if (marker === "-" && oldRemaining > 0) {
+        draft2.removed.push({ line: oldLine, text: content });
+        oldLine += 1;
+        oldRemaining -= 1;
+        continue;
+      }
+      if (marker === " " || marker === void 0 || raw === "\r") {
+        oldLine += 1;
+        newLine += 1;
+        oldRemaining = Math.max(0, oldRemaining - 1);
+        newRemaining = Math.max(0, newRemaining - 1);
+        continue;
+      }
+      oldRemaining = 0;
+      newRemaining = 0;
+    }
+    const line = raw.replace(/\r$/, "");
+    if (line.startsWith("diff --git ")) {
+      flush();
+      draft2 = newDraft();
+      const paths = gitHeaderPaths(line.slice("diff --git ".length));
+      if (paths) {
+        draft2.oldPath = paths.oldPath;
+        draft2.newPath = paths.newPath;
+      }
+      continue;
+    }
+    if (line.startsWith("--- ") && (lines[index + 1] ?? "").startsWith("+++ ")) {
+      if (!draft2 || draft2.sawFileHeader) {
+        flush();
+        draft2 = newDraft();
+      }
+      const target = draft2;
+      target.sawFileHeader = true;
+      const oldPath = headerPath(line.slice(4));
+      const newPath = headerPath((lines[index + 1] ?? "").replace(/\r$/, "").slice(4));
+      if (oldPath === null) target.isNew = true;
+      else target.oldPath = oldPath;
+      if (newPath === null) target.isDeleted = true;
+      else target.newPath = newPath;
+      index += 1;
+      continue;
+    }
+    if (!draft2) continue;
+    const current = draft2;
+    const hunk = HUNK_HEADER.exec(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      oldRemaining = hunk[2] === void 0 ? 1 : Number(hunk[2]);
+      newLine = Number(hunk[3]);
+      newRemaining = hunk[4] === void 0 ? 1 : Number(hunk[4]);
+      continue;
+    }
+    if (line.startsWith("new file mode")) current.isNew = true;
+    else if (line.startsWith("deleted file mode")) current.isDeleted = true;
+    else if (line.startsWith("rename from ")) {
+      current.isRename = true;
+      current.oldPath = unquotePath(line.slice("rename from ".length));
+    } else if (line.startsWith("rename to ")) {
+      current.isRename = true;
+      current.newPath = unquotePath(line.slice("rename to ".length));
+    } else if (line.startsWith("copy from ")) {
+      current.isNew = true;
+      current.oldPath = null;
+    } else if (line.startsWith("copy to ")) {
+      current.newPath = unquotePath(line.slice("copy to ".length));
+    } else if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
+      current.binary = true;
+    }
+  }
+  flush();
+  return files;
+}
+function fileAdded(path, content) {
+  const lines = content.length === 0 ? [] : content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return {
+    path,
+    status: "added",
+    added: lines.map((text4, index) => ({ line: index + 1, text: text4.replace(/\r$/, "") })),
+    removed: []
+  };
+}
+function compareText2(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function categoryFor(paths) {
+  for (const definition of DEFAULT_TRIPWIRES) {
+    const matcher = compileGlob(definition.glob);
+    if (paths.some((path) => matcher.test(path))) return definition.category;
+  }
+  return "contract";
+}
+function withRenameNote(reason, change, matchedCurrent) {
+  if (matchedCurrent || !change.previousPath) return reason;
+  return `${reason} (moved from ${change.previousPath})`;
+}
+function matchTripwires(changes, options) {
+  const hits = [];
+  const seen = /* @__PURE__ */ new Set();
+  const ordered = [...changes].sort((left, right) => compareText2(left.path, right.path));
+  for (const change of ordered) {
+    const candidates = change.previousPath ? [change.path, change.previousPath] : [change.path];
+    const add = (source, hit) => {
+      const key = `${change.path}\0${source}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      hits.push(hit);
+    };
+    if (options.defaults) {
+      for (const definition of DEFAULT_TRIPWIRES) {
+        const matcher = compileGlob(definition.glob);
+        if (!candidates.some((path) => matcher.test(path))) continue;
+        add("default", {
+          path: change.path,
+          category: definition.category,
+          reason: withRenameNote(definition.reason, change, matcher.test(change.path)),
+          severity: "warning"
+        });
+        break;
+      }
+    }
+    if (options.extra?.length && candidates.some((path) => matchesAny(path, options.extra))) {
+      add("extra", {
+        path: change.path,
+        category: categoryFor(candidates),
+        reason: withRenameNote("Protected by blueprint policy", change, matchesAny(change.path, options.extra)),
+        severity: "warning"
+      });
+    }
+    for (const rule of options.protectRules ?? []) {
+      if (!candidates.some((path) => matchesAny(path, rule.paths))) continue;
+      add(`rule:${rule.id}`, {
+        path: change.path,
+        category: categoryFor(candidates),
+        reason: withRenameNote(
+          rule.reason?.trim() || `Protected by blueprint rule ${rule.id}`,
+          change,
+          matchesAny(change.path, rule.paths)
+        ),
+        ruleId: rule.id,
+        severity: rule.severity ?? "warning"
+      });
+    }
+  }
+  return hits;
+}
+function isSnapshotFile(path) {
+  return matchesAny(path, SNAPSHOT_PATTERNS);
+}
+function isTestFile(path) {
+  return matchesAny(path, TEST_PATTERNS) && !isSnapshotFile(path);
+}
+function isCiFile(path) {
+  return matchesAny(path, CI_PATTERNS);
+}
+function isShellLike(path) {
+  return SHELL_EXTENSIONS.has(extname(path)) || matchesAny(path, HOOK_PATTERNS);
+}
+function isVerificationFile(path) {
+  if (isTestFile(path) || isCiFile(path) || matchesAny(path, RUNNER_CONFIG_PATTERNS)) return true;
+  if (matchesAny(path, HOOK_PATTERNS)) return true;
+  return SHELL_EXTENSIONS.has(extname(path)) && /(test|spec|ci|lint|check|verify)/i.test(basename(path));
+}
+function codeOnly(path, text4) {
+  if (!CODE_EXTENSIONS.has(extname(path).toLowerCase())) return text4;
+  return text4.replace(STRING_LITERAL, (match) => match.length <= 2 ? match : `${match[0]}${" ".repeat(match.length - 2)}${match[match.length - 1]}`);
+}
+function excerpt(text4, max = 80) {
+  const trimmed = text4.trim().replace(/\s+/g, " ");
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+function ciCommand(text4) {
+  let body = text4.trim().replace(/^-\s+/, "");
+  if (!body || body.startsWith("#")) return null;
+  const key = /^([\w.-]+):(?:\s+(.*))?$/.exec(body);
+  if (key) {
+    if (!COMMAND_KEYS.has(key[1])) return null;
+    body = (key[2] ?? "").trim();
+  }
+  body = body.replace(/^["']|["']$/g, "").trim();
+  return body && !/^[|>][+-]?$/.test(body) ? body : null;
+}
+function commandClasses(command) {
+  return COMMAND_CLASSES.filter((entry) => entry.pattern.test(command)).map((entry) => entry.kind);
+}
+function thresholdOf(text4) {
+  const match = THRESHOLD_PATTERN.exec(text4);
+  if (!match) return null;
+  return { key: match[1].toLowerCase().replace(/-/g, "_"), value: Number(match[2]) };
+}
+function scriptOf(text4) {
+  const match = SCRIPT_PATTERN.exec(text4);
+  return match ? { name: match[1], command: match[2] } : null;
+}
+function assertionKey(text4) {
+  return text4.trim().replace(/\s+/g, " ");
+}
+function realAssertions(change, lines) {
+  return lines.filter((entry) => isAssertion(codeOnly(change.path, entry.text)));
+}
+function staysInRunner(from, to) {
+  return isTestFile(to) && (!matchesAny(from, NAMED_TEST_PATTERNS) || matchesAny(to, NAMED_TEST_PATTERNS));
+}
+function planAssertionMoves(changes) {
+  const files = changes.filter((change) => !change.binary && isTestFile(change.path)).sort((left, right) => compareText2(left.path, right.path)).map((change) => ({ change, removed: realAssertions(change, change.removed), added: realAssertions(change, change.added) }));
+  const spare = /* @__PURE__ */ new Map();
+  const pool = /* @__PURE__ */ new Map();
+  for (const file2 of files) {
+    const surplus = file2.added.length - file2.removed.length;
+    if (surplus <= 0) continue;
+    spare.set(file2.change, surplus);
+    for (const entry of file2.added) {
+      const key = assertionKey(entry.text);
+      pool.set(key, [...pool.get(key) ?? [], file2.change]);
+    }
+  }
+  const moved = /* @__PURE__ */ new Map();
+  for (const file2 of files) {
+    for (const entry of file2.removed) {
+      const owners = pool.get(assertionKey(entry.text));
+      if (!owners) continue;
+      const index = owners.findIndex((owner2) => owner2 !== file2.change && (spare.get(owner2) ?? 0) > 0 && staysInRunner(file2.change.previousPath ?? file2.change.path, owner2.path));
+      if (index < 0) continue;
+      const [owner] = owners.splice(index, 1);
+      spare.set(owner, (spare.get(owner) ?? 0) - 1);
+      const set2 = moved.get(file2.change) ?? /* @__PURE__ */ new Set();
+      set2.add(entry);
+      moved.set(file2.change, set2);
+    }
+  }
+  return moved;
+}
+function definedNames(path, lines) {
+  const names = /* @__PURE__ */ new Set();
+  for (const { text: text4 } of lines) {
+    const code2 = codeOnly(path, text4);
+    if (COMMENTED_LINE.test(code2)) continue;
+    for (const pattern2 of DEFINITION_PATTERNS) {
+      for (const match of code2.matchAll(pattern2)) if (match[1].length >= 3) names.add(match[1]);
+    }
+  }
+  return names;
+}
+function changeContext(changes) {
+  const removed = /* @__PURE__ */ new Set();
+  const mentioned = /* @__PURE__ */ new Set();
+  const deletedSources = [];
+  for (const change of changes) {
+    if (change.binary || isTestFile(change.path) || !CODE_EXTENSIONS.has(extname(change.path).toLowerCase())) continue;
+    if (change.status === "deleted") deletedSources.push(change.path);
+    for (const name of definedNames(change.path, change.removed)) removed.add(name);
+    for (const { text: text4 } of change.added) {
+      for (const name of codeOnly(change.path, text4).match(IDENTIFIER) ?? []) mentioned.add(name);
+    }
+  }
+  return {
+    moved: planAssertionMoves(changes),
+    removedDefinitions: new Set([...removed].filter((name) => !mentioned.has(name))),
+    deletedSources: deletedSources.sort(compareText2)
+  };
+}
+function heldTests(change) {
+  if (matchesAny(change.path, NAMED_TEST_PATTERNS)) return true;
+  return change.removed.some(({ text: text4 }) => {
+    const code2 = codeOnly(change.path, text4);
+    return !COMMENTED_LINE.test(code2) && (isAssertion(code2) || TEST_DECLARATION.test(code2));
+  });
+}
+function withoutExtension(path) {
+  const extension = extname(path);
+  return extension ? path.slice(0, -extension.length) : path;
+}
+function importTargets(change) {
+  const directory = dirname(change.path);
+  const python = extname(change.path).toLowerCase() === ".py";
+  const targets = [];
+  for (const { text: text4 } of change.removed) {
+    if (!python) {
+      for (const match of text4.matchAll(IMPORT_SPECIFIER)) {
+        const specifier = match[1];
+        if (specifier.startsWith(".")) targets.push(withoutExtension(join(directory, specifier)));
+        else targets.push(`*/${withoutExtension(specifier.replace(/^[@~#]\//, ""))}`);
+      }
+      continue;
+    }
+    const statement = PYTHON_IMPORT.exec(text4);
+    const dotted = statement?.[1] ?? statement?.[2];
+    if (dotted) {
+      const dots = /^\.*/.exec(dotted)?.[0].length ?? 0;
+      const rest = dotted.slice(dots).replace(/\./g, "/");
+      if (dots > 0) {
+        const base = [...Array(dots - 1)].reduce((current) => dirname(current), directory);
+        if (rest) targets.push(join(base, rest));
+      } else if (rest) {
+        targets.push(join(directory, rest), `*/${rest}`);
+      }
+    }
+  }
+  return targets;
+}
+function testStem(path) {
+  return basename(path).replace(/\.[^.]+$/, "").replace(/[._-](?:test|spec)$/i, "").replace(/(?<=[a-z0-9])Tests?$/, "").replace(/^test_/i, "").toLowerCase();
+}
+function deletedSubject(change, context) {
+  if (context.deletedSources.length === 0) return null;
+  const targets = importTargets(change);
+  for (const source of context.deletedSources) {
+    const bare = withoutExtension(source);
+    const imported = targets.some((target) => {
+      if (!target.startsWith("*/")) return bare === target || bare === `${target}/index`;
+      const tail = target.slice(2);
+      return bare === tail || bare.endsWith(`/${tail}`) || bare.endsWith(`/${tail}/index`);
+    });
+    const colocated = dirname(source) === dirname(change.path) && withoutExtension(basename(source)).toLowerCase() === testStem(change.path);
+    if (imported || colocated) return source;
+  }
+  return null;
+}
+function detectDeletedTest(change, context) {
+  if (change.status === "deleted" && isTestFile(change.path)) {
+    if (!heldTests(change)) return [];
+    const subject2 = deletedSubject(change, context);
+    if (subject2) {
+      return [{
+        path: change.path,
+        signal: "test-file-deleted",
+        severity: "warning",
+        strong: false,
+        message: `Test file deleted together with ${subject2}, the code it tests`
+      }];
+    }
+    const moved = context.moved.get(change)?.size ?? 0;
+    const assertions = realAssertions(change, change.removed).length;
+    if (assertions > 0 && moved === assertions) return [];
+    return [{ path: change.path, signal: "test-file-deleted", severity: "warning", message: "Test file deleted" }];
+  }
+  const leavesRunner = (from, to) => isTestFile(from) && !isTestFile(to) || matchesAny(from, NAMED_TEST_PATTERNS) && !matchesAny(to, NAMED_TEST_PATTERNS);
+  if (change.status === "renamed" && change.previousPath && leavesRunner(change.previousPath, change.path)) {
+    return [
+      {
+        path: change.path,
+        signal: "test-file-deleted",
+        severity: "warning",
+        message: `Test file ${change.previousPath} was renamed to a path test runners do not pick up`
+      }
+    ];
+  }
+  return [];
+}
+function detectTestLineSignals(change) {
+  const signals = [];
+  let optionsLine = -1;
+  for (const { line, text: text4 } of change.added) {
+    const code2 = codeOnly(change.path, text4);
+    const insideOptions = line === optionsLine;
+    optionsLine = insideOptions && !code2.includes("}") || TEST_OPTIONS_OPEN.test(code2) ? line + 1 : -1;
+    if (SKIP_PATTERNS.some((pattern2) => pattern2.test(code2)) || insideOptions && SKIP_OPTION_LINE.test(code2)) {
+      signals.push({
+        path: change.path,
+        line,
+        signal: "test-skipped",
+        severity: "warning",
+        message: `Test skipped or disabled: ${excerpt(text4)}`
+      });
+    }
+    if (FOCUS_PATTERNS.some((pattern2) => pattern2.test(code2))) {
+      signals.push({
+        path: change.path,
+        line,
+        signal: "test-focused",
+        severity: "warning",
+        message: `Focused test silently skips every other test: ${excerpt(text4)}`
+      });
+    }
+    if (TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(code2))) {
+      signals.push({
+        path: change.path,
+        line,
+        signal: "assertion-trivialized",
+        severity: "warning",
+        message: `Assertion cannot fail: ${excerpt(text4)}`
+      });
+    }
+  }
+  return signals;
+}
+function isAssertion(text4) {
+  if (COMMENTED_LINE.test(text4)) return false;
+  return ASSERTION_PATTERN.test(text4) && !TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(text4));
+}
+function isTrivialAssertion(text4) {
+  return !COMMENTED_LINE.test(text4) && TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(text4));
+}
+function literalsOf(path, text4) {
+  const strings = [...text4.matchAll(STRING_LITERAL)].map((match) => match[0].slice(1, -1)).filter((value) => value.trim() !== "" && !value.includes("${"));
+  const numbers = [...codeOnly(path, text4).matchAll(NUMBER_LITERAL)].map((match) => match[0]);
+  return { numbers, strings };
+}
+function foldedIntoTable(change) {
+  const addsTable = change.added.some((entry) => PARAMETRIZED_PATTERNS.some((pattern2) => pattern2.test(codeOnly(change.path, entry.text))));
+  if (!addsTable || realAssertions(change, change.added).length === 0) return null;
+  const numbers = /* @__PURE__ */ new Set();
+  const strings = /* @__PURE__ */ new Set();
+  for (const entry of change.added) {
+    const literals = literalsOf(change.path, entry.text);
+    for (const value of literals.numbers) numbers.add(value);
+    for (const value of literals.strings) strings.add(value);
+  }
+  return (entry) => {
+    const literals = literalsOf(change.path, entry.text);
+    const distinctive = literals.strings.length > 0 || literals.numbers.some((value) => !COMMON_NUMBERS.has(value));
+    return distinctive && literals.numbers.every((value) => numbers.has(value)) && literals.strings.every((value) => strings.has(value));
+  };
+}
+function removedBlocks(lines) {
+  const blocks = [];
+  for (const entry of lines) {
+    const last = blocks[blocks.length - 1];
+    if (last && entry.line === last[last.length - 1].line + 1) last.push(entry);
+    else blocks.push([entry]);
+  }
+  return blocks;
+}
+function detectRemovedAssertions(change, context) {
+  if (change.status !== "modified" && change.status !== "renamed") return [];
+  const assertion = (entry) => isAssertion(codeOnly(change.path, entry.text));
+  const moved = context.moved.get(change);
+  const folded = foldedIntoTable(change);
+  const removed = change.removed.filter((entry) => assertion(entry) && !moved?.has(entry) && !folded?.(entry));
+  if (removed.length === 0) return [];
+  const added = change.added.filter(assertion).length;
+  const trivialized = change.added.filter((entry) => isTrivialAssertion(codeOnly(change.path, entry.text))).length;
+  const otherAdded = change.added.some((entry) => entry.text.trim() && !assertion(entry));
+  const otherRemoved = change.removed.some((entry) => entry.text.trim() && !assertion(entry));
+  const triggers = (count) => {
+    const lost = count - trivialized;
+    return lost > 0 && (lost - added >= 3 || added === 0 && (otherAdded || !otherRemoved));
+  };
+  if (!triggers(removed.length)) return [];
+  const subjects = /* @__PURE__ */ new Set();
+  const withCode = /* @__PURE__ */ new Set();
+  if (context.removedDefinitions.size > 0) {
+    for (const block of removedBlocks(change.removed)) {
+      const names2 = block.flatMap((entry) => codeOnly(change.path, entry.text).match(IDENTIFIER) ?? []).filter((name) => context.removedDefinitions.has(name));
+      if (names2.length === 0) continue;
+      for (const name of names2) subjects.add(name);
+      for (const entry of block) withCode.add(entry);
+    }
+  }
+  const strong = triggers(removed.filter((entry) => !withCode.has(entry)).length);
+  const noun = removed.length === 1 ? "assertion" : "assertions";
+  const counts = added === 0 ? `${removed.length} ${noun} removed and none added` : `${removed.length} ${noun} removed, only ${added} added`;
+  const names = [...subjects].sort(compareText2).slice(0, 3).join(", ");
+  return [
+    {
+      path: change.path,
+      line: removed[0].line,
+      signal: "assertions-removed",
+      severity: "warning",
+      ...strong ? {} : { strong: false },
+      message: strong ? counts : `${counts}, together with the code they tested (${names})`
+    }
+  ];
+}
+function shellExitFakesSuccess(text4, hook) {
+  if (!SHELL_EXIT_PATTERN.test(text4) || COMMENTED_LINE.test(text4)) return false;
+  if (/\|\|\s*exit\s+0\b/.test(text4)) return true;
+  if (hook && /^\s*exit\s+0\s*(?:#.*)?$/.test(text4)) return true;
+  const command = text4.replace(SHELL_EXIT_PATTERN, " ");
+  if (/\bif\b|\bthen\b|\bfi\b|\belse\b/.test(text4)) return false;
+  return commandClasses(command).some((kind) => kind === "test" || kind === "lint" || kind === "typecheck" || kind === "check");
+}
+function detectExitZero(change) {
+  const isPackageJson = basename(change.path) === "package.json";
+  if (!isPackageJson && !isVerificationFile(change.path)) return [];
+  const shell = isCiFile(change.path) || isShellLike(change.path) || matchesAny(change.path, HOOK_PATTERNS);
+  const signals = [];
+  for (const { line, text: text4 } of change.added) {
+    if (isPackageJson) {
+      if (!scriptOf(text4) || !SHELL_EXIT_PATTERN.test(text4)) continue;
+    } else if (!EXIT_PATTERNS.some((pattern2) => pattern2.test(codeOnly(change.path, text4))) && !(shell && shellExitFakesSuccess(text4, matchesAny(change.path, HOOK_PATTERNS)))) {
+      continue;
+    }
+    signals.push({
+      path: change.path,
+      line,
+      signal: "exit-zero",
+      severity: "error",
+      message: `Forced success exit can fake a passing run: ${excerpt(text4)}`
+    });
+  }
+  return signals;
+}
+function detectSuppressions(change) {
+  if (DOC_EXTENSIONS.has(extname(change.path).toLowerCase())) return [];
+  const found = [];
+  for (const { line, text: text4 } of change.added) {
+    const match = SUPPRESSION_PATTERNS.find((entry) => entry.pattern.test(codeOnly(change.path, text4)));
+    if (match) found.push({ line, label: match.label, text: text4 });
+  }
+  if (found.length === 0) return [];
+  if (found.length >= 3) {
+    return [
+      {
+        path: change.path,
+        line: found[0].line,
+        signal: "suppression-added",
+        severity: "warning",
+        message: `${found.length} check suppressions added (lines ${found.map((entry) => entry.line).join(", ")})`
+      }
+    ];
+  }
+  return found.map((entry) => ({
+    path: change.path,
+    line: entry.line,
+    signal: "suppression-added",
+    severity: "info",
+    message: `Check suppression added (${entry.label}): ${excerpt(entry.text)}`
+  }));
+}
+function detectTestExclusion(change) {
+  const signals = [];
+  for (const { line, text: text4 } of change.added) {
+    if (COMMENTED_LINE.test(text4) || !TEST_EXCLUSION_PATTERNS.some((pattern2) => pattern2.test(text4))) continue;
+    signals.push({
+      path: change.path,
+      line,
+      signal: "tests-excluded",
+      severity: "warning",
+      message: `Test runner now excludes tests: ${excerpt(text4)}`
+    });
+  }
+  return signals;
+}
+function detectCiWeakening(change) {
+  const signals = [];
+  for (const { line, text: text4 } of change.added) {
+    if (text4.trim().startsWith("#")) continue;
+    const match = CI_WEAKENING_PATTERNS.find((entry) => entry.pattern.test(text4));
+    if (match) {
+      signals.push({
+        path: change.path,
+        line,
+        signal: "ci-weakened",
+        severity: "warning",
+        message: `CI weakened: ${match.label}`
+      });
+    }
+  }
+  const addsPrTrigger = change.added.some((entry) => PR_TRIGGER.test(entry.text));
+  for (const { line, text: text4 } of change.removed) {
+    if (!PR_TRIGGER.test(text4) || addsPrTrigger) continue;
+    signals.push({
+      path: change.path,
+      line,
+      signal: "ci-weakened",
+      severity: "warning",
+      message: "CI no longer runs on pull requests (pull_request trigger removed)"
+    });
+  }
+  const lost = [];
+  const addedClasses = /* @__PURE__ */ new Set();
+  for (const { text: text4 } of change.added) {
+    const command = ciCommand(text4);
+    if (command) for (const kind of commandClasses(command)) addedClasses.add(kind);
+  }
+  for (const { line, text: text4 } of change.removed) {
+    const command = ciCommand(text4);
+    if (!command) continue;
+    const classes = commandClasses(command);
+    if (classes.length === 0 || classes.some((kind) => addedClasses.has(kind))) continue;
+    lost.push({ line, command });
+  }
+  if (change.status === "deleted" && lost.length > 0) {
+    signals.push({
+      path: change.path,
+      signal: "ci-weakened",
+      severity: "warning",
+      message: `CI file deleted; it ran ${lost.map((entry) => `"${excerpt(entry.command, 40)}"`).slice(0, 3).join(", ")}${lost.length > 3 ? ` and ${lost.length - 3} more` : ""}`
+    });
+    return signals;
+  }
+  for (const entry of lost) {
+    signals.push({
+      path: change.path,
+      line: entry.line,
+      signal: "ci-weakened",
+      severity: "warning",
+      message: `CI no longer runs "${excerpt(entry.command, 60)}"`
+    });
+  }
+  return signals;
+}
+function detectCoverageLowered(change) {
+  const addedByKey = /* @__PURE__ */ new Map();
+  for (const { line, text: text4 } of change.added) {
+    const threshold = thresholdOf(text4);
+    if (!threshold) continue;
+    const list2 = addedByKey.get(threshold.key) ?? [];
+    list2.push({ line, value: threshold.value });
+    addedByKey.set(threshold.key, list2);
+  }
+  const signals = [];
+  const cursor = /* @__PURE__ */ new Map();
+  for (const { text: text4 } of change.removed) {
+    const threshold = thresholdOf(text4);
+    if (!threshold) continue;
+    const position = cursor.get(threshold.key) ?? 0;
+    cursor.set(threshold.key, position + 1);
+    const counterpart = addedByKey.get(threshold.key)?.[position];
+    if (!counterpart) {
+      if (!addedByKey.has(threshold.key) && threshold.value > 0) {
+        signals.push({
+          path: change.path,
+          line: change.removed.find((entry) => thresholdOf(entry.text)?.key === threshold.key)?.line,
+          signal: "coverage-threshold-removed",
+          severity: "warning",
+          message: `Coverage threshold "${threshold.key}" (${threshold.value}) removed`
+        });
+      }
+      continue;
+    }
+    if (counterpart.value >= threshold.value) continue;
+    signals.push({
+      path: change.path,
+      line: counterpart.line,
+      signal: "coverage-threshold-lowered",
+      severity: "warning",
+      message: `Coverage threshold "${threshold.key}" lowered from ${threshold.value} to ${counterpart.value}`
+    });
+  }
+  return signals;
+}
+function detectScriptChanges(change) {
+  const scripts = /* @__PURE__ */ new Map();
+  for (const entry of change.removed) {
+    const script = scriptOf(entry.text);
+    if (!script || scripts.has(script.name)) continue;
+    scripts.set(script.name, { removed: entry, before: script.command });
+  }
+  for (const entry of change.added) {
+    const script = scriptOf(entry.text);
+    if (!script) continue;
+    const existing = scripts.get(script.name) ?? {};
+    if (existing.added) continue;
+    scripts.set(script.name, { ...existing, added: entry, after: script.command });
+  }
+  const signals = [];
+  for (const [name, entry] of scripts) {
+    if (entry.before !== void 0 && entry.before === entry.after) continue;
+    if (entry.before === void 0) continue;
+    let message;
+    if (entry.before !== void 0 && entry.after !== void 0) {
+      message = `Script "${name}" changed from ${excerpt(entry.before, 60)} to ${excerpt(entry.after, 60)}`;
+    } else if (entry.after !== void 0) {
+      message = `Script "${name}" added: ${excerpt(entry.after, 60)}`;
+    } else {
+      message = `Script "${name}" removed (was ${excerpt(entry.before ?? "", 60)})`;
+    }
+    signals.push({
+      path: change.path,
+      line: entry.added?.line ?? entry.removed?.line,
+      signal: "test-script-changed",
+      severity: "warning",
+      message
+    });
+  }
+  return signals;
+}
+function detectSnapshotChurn(changes) {
+  const snapshots = changes.filter((change) => (change.status === "modified" || change.status === "deleted") && isSnapshotFile(change.path)).map((change) => change.path).sort(compareText2);
+  if (snapshots.length < 5) return [];
+  return [
+    {
+      path: snapshots[0],
+      signal: "snapshots-mass-updated",
+      severity: "info",
+      message: `${snapshots.length} snapshot files modified or deleted; expected output may have been regenerated to match new behavior`
+    }
+  ];
+}
+function detectTestSpecialCasing(change) {
+  if (!CODE_EXTENSIONS.has(extname(change.path).toLowerCase()) || isVerificationFile(change.path)) return [];
+  if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) return [];
+  const signals = [];
+  for (const { line, text: text4 } of change.added) {
+    const masked = codeOnly(change.path, text4);
+    const inCode = TEST_DETECTION_PATTERNS.some((pattern2) => {
+      const match = pattern2.exec(text4);
+      return match !== null && masked[match.index] === text4[match.index] && masked[match.index] !== " ";
+    });
+    if (!inCode) continue;
+    signals.push({
+      path: change.path,
+      line,
+      signal: "test-special-casing",
+      severity: "warning",
+      message: `Production code now behaves differently under tests: ${excerpt(text4)}`
+    });
+  }
+  return signals;
+}
+function detectVerificationWeakening(changes) {
+  const context = changeContext(changes);
+  const signals = [];
+  for (const change of changes) {
+    signals.push(...detectDeletedTest(change, context));
+    if (change.binary) continue;
+    const testFile = isTestFile(change.path) || basename(change.path) === "conftest.py";
+    if (testFile) {
+      signals.push(...detectTestLineSignals(change));
+      signals.push(...detectRemovedAssertions(change, context));
+    } else {
+      signals.push(...detectTestSpecialCasing(change));
+    }
+    signals.push(...detectExitZero(change));
+    signals.push(...detectSuppressions(change));
+    if (isCiFile(change.path)) signals.push(...detectCiWeakening(change));
+    if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) signals.push(...detectTestExclusion(change));
+    if (matchesAny(change.path, COVERAGE_CONFIG_PATTERNS)) signals.push(...detectCoverageLowered(change));
+    if (basename(change.path) === "package.json") signals.push(...detectScriptChanges(change));
+  }
+  signals.push(...detectSnapshotChurn(changes));
+  return signals.map((signal) => ({ ...signal, strong: signal.strong !== false && WEAKENING_SIGNALS[signal.signal] === "strong" })).sort(
+    (left, right) => compareText2(left.path, right.path) || (left.line ?? 0) - (right.line ?? 0) || compareText2(left.signal, right.signal) || compareText2(left.message, right.message)
+  );
+}
+var SIMPLE_ESCAPES, PREFIX, HUNK_HEADER, WEAKENING_SIGNALS, WEAKENING_NEEDS_APPROVAL, WEAKENING_APPROVED, SNAPSHOT_PATTERNS, CI_PATTERNS, HOOK_PATTERNS, RUNNER_CONFIG_PATTERNS, COVERAGE_CONFIG_PATTERNS, SHELL_EXTENSIONS, DOC_EXTENSIONS, CODE_EXTENSIONS, STRING_LITERAL, SKIP_PATTERNS, TEST_OPTIONS_OPEN, SKIP_OPTION_LINE, FOCUS_PATTERNS, ASSERTION_PATTERN, LITERAL, TRIVIAL_PATTERNS, EXIT_PATTERNS, SHELL_EXIT_PATTERN, SUPPRESSION_PATTERNS, CI_WEAKENING_PATTERNS, COMMAND_CLASSES, COMMAND_KEYS, THRESHOLD_PATTERN, SCRIPT_PATTERN, NAMED_TEST_PATTERNS, DEFINITION_PATTERNS, TEST_DECLARATION, IMPORT_SPECIFIER, PYTHON_IMPORT, COMMENTED_LINE, PARAMETRIZED_PATTERNS, NUMBER_LITERAL, COMMON_NUMBERS, IDENTIFIER, PR_TRIGGER, TEST_EXCLUSION_PATTERNS, TEST_DETECTION_PATTERNS;
+var init_diff = __esm({
+  "src/blueprint/diff.ts"() {
     "use strict";
-    cache = /* @__PURE__ */ new Map();
+    init_constants();
+    init_glob();
+    init_paths();
+    SIMPLE_ESCAPES = {
+      a: 7,
+      b: 8,
+      t: 9,
+      n: 10,
+      v: 11,
+      f: 12,
+      r: 13,
+      '"': 34,
+      "\\": 92
+    };
+    PREFIX = /^[abciow]\//;
+    HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+    WEAKENING_SIGNALS = {
+      "test-skipped": "strong",
+      "test-focused": "strong",
+      "assertions-removed": "strong",
+      "assertion-trivialized": "strong",
+      "test-file-deleted": "strong",
+      "coverage-threshold-lowered": "strong",
+      "coverage-threshold-removed": "strong",
+      "exit-zero": "strong",
+      "ci-weakened": "weak",
+      "tests-excluded": "weak",
+      "test-script-changed": "weak",
+      "suppression-added": "weak",
+      "test-special-casing": "weak",
+      "snapshots-mass-updated": "weak"
+    };
+    WEAKENING_NEEDS_APPROVAL = "This weakens the checks agents are graded by, so a human must approve it: apply the approval label (rassam:approved by default), or restore the check.";
+    WEAKENING_APPROVED = "A human approved this change to the tests.";
+    SNAPSHOT_PATTERNS = ["**/__snapshots__/**", "*.snap"];
+    CI_PATTERNS = [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "azure-pipelines.yml", "Jenkinsfile"];
+    HOOK_PATTERNS = [".husky/**", ".git-hooks/**", ".githooks/**"];
+    RUNNER_CONFIG_PATTERNS = [
+      "{jest,vitest,playwright,cypress,karma,wdio}.config.*",
+      "{jest,vitest}.{setup,workspace}.*",
+      ".mocharc*",
+      "conftest.py",
+      "pytest.ini",
+      "tox.ini",
+      "noxfile.py"
+    ];
+    COVERAGE_CONFIG_PATTERNS = [
+      "{jest,vitest}.config.*",
+      "package.json",
+      "pyproject.toml",
+      "setup.cfg",
+      "tox.ini",
+      "pytest.ini",
+      ".coveragerc",
+      "{codecov,.codecov}.{yml,yaml}",
+      ".nycrc*",
+      ".c8rc*"
+    ];
+    SHELL_EXTENSIONS = /* @__PURE__ */ new Set([".sh", ".bash", ".zsh"]);
+    DOC_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
+    CODE_EXTENSIONS = /* @__PURE__ */ new Set([
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".py",
+      ".go",
+      ".java",
+      ".kt",
+      ".kts",
+      ".rs",
+      ".rb",
+      ".php",
+      ".cs",
+      ".swift",
+      ".c",
+      ".cc",
+      ".cpp",
+      ".h",
+      ".hpp",
+      ".scala"
+    ]);
+    STRING_LITERAL = /(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g;
+    SKIP_PATTERNS = [
+      /\.skip\s*\(/,
+      /\b(?:it|test|describe|context|suite)\.skip\b/,
+      /\.skipIf\s*\(/,
+      // node:test options, wherever they sit in the object: test('name', { skip: true }, fn)
+      // or { timeout: 500, todo: 'reason' }. The span before the object may not cross a
+      // closing parenthesis or an arrow, so object literals inside a test body are left alone.
+      // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
+      /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*\b(?:skip|todo)\s*:(?!\s*false\b)/,
+      /\b(?:t|ctx)\.todo\s*\(/,
+      /\b(?:it|test|describe)\.fixme\b/,
+      /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
+      /@pytest\.mark\.(?:skip|skipif|xfail)\b/,
+      /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/,
+      /\bt\.Skip(?:f|Now)?\s*\(/,
+      /@Disabled\b/,
+      /@Ignore\b/,
+      /#\[ignore\b/
+    ];
+    TEST_OPTIONS_OPEN = /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*$/;
+    SKIP_OPTION_LINE = /^\s*(?:skip|todo)\s*:(?!\s*false\b)/;
+    FOCUS_PATTERNS = [/\.only\s*\(/, /\b(?:fit|fdescribe|fcontext)\s*\(/];
+    ASSERTION_PATTERN = /\bexpect\s*\(|\bassert\w*|\bshould\.|\.should\b|\.to(?:Be|Equal|StrictEqual|Have|Match|Throw|Contain)\w*\s*\(|\brequire\.[A-Z]\w*\s*\(|\bt\.(?:Error|Fatal)f?\s*\(/;
+    LITERAL = String.raw`(?:true|false|null|undefined|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;
+    TRIVIAL_PATTERNS = [
+      new RegExp(String.raw`\bexpect\s*\(\s*${LITERAL}\s*\)\s*\.(?:not\.)?to\w+\s*\(`),
+      // A value compared with itself: expect(value).toBe(value).
+      /\bexpect\s*\(\s*([A-Za-z_$][\w$.]*)\s*\)\s*\.to(?:Be|Equal|StrictEqual)\s*\(\s*\1\s*\)/,
+      /^\s*assert\s+(?:True|1|not\s+False)\s*(?:,|#|$)/,
+      /^\s*assert\s+(\w+|"[^"]*"|'[^']*')\s*==\s*\1\s*(?:,|#|$)/,
+      /\bassert(?:True|_true|\.ok|\.isTrue)?\s*\(\s*(?:true|True|1)\s*[,)]/,
+      /\bassert(?:Equals?|_equal|\.equal|\.strictEqual|\.deepEqual|_eq!)\s*\(\s*(\w+|"[^"]*"|'[^']*')\s*,\s*\1\s*[,)]/,
+      /\bassert\.(?:True|Equal)\s*\(\s*t\s*,\s*true\s*[,)]/
+    ];
+    EXIT_PATTERNS = [
+      /\bprocess\.exit\s*\(\s*0\s*\)/,
+      /\bsys\.exit\s*\(\s*0\s*\)/,
+      /\bos\._?exit\s*\(\s*0\s*\)/,
+      /\bos\.Exit\s*\(\s*0\s*\)/
+    ];
+    SHELL_EXIT_PATTERN = /(?:^|[\s;&|("'`])exit\s+0\b/;
+    SUPPRESSION_PATTERNS = [
+      { pattern: /@ts-(?:ignore|nocheck|expect-error)\b/, label: "TypeScript check suppressed" },
+      { pattern: /\beslint-disable\b/, label: "ESLint rule disabled" },
+      { pattern: /\bbiome-ignore\b/, label: "Biome rule ignored" },
+      { pattern: /#\s*type:\s*ignore/, label: "type check ignored" },
+      { pattern: /#\s*noqa\b/, label: "lint check suppressed (noqa)" },
+      { pattern: /#\s*pylint:\s*disable/, label: "pylint check disabled" },
+      { pattern: /#\s*pragma:\s*no cover/, label: "excluded from coverage" },
+      { pattern: /\/\/\s*nolint\b/, label: "lint check suppressed (nolint)" },
+      { pattern: /#!?\[allow\(/, label: "Rust lint allowed" },
+      { pattern: /@SuppressWarnings\b/, label: "warnings suppressed" },
+      { pattern: /\bistanbul ignore\b/, label: "excluded from coverage" },
+      { pattern: /\b(?:c8|v8) ignore\b/, label: "excluded from coverage" }
+    ];
+    CI_WEAKENING_PATTERNS = [
+      { pattern: /\bcontinue-on-error:\s*true\b/, label: "step failures are ignored (continue-on-error: true)" },
+      { pattern: /\ballow_failure:\s*true\b/, label: "job failures are allowed (allow_failure: true)" },
+      { pattern: /\|\|\s*(?:true\b|:(?:\s|$))/, label: "command failure is swallowed (|| true)" },
+      { pattern: /--no-verify\b/, label: "hooks are bypassed (--no-verify)" },
+      { pattern: /^\s*-?\s*if:\s*(?:false|\$\{\{\s*false\s*\}\})\s*$/, label: "step or job is disabled (if: false)" },
+      { pattern: /--passWithNoTests\b/, label: "an empty test run passes (--passWithNoTests)" },
+      { pattern: /--bail[=\s]0\b/, label: "test bail-out is disabled (--bail=0)" }
+    ];
+    COMMAND_CLASSES = [
+      { kind: "test", pattern: /\b(?:tests?|vitest|jest|pytest|mocha|playwright|cypress|unittest|rspec|phpunit)\b/i },
+      { kind: "lint", pattern: /\b(?:lint|eslint|ruff|clippy|vet|flake8|pylint|golangci-lint|biome|rubocop)\b/i },
+      { kind: "typecheck", pattern: /\b(?:typecheck|type-check|tsc|mypy|pyright)\b/i },
+      { kind: "build", pattern: /\bbuild\b/i },
+      { kind: "check", pattern: /\bcheck\b/i }
+    ];
+    COMMAND_KEYS = /* @__PURE__ */ new Set(["run", "script", "command", "cmd", "sh", "bash"]);
+    THRESHOLD_PATTERN = /(?:^|[^\w-])["']?(coverageThreshold|thresholds?|statements|branches|functions|lines|fail[_-]under|min[_-]coverage|minimum|target)["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/i;
+    SCRIPT_PATTERN = /^\s*"(test|test:[^"]*|lint|typecheck|check|ci)"\s*:\s*(.*?),?\s*$/;
+    NAMED_TEST_PATTERNS = [
+      "**/*.test.*",
+      "**/*.spec.*",
+      "**/*_test.go",
+      "**/test_*.py",
+      "**/*_test.py",
+      "**/*Test.java",
+      "**/*Tests.java",
+      "**/*Test.kt",
+      "**/*Tests.cs",
+      "**/*_spec.rb"
+    ];
+    DEFINITION_PATTERNS = [
+      /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*[<(]/g,
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_$][\w$]*\s*=>)/g,
+      /\bclass\s+([A-Za-z_$][\w$]*)/g,
+      /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/g,
+      /\bfunc\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*[[(]/g,
+      /\bfn\s+([A-Za-z_]\w*)\s*[<(]/g
+    ];
+    TEST_DECLARATION = /(?<![.\w$])(?:it|test|describe|context|suite|specify)(?:\.\w+)*\s*\(|^\s*(?:async\s+)?def\s+test\w*\s*\(|\bfunc\s+(?:Test|Benchmark|Fuzz)\w*\s*\(|@Test\b|#\[(?:\w+::)?test\]|\[(?:Fact|Theory|Test|TestMethod)\]/;
+    IMPORT_SPECIFIER = /\b(?:import|from|require|export)\b[^"'`]*?\(?\s*["'`]([^"'`\s]+)["'`]/g;
+    PYTHON_IMPORT = /^\s*(?:from\s+(\.*[\w.]*)\s+import\b|import\s+([\w.]+))/;
+    COMMENTED_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
+    PARAMETRIZED_PATTERNS = [
+      /\b(?:it|test|describe|suite|bench)(?:\.\w+)*\.each\s*[(`]/,
+      /@pytest\.mark\.parametrize\b/,
+      /@ParameterizedTest\b|@(?:Csv|Value|Method)Source\b/,
+      /\[(?:Theory|InlineData|TestCase)\b/,
+      /#\[(?:rstest|case|test_case)\b/,
+      /\bfor\s+_\s*,\s*\w+\s*:=\s*range\b/,
+      /\bt\.Run\s*\(/
+    ];
+    NUMBER_LITERAL = /(?<![\w$.])-?\d+(?:\.\d+)?(?![\w$])/g;
+    COMMON_NUMBERS = /* @__PURE__ */ new Set(["0", "1", "-1"]);
+    IDENTIFIER = /[A-Za-z_$][\w$]*/g;
+    PR_TRIGGER = /^\s*(?:-\s*)?(?:pull_request|merge_request|merge_group)\s*:?\s*(?:#.*)?$|^\s*on\s*:\s*\[?[^\]#]*\bpull_request\b/;
+    TEST_EXCLUSION_PATTERNS = [
+      /\b(?:exclude|testPathIgnorePatterns|modulePathIgnorePatterns|testIgnore|ignorePatterns)\s*[:=]/,
+      /--(?:ignore|deselect|exclude)\b/,
+      /\bnorecursedirs\b|\baddopts\b[^\n]*(?:--ignore|-k\s+["']?not\b)/
+    ];
+    TEST_DETECTION_PATTERNS = [
+      /\bprocess\.env\.(?:VITEST|VITEST_WORKER_ID|JEST_WORKER_ID|MOCHA_WORKER_ID|PYTEST_CURRENT_TEST)\b/,
+      /\bprocess\.env(?:\.NODE_ENV|\[\s*["'`]NODE_ENV["'`]\s*\])\s*[!=]==?\s*["'`]test["'`]/,
+      /["'`]test["'`]\s*[!=]==?\s*process\.env(?:\.NODE_ENV|\[\s*["'`]NODE_ENV["'`]\s*\])/,
+      /["']pytest["']\s+in\s+sys\.modules/,
+      /\b(?:os\.environ(?:\.get)?|getenv)\s*[([]\s*["']PYTEST_CURRENT_TEST["']/,
+      /\btesting\.Testing\s*\(\s*\)/,
+      /\bRails\.env\.test\?/,
+      // In-source testing blocks are legitimate; returning early from one is not.
+      /\bimport\.meta\.vitest\b[^\n]*\breturn\b/,
+      /\bimport\.meta\.env\.(?:MODE|NODE_ENV)\s*[!=]==?\s*["'`]test["'`]/
+    ];
   }
 });
 
@@ -21688,6 +23726,76 @@ var init_graph = __esm({
     "use strict";
     init_glob();
     MAX_EDGE_EVIDENCE = 20;
+  }
+});
+
+// src/blueprint/util.ts
+function hash53(value, seed = 0) {
+  let h1 = 3735928559 ^ seed;
+  let h2 = 1103547991 ^ seed;
+  for (let index = 0; index < value.length; index += 1) {
+    const code2 = value.charCodeAt(index);
+    h1 = Math.imul(h1 ^ code2, 2654435761);
+    h2 = Math.imul(h2 ^ code2, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
+  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+function fingerprint(...parts) {
+  return hash53(parts.map((part) => String(part ?? "")).join("")).toString(16).padStart(14, "0");
+}
+function slugify3(value, maxLength = 48) {
+  const slug = value.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, maxLength).replace(/-+$/g, "");
+  return slug || "item";
+}
+function titleCase(value) {
+  const words = value.replace(/\.[^.]+$/, "").replace(/[-_.]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2").trim();
+  return words ? words.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Root";
+}
+function uniqueSorted(values) {
+  return [...new Set(values)].sort();
+}
+function plural2(count, singular, pluralForm = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+var init_util3 = __esm({
+  "src/blueprint/util.ts"() {
+    "use strict";
+  }
+});
+
+// src/blueprint/impact.ts
+function computeImpact(paths, blueprint, graph) {
+  const changedFiles = uniqueSorted(paths);
+  const touched = /* @__PURE__ */ new Map();
+  for (const path of changedFiles) {
+    const owner = graph.membership.fileToComponent.get(path) ?? componentForPath(path, blueprint);
+    if (!owner) continue;
+    const set2 = touched.get(owner) ?? /* @__PURE__ */ new Set();
+    set2.add(path);
+    touched.set(owner, set2);
+  }
+  const touchedComponents = [...touched.entries()].map(([id, files]) => ({ id, files: [...files].sort() })).sort((left, right) => right.files.length - left.files.length || left.id.localeCompare(right.id));
+  return {
+    changedFiles,
+    touchedComponents,
+    dependents: dependentsOf(touched.keys(), reverseAdjacency(graph))
+  };
+}
+function dependentCounts(graph) {
+  const reverse = reverseAdjacency(graph);
+  const counts = /* @__PURE__ */ new Map();
+  for (const id of graph.membership.componentFiles.keys()) {
+    counts.set(id, dependentsOf([id], reverse).length);
+  }
+  return counts;
+}
+var init_impact = __esm({
+  "src/blueprint/impact.ts"() {
+    "use strict";
+    init_graph();
+    init_util3();
   }
 });
 
@@ -21952,71 +24060,6 @@ var init_env = __esm({
     };
     ASSIGNMENT = /^\s*=(?![=>])/;
     DESTRUCTURED_KEY = new RegExp(`^\\s*(?:(${IDENT})\\s*(?:[:=]|$)|(["'])([A-Za-z_][\\w.-]*)\\2\\s*:)`);
-  }
-});
-
-// src/blueprint/paths.ts
-function toPosix(value) {
-  return value.replace(/\\/g, "/");
-}
-function normalize(value) {
-  const input2 = toPosix(value);
-  const absolute = input2.startsWith("/");
-  const parts = [];
-  for (const segment of input2.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      if (parts.length && parts[parts.length - 1] !== "..") parts.pop();
-      else if (!absolute) parts.push("..");
-      continue;
-    }
-    parts.push(segment);
-  }
-  const joined = parts.join("/");
-  return absolute ? `/${joined}` : joined || ".";
-}
-function join(...segments) {
-  return normalize(segments.filter((segment) => segment.length > 0).join("/"));
-}
-function dirname(value) {
-  const normalized = toPosix(value).replace(/\/+$/, "");
-  const index = normalized.lastIndexOf("/");
-  if (index < 0) return ".";
-  if (index === 0) return "/";
-  return normalized.slice(0, index);
-}
-function basename(value, extension) {
-  const normalized = toPosix(value).replace(/\/+$/, "");
-  const base = normalized.slice(normalized.lastIndexOf("/") + 1);
-  if (extension && base.endsWith(extension) && base !== extension) return base.slice(0, -extension.length);
-  return base;
-}
-function extname(value) {
-  const base = basename(value);
-  const index = base.lastIndexOf(".");
-  return index <= 0 ? "" : base.slice(index);
-}
-function repoPath(value) {
-  const normalized = normalize(value);
-  return normalized === "." ? "" : normalized.replace(/^\.\//, "");
-}
-function ancestors(filePath) {
-  const result = [];
-  let current = dirname(filePath);
-  while (current !== "." && current !== "/" && current !== "") {
-    result.push(current);
-    current = dirname(current);
-  }
-  result.push("");
-  return result;
-}
-function isWithin(filePath, directory) {
-  if (!directory) return true;
-  return filePath === directory || filePath.startsWith(`${directory}/`);
-}
-var init_paths = __esm({
-  "src/blueprint/paths.ts"() {
-    "use strict";
   }
 });
 
@@ -23505,318 +25548,6 @@ var init_imports = __esm({
   }
 });
 
-// src/blueprint/util.ts
-function hash53(value, seed = 0) {
-  let h1 = 3735928559 ^ seed;
-  let h2 = 1103547991 ^ seed;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    h1 = Math.imul(h1 ^ code, 2654435761);
-    h2 = Math.imul(h2 ^ code, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
-  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
-  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-}
-function fingerprint(...parts) {
-  return hash53(parts.map((part) => String(part ?? "")).join("")).toString(16).padStart(14, "0");
-}
-function slugify3(value, maxLength = 48) {
-  const slug = value.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, maxLength).replace(/-+$/g, "");
-  return slug || "item";
-}
-function titleCase(value) {
-  const words = value.replace(/\.[^.]+$/, "").replace(/[-_.]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2").trim();
-  return words ? words.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Root";
-}
-function uniqueSorted(values) {
-  return [...new Set(values)].sort();
-}
-function plural2(count, singular, pluralForm = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
-}
-var init_util3 = __esm({
-  "src/blueprint/util.ts"() {
-    "use strict";
-  }
-});
-
-// src/blueprint/derive.ts
-function kindFor(directory) {
-  const segments = directory.split("/").filter(Boolean).reverse();
-  for (const segment of segments) {
-    const kind = KIND_BY_SEGMENT[segment.toLowerCase()];
-    if (kind) return kind;
-  }
-  return "core";
-}
-function directoryOfFile(path) {
-  const dir = dirname(path);
-  return dir === "." ? "" : dir;
-}
-function clusterFiles(sourceFiles, maxFiles) {
-  const counts = /* @__PURE__ */ new Map();
-  const direct = /* @__PURE__ */ new Map();
-  const children = /* @__PURE__ */ new Map();
-  for (const file2 of sourceFiles) {
-    const dir = directoryOfFile(file2);
-    direct.set(dir, [...direct.get(dir) ?? [], file2]);
-    let current = dir;
-    counts.set("", (counts.get("") ?? 0) + 1);
-    while (current) {
-      counts.set(current, (counts.get(current) ?? 0) + 1);
-      const parent = directoryOfFile(current);
-      const set2 = children.get(parent) ?? /* @__PURE__ */ new Set();
-      set2.add(current);
-      children.set(parent, set2);
-      current = parent;
-    }
-  }
-  const filesUnder = (dir) => sourceFiles.filter((file2) => isWithin(file2, dir));
-  const clusters = [];
-  const visit2 = (dir, depth) => {
-    const total = counts.get(dir) ?? 0;
-    const subdirs = [...children.get(dir) ?? []].sort();
-    const directFiles = direct.get(dir) ?? [];
-    const mustSplit = dir === "" && subdirs.length > 0;
-    if (!mustSplit && (total <= maxFiles || subdirs.length === 0 || depth >= 6)) {
-      clusters.push({ key: dir || "root", globs: [dir ? `${dir}/**` : "/*"], files: dir ? filesUnder(dir) : directFiles, directory: dir });
-      return;
-    }
-    const small = [];
-    for (const sub of subdirs) {
-      if ((counts.get(sub) ?? 0) < 2 && subdirs.length > 1) small.push(sub);
-      else visit2(sub, depth + 1);
-    }
-    if (directFiles.length || small.length) {
-      const globs = [...directFiles.length ? [dir ? `${dir}/*` : "/*"] : [], ...small.map((sub) => `${sub}/**`)];
-      const files = [...directFiles, ...small.flatMap((sub) => filesUnder(sub))];
-      clusters.push({ key: dir ? `${dir}:root` : "root", globs, files, directory: dir });
-    }
-  };
-  visit2("", 0);
-  return clusters.filter((cluster) => cluster.files.length > 0);
-}
-function readJson(files, path) {
-  const file2 = files.find((candidate) => candidate.path === path);
-  if (!file2?.content) return null;
-  try {
-    const value = JSON.parse(file2.content);
-    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-function detectSystemName(files) {
-  const pkg = readJson(files, "package.json");
-  if (typeof pkg?.name === "string" && pkg.name.trim()) return pkg.name.trim();
-  const text4 = (path) => files.find((file2) => file2.path === path)?.content ?? null;
-  const goModule = text4("go.mod")?.match(/^module\s+(\S+)/m)?.[1];
-  if (goModule) return goModule.split("/").pop() ?? goModule;
-  const cargo = text4("Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
-  if (cargo) return cargo;
-  const pyproject = text4("pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
-  if (pyproject) return pyproject;
-  return null;
-}
-function uniqueId(base, used) {
-  let candidate = base || "component";
-  let counter = 2;
-  while (used.has(candidate)) candidate = `${base}-${counter++}`;
-  used.add(candidate);
-  return candidate;
-}
-function componentIdFor(directory, isRootCluster) {
-  const segments = directory.split("/").filter(Boolean).filter((segment) => !["src", "source", "packages", "apps"].includes(segment.toLowerCase()) || directory.split("/").length === 1);
-  const tail = segments.slice(-2).join("-");
-  const base = slugify3(tail || directory || "root");
-  return isRootCluster && directory ? `${base}-root` : base;
-}
-function componentName(directory, isRootCluster) {
-  const segments = directory.split("/").filter(Boolean);
-  const last = segments[segments.length - 1] ?? "Root";
-  const parent = segments.length > 1 ? segments[segments.length - 2] : "";
-  const base = parent && !["src", "app", "packages", "apps"].includes(parent) && segments.length > 2 ? `${titleCase(parent)} ${titleCase(last)}` : titleCase(last);
-  return isRootCluster && directory ? `${base} (top-level files)` : base;
-}
-function deriveBlueprint(files, options = {}) {
-  const now = options.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const provenance = {
-    source: PROVENANCE_SOURCE,
-    by: options.author ?? "rassam init",
-    at: now,
-    ...options.commit ? { commit: options.commit } : {}
-  };
-  const maxFiles = options.maxFilesPerComponent ?? 40;
-  const maxComponents = options.maxComponents ?? 40;
-  const graph = buildFileGraph(files);
-  const sourceFiles = [...graph.facts.values()].map((facts) => facts.path).sort();
-  const testFiles = sourceFiles.filter((path) => graph.facts.get(path)?.isTest);
-  const productionFiles = sourceFiles.filter((path) => !graph.facts.get(path)?.isTest);
-  let clusters = clusterFiles(productionFiles, maxFiles);
-  let budget = maxFiles;
-  while (clusters.length > maxComponents && budget < 5e3) {
-    budget = Math.ceil(budget * 1.6);
-    clusters = clusterFiles(productionFiles, budget);
-  }
-  const used = /* @__PURE__ */ new Set();
-  const components = clusters.map((cluster) => {
-    const isRootCluster = cluster.key.endsWith(":root") || cluster.key === "root";
-    return {
-      id: uniqueId(componentIdFor(cluster.directory, isRootCluster && cluster.globs.some((glob) => glob.endsWith("/*"))), used),
-      name: componentName(cluster.directory, isRootCluster && cluster.globs.some((glob) => glob.endsWith("/*"))),
-      kind: cluster.directory ? kindFor(cluster.directory) : "config",
-      description: `${cluster.files.length} source file${cluster.files.length === 1 ? "" : "s"} under ${cluster.directory || "the repository root"}`,
-      paths: cluster.globs,
-      provenance
-    };
-  });
-  if (testFiles.length) {
-    const testGlobs = TEST_PATTERNS.filter((pattern2) => testFiles.some((file2) => compileGlob(pattern2).test(file2)));
-    components.push({
-      id: uniqueId("tests", used),
-      name: "Tests",
-      kind: "test",
-      description: `${testFiles.length} test file${testFiles.length === 1 ? "" : "s"}`,
-      paths: testGlobs,
-      priority: 10,
-      provenance
-    });
-  }
-  const draft = blueprintSchema.parse({
-    $schema: BLUEPRINT_SCHEMA_URL,
-    version: BLUEPRINT_VERSION,
-    system: {
-      name: options.name ?? detectSystemName(files) ?? "repository",
-      ...options.repository ? { repository: options.repository } : {},
-      description: "Draft generated by `rassam init`. Replace derived facts with human-authored intent, rules and invariants."
-    },
-    components
-  });
-  const membership = assignComponents(graph.files, draft);
-  const componentGraph = buildComponentGraph(graph, membership);
-  const testsId = components.find((component2) => component2.kind === "test")?.id;
-  draft.dependencies = componentGraph.edges.filter((edge) => edge.from !== testsId).map((edge) => ({ from: edge.from, to: edge.to, kind: "imports", provenance }));
-  const rules = [
-    {
-      id: "no-component-cycles",
-      kind: "no-cycles",
-      severity: "warning",
-      reason: "Cycles erase the direction of dependency, so no component can change safely in isolation.",
-      provenance
-    }
-  ];
-  if (testsId) {
-    rules.push({
-      id: "tests-are-leaves",
-      kind: "forbid",
-      from: ["*", `!${testsId}`],
-      to: testsId,
-      severity: "error",
-      reason: "Production code must never depend on test code.",
-      provenance
-    });
-  }
-  const readers = /* @__PURE__ */ new Map();
-  for (const [componentId, refs] of componentGraph.env) {
-    for (const ref of refs) {
-      if (!ref.secretLike || componentId === testsId) continue;
-      const set2 = readers.get(ref.name) ?? /* @__PURE__ */ new Set();
-      set2.add(componentId);
-      readers.set(ref.name, set2);
-    }
-  }
-  for (const [name, set2] of [...readers.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    if (set2.size > 3) continue;
-    rules.push({
-      id: `secret-${slugify3(name, 60)}`,
-      kind: "secret-access",
-      secrets: [name],
-      // Tests legitimately set and read environment variables.
-      allow: [...[...set2].sort(), ...testsId ? [testsId] : []],
-      severity: "error",
-      reason: `Only the components that read ${name} today may hold it. Review before accepting.`,
-      provenance
-    });
-  }
-  draft.rules = rules;
-  return draft;
-}
-var KIND_BY_SEGMENT, PROVENANCE_SOURCE;
-var init_derive = __esm({
-  "src/blueprint/derive.ts"() {
-    "use strict";
-    init_schema();
-    init_constants();
-    init_glob();
-    init_graph();
-    init_imports();
-    init_paths();
-    init_util3();
-    KIND_BY_SEGMENT = {
-      api: "api",
-      apis: "api",
-      routes: "route",
-      route: "route",
-      pages: "route",
-      app: "route",
-      views: "component",
-      components: "component",
-      ui: "component",
-      widgets: "component",
-      hooks: "hook",
-      context: "context",
-      contexts: "context",
-      store: "context",
-      stores: "context",
-      state: "context",
-      services: "service",
-      service: "service",
-      workers: "service",
-      jobs: "queue",
-      queue: "queue",
-      queues: "queue",
-      models: "model",
-      model: "model",
-      entities: "model",
-      schemas: "model",
-      types: "model",
-      db: "database",
-      database: "database",
-      migrations: "database",
-      prisma: "database",
-      repositories: "database",
-      auth: "auth",
-      security: "auth",
-      middleware: "middleware",
-      middlewares: "middleware",
-      config: "config",
-      configs: "config",
-      settings: "config",
-      utils: "utility",
-      util: "utility",
-      helpers: "utility",
-      lib: "core",
-      libs: "core",
-      core: "core",
-      domain: "core",
-      internal: "core",
-      pkg: "core",
-      cmd: "client",
-      cli: "client",
-      bin: "client",
-      client: "client",
-      server: "service",
-      styles: "style",
-      css: "style",
-      cache: "cache",
-      gateway: "gateway",
-      proxy: "proxy"
-    };
-    PROVENANCE_SOURCE = "derived";
-  }
-});
-
 // src/blueprint/reach.ts
 function classifyAgentConfig(path) {
   const normalized = repoPath(path);
@@ -23866,7 +25597,7 @@ function skipJsonTrivia(cursor) {
     }
   }
 }
-function readQuoted(cursor) {
+function readQuoted2(cursor) {
   const { text: text4 } = cursor;
   const quote2 = text4[cursor.pos];
   let result = "";
@@ -23910,7 +25641,7 @@ function readJsonValue(cursor, path, depth) {
         return result;
       }
       if (text4[cursor.pos] !== '"' && text4[cursor.pos] !== "'") throw new ParseError("expected key");
-      const key = readQuoted(cursor);
+      const key = readQuoted2(cursor);
       skipJsonTrivia(cursor);
       if (text4[cursor.pos] !== ":") throw new ParseError("expected ':'");
       cursor.pos += 1;
@@ -23937,7 +25668,7 @@ function readJsonValue(cursor, path, depth) {
   }
   if (char === '"' || char === "'") {
     const start = cursor.pos;
-    const value = readQuoted(cursor);
+    const value = readQuoted2(cursor);
     cursor.leaves.push({ path, value, start, end: cursor.pos });
     return value;
   }
@@ -23995,7 +25726,7 @@ function readTomlString(cursor) {
     cursor.pos = close + 3;
     return value;
   }
-  return quote2 === "'" ? readTomlLiteral(cursor) : readQuoted(cursor);
+  return quote2 === "'" ? readTomlLiteral(cursor) : readQuoted2(cursor);
 }
 function readTomlKey(cursor) {
   const { text: text4 } = cursor;
@@ -24004,7 +25735,7 @@ function readTomlKey(cursor) {
     skipTomlSpace(cursor, false);
     const char = text4[cursor.pos];
     if (char === '"' || char === "'") {
-      keys.push(char === "'" ? readTomlLiteral(cursor) : readQuoted(cursor));
+      keys.push(char === "'" ? readTomlLiteral(cursor) : readQuoted2(cursor));
     } else {
       const bare = /^[A-Za-z0-9_-]+/.exec(text4.slice(cursor.pos, cursor.pos + 200));
       if (!bare) throw new ParseError("expected key");
@@ -24089,7 +25820,7 @@ function parseToml(content) {
   const cursor = { text: content, pos: 0, leaves: [] };
   const root = newDict();
   let tablePath = [];
-  let table2 = root;
+  let table3 = root;
   while (cursor.pos < content.length) {
     skipTomlSpace(cursor, true);
     if (cursor.pos >= content.length) break;
@@ -24103,14 +25834,14 @@ function parseToml(content) {
         if (content[cursor.pos] !== "]") throw new ParseError("expected ']'");
         cursor.pos += double ? 2 : 1;
         tablePath = keys;
-        table2 = tomlDescend(root, keys);
+        table3 = tomlDescend(root, keys);
       } else {
         const keys = readTomlKey(cursor);
         if (content[cursor.pos] !== "=") throw new ParseError("expected '='");
         cursor.pos += 1;
         skipTomlSpace(cursor, false);
         const value = readTomlValue(cursor, [...tablePath, ...keys], 0);
-        tomlDescend(table2, keys.slice(0, -1))[keys[keys.length - 1]] = value;
+        tomlDescend(table3, keys.slice(0, -1))[keys[keys.length - 1]] = value;
       }
       skipTomlSpace(cursor, false);
       if (cursor.pos < content.length && content[cursor.pos] !== "\n") throw new ParseError("trailing characters");
@@ -24261,11 +25992,11 @@ function claudePermissions(path, agent, root) {
 function codexPermissions(path, agent, root) {
   if (!isDict(root)) return [];
   const grants = [];
-  const scan = (table2, prefix) => {
-    if (table2.approval_policy === "never") {
+  const scan = (table3, prefix) => {
+    if (table3.approval_policy === "never") {
       grants.push({ path, agent, effect: "allow", rule: `${prefix}approval_policy = "never"`, broad: true });
     }
-    if (table2.sandbox_mode === "danger-full-access") {
+    if (table3.sandbox_mode === "danger-full-access") {
       grants.push({ path, agent, effect: "allow", rule: `${prefix}sandbox_mode = "danger-full-access"`, broad: true });
     }
   };
@@ -24630,2744 +26361,6 @@ var init_reach = __esm({
     CHECKOUT_STEP = /^(?:-\s*)?uses\s*:\s*["']?actions\/checkout@/;
     PR_HEAD_REF = /^ref\s*:.*(github\.event\.pull_request\.head\.(?:sha|ref)|github\.head_ref|refs\/pull\/\$\{\{\s*github\.event\.(?:pull_request\.)?number\s*\}\}\/(?:head|merge))/;
     QUERY_PARAM = "[?&]([A-Za-z][\\w.-]*)=([^&\\s\"'`#]+)";
-  }
-});
-
-// src/blueprint/diff.ts
-function pushCodePoint(bytes, codePoint) {
-  if (codePoint < 128) bytes.push(codePoint);
-  else if (codePoint < 2048) bytes.push(192 | codePoint >> 6, 128 | codePoint & 63);
-  else if (codePoint < 65536) {
-    bytes.push(224 | codePoint >> 12, 128 | codePoint >> 6 & 63, 128 | codePoint & 63);
-  } else {
-    bytes.push(
-      240 | codePoint >> 18,
-      128 | codePoint >> 12 & 63,
-      128 | codePoint >> 6 & 63,
-      128 | codePoint & 63
-    );
-  }
-}
-function decodeUtf8(bytes) {
-  let result = "";
-  let index = 0;
-  while (index < bytes.length) {
-    const lead = bytes[index];
-    let needed = 0;
-    let codePoint = lead;
-    if (lead >= 240 && lead < 248) {
-      needed = 3;
-      codePoint = lead & 7;
-    } else if (lead >= 224 && lead < 240) {
-      needed = 2;
-      codePoint = lead & 15;
-    } else if (lead >= 192 && lead < 224) {
-      needed = 1;
-      codePoint = lead & 31;
-    }
-    let valid = lead < 128 || needed > 0;
-    for (let offset = 1; valid && offset <= needed; offset += 1) {
-      const next = bytes[index + offset];
-      if (next === void 0 || (next & 192) !== 128) valid = false;
-      else codePoint = codePoint << 6 | next & 63;
-    }
-    if (!valid || codePoint > 1114111) {
-      result += "�";
-      index += 1;
-      continue;
-    }
-    result += String.fromCodePoint(codePoint);
-    index += needed + 1;
-  }
-  return result;
-}
-function readQuoted2(text4, start) {
-  if (text4[start] !== '"') return null;
-  const bytes = [];
-  let index = start + 1;
-  while (index < text4.length) {
-    const char = text4[index];
-    if (char === '"') return { value: decodeUtf8(bytes), end: index + 1 };
-    if (char === "\\") {
-      const next = text4[index + 1];
-      if (next === void 0) return null;
-      const octal = /^[0-7]{1,3}/.exec(text4.slice(index + 1, index + 4));
-      if (octal) {
-        bytes.push(parseInt(octal[0], 8) & 255);
-        index += 1 + octal[0].length;
-        continue;
-      }
-      const simple = SIMPLE_ESCAPES[next];
-      if (simple !== void 0) bytes.push(simple);
-      else pushCodePoint(bytes, next.codePointAt(0) ?? 63);
-      index += 2;
-      continue;
-    }
-    const codePoint = text4.codePointAt(index) ?? 63;
-    pushCodePoint(bytes, codePoint);
-    index += codePoint > 65535 ? 2 : 1;
-  }
-  return null;
-}
-function unquotePath(raw) {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('"')) {
-    const quoted3 = readQuoted2(trimmed, 0);
-    if (quoted3) return quoted3.value;
-  }
-  return trimmed;
-}
-function stripPrefix(path) {
-  return path.replace(PREFIX, "");
-}
-function headerPath(body) {
-  let path;
-  if (body.startsWith('"')) {
-    path = unquotePath(body);
-  } else {
-    const tab = body.indexOf("	");
-    path = tab >= 0 ? body.slice(0, tab) : body;
-    path = path.replace(/\r$/, "");
-  }
-  if (path === "/dev/null") return null;
-  return stripPrefix(path);
-}
-function gitHeaderPaths(rest) {
-  if (rest.startsWith('"')) {
-    const first = readQuoted2(rest, 0);
-    if (!first) return null;
-    const remainder = rest.slice(first.end).trim();
-    return { oldPath: stripPrefix(first.value), newPath: stripPrefix(unquotePath(remainder)) };
-  }
-  if (rest.endsWith('"')) {
-    const open3 = rest.indexOf(' "');
-    if (open3 > 0) {
-      return { oldPath: stripPrefix(rest.slice(0, open3)), newPath: stripPrefix(unquotePath(rest.slice(open3 + 1))) };
-    }
-  }
-  for (let index = rest.indexOf(" "); index >= 0; index = rest.indexOf(" ", index + 1)) {
-    const left = rest.slice(0, index);
-    const right = rest.slice(index + 1);
-    if (PREFIX.test(left) && PREFIX.test(right) && stripPrefix(left) === stripPrefix(right)) {
-      return { oldPath: stripPrefix(left), newPath: stripPrefix(right) };
-    }
-  }
-  const split = rest.indexOf(" b/");
-  if (split > 0) return { oldPath: stripPrefix(rest.slice(0, split)), newPath: stripPrefix(rest.slice(split + 1)) };
-  return null;
-}
-function newDraft() {
-  return {
-    oldPath: null,
-    newPath: null,
-    isNew: false,
-    isDeleted: false,
-    isRename: false,
-    binary: false,
-    sawFileHeader: false,
-    added: [],
-    removed: []
-  };
-}
-function finishDraft(draft) {
-  const path = draft.isDeleted ? draft.oldPath ?? draft.newPath : draft.newPath ?? draft.oldPath;
-  if (!path) return null;
-  let status = "modified";
-  if (draft.isNew) status = "added";
-  else if (draft.isDeleted) status = "deleted";
-  else if (draft.isRename || draft.oldPath !== null && draft.newPath !== null && draft.oldPath !== draft.newPath) {
-    status = "renamed";
-  }
-  const file2 = { path, status, added: draft.added, removed: draft.removed };
-  if (status === "renamed" && draft.oldPath && draft.oldPath !== path) file2.previousPath = draft.oldPath;
-  if (draft.binary) file2.binary = true;
-  return file2;
-}
-function parseUnifiedDiff(text4) {
-  const files = [];
-  const lines = text4.split("\n");
-  let draft = null;
-  let oldLine = 0;
-  let newLine = 0;
-  let oldRemaining = 0;
-  let newRemaining = 0;
-  const flush = () => {
-    if (draft) {
-      const file2 = finishDraft(draft);
-      if (file2) files.push(file2);
-    }
-    draft = null;
-    oldRemaining = 0;
-    newRemaining = 0;
-  };
-  for (let index = 0; index < lines.length; index += 1) {
-    const raw = lines[index];
-    if (draft && (oldRemaining > 0 || newRemaining > 0)) {
-      const marker = raw[0];
-      if (marker === "\\") continue;
-      const content = raw.slice(1).replace(/\r$/, "");
-      if (marker === "+" && newRemaining > 0) {
-        draft.added.push({ line: newLine, text: content });
-        newLine += 1;
-        newRemaining -= 1;
-        continue;
-      }
-      if (marker === "-" && oldRemaining > 0) {
-        draft.removed.push({ line: oldLine, text: content });
-        oldLine += 1;
-        oldRemaining -= 1;
-        continue;
-      }
-      if (marker === " " || marker === void 0 || raw === "\r") {
-        oldLine += 1;
-        newLine += 1;
-        oldRemaining = Math.max(0, oldRemaining - 1);
-        newRemaining = Math.max(0, newRemaining - 1);
-        continue;
-      }
-      oldRemaining = 0;
-      newRemaining = 0;
-    }
-    const line = raw.replace(/\r$/, "");
-    if (line.startsWith("diff --git ")) {
-      flush();
-      draft = newDraft();
-      const paths = gitHeaderPaths(line.slice("diff --git ".length));
-      if (paths) {
-        draft.oldPath = paths.oldPath;
-        draft.newPath = paths.newPath;
-      }
-      continue;
-    }
-    if (line.startsWith("--- ") && (lines[index + 1] ?? "").startsWith("+++ ")) {
-      if (!draft || draft.sawFileHeader) {
-        flush();
-        draft = newDraft();
-      }
-      const target = draft;
-      target.sawFileHeader = true;
-      const oldPath = headerPath(line.slice(4));
-      const newPath = headerPath((lines[index + 1] ?? "").replace(/\r$/, "").slice(4));
-      if (oldPath === null) target.isNew = true;
-      else target.oldPath = oldPath;
-      if (newPath === null) target.isDeleted = true;
-      else target.newPath = newPath;
-      index += 1;
-      continue;
-    }
-    if (!draft) continue;
-    const current = draft;
-    const hunk = HUNK_HEADER.exec(line);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      oldRemaining = hunk[2] === void 0 ? 1 : Number(hunk[2]);
-      newLine = Number(hunk[3]);
-      newRemaining = hunk[4] === void 0 ? 1 : Number(hunk[4]);
-      continue;
-    }
-    if (line.startsWith("new file mode")) current.isNew = true;
-    else if (line.startsWith("deleted file mode")) current.isDeleted = true;
-    else if (line.startsWith("rename from ")) {
-      current.isRename = true;
-      current.oldPath = unquotePath(line.slice("rename from ".length));
-    } else if (line.startsWith("rename to ")) {
-      current.isRename = true;
-      current.newPath = unquotePath(line.slice("rename to ".length));
-    } else if (line.startsWith("copy from ")) {
-      current.isNew = true;
-      current.oldPath = null;
-    } else if (line.startsWith("copy to ")) {
-      current.newPath = unquotePath(line.slice("copy to ".length));
-    } else if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
-      current.binary = true;
-    }
-  }
-  flush();
-  return files;
-}
-function fileAdded(path, content) {
-  const lines = content.length === 0 ? [] : content.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return {
-    path,
-    status: "added",
-    added: lines.map((text4, index) => ({ line: index + 1, text: text4.replace(/\r$/, "") })),
-    removed: []
-  };
-}
-function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-function categoryFor(paths) {
-  for (const definition of DEFAULT_TRIPWIRES) {
-    const matcher = compileGlob(definition.glob);
-    if (paths.some((path) => matcher.test(path))) return definition.category;
-  }
-  return "contract";
-}
-function withRenameNote(reason, change, matchedCurrent) {
-  if (matchedCurrent || !change.previousPath) return reason;
-  return `${reason} (moved from ${change.previousPath})`;
-}
-function matchTripwires(changes, options) {
-  const hits = [];
-  const seen = /* @__PURE__ */ new Set();
-  const ordered = [...changes].sort((left, right) => compareText(left.path, right.path));
-  for (const change of ordered) {
-    const candidates = change.previousPath ? [change.path, change.previousPath] : [change.path];
-    const add = (source, hit) => {
-      const key = `${change.path}\0${source}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      hits.push(hit);
-    };
-    if (options.defaults) {
-      for (const definition of DEFAULT_TRIPWIRES) {
-        const matcher = compileGlob(definition.glob);
-        if (!candidates.some((path) => matcher.test(path))) continue;
-        add("default", {
-          path: change.path,
-          category: definition.category,
-          reason: withRenameNote(definition.reason, change, matcher.test(change.path)),
-          severity: "warning"
-        });
-        break;
-      }
-    }
-    if (options.extra?.length && candidates.some((path) => matchesAny(path, options.extra))) {
-      add("extra", {
-        path: change.path,
-        category: categoryFor(candidates),
-        reason: withRenameNote("Protected by blueprint policy", change, matchesAny(change.path, options.extra)),
-        severity: "warning"
-      });
-    }
-    for (const rule of options.protectRules ?? []) {
-      if (!candidates.some((path) => matchesAny(path, rule.paths))) continue;
-      add(`rule:${rule.id}`, {
-        path: change.path,
-        category: categoryFor(candidates),
-        reason: withRenameNote(
-          rule.reason?.trim() || `Protected by blueprint rule ${rule.id}`,
-          change,
-          matchesAny(change.path, rule.paths)
-        ),
-        ruleId: rule.id,
-        severity: rule.severity ?? "warning"
-      });
-    }
-  }
-  return hits;
-}
-function isSnapshotFile(path) {
-  return matchesAny(path, SNAPSHOT_PATTERNS);
-}
-function isTestFile(path) {
-  return matchesAny(path, TEST_PATTERNS) && !isSnapshotFile(path);
-}
-function isCiFile(path) {
-  return matchesAny(path, CI_PATTERNS);
-}
-function isShellLike(path) {
-  return SHELL_EXTENSIONS.has(extname(path)) || matchesAny(path, HOOK_PATTERNS);
-}
-function isVerificationFile(path) {
-  if (isTestFile(path) || isCiFile(path) || matchesAny(path, RUNNER_CONFIG_PATTERNS)) return true;
-  if (matchesAny(path, HOOK_PATTERNS)) return true;
-  return SHELL_EXTENSIONS.has(extname(path)) && /(test|spec|ci|lint|check|verify)/i.test(basename(path));
-}
-function codeOnly(path, text4) {
-  if (!CODE_EXTENSIONS.has(extname(path).toLowerCase())) return text4;
-  return text4.replace(STRING_LITERAL, (match) => match.length <= 2 ? match : `${match[0]}${" ".repeat(match.length - 2)}${match[match.length - 1]}`);
-}
-function excerpt(text4, max = 80) {
-  const trimmed = text4.trim().replace(/\s+/g, " ");
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
-}
-function ciCommand(text4) {
-  let body = text4.trim().replace(/^-\s+/, "");
-  if (!body || body.startsWith("#")) return null;
-  const key = /^([\w.-]+):(?:\s+(.*))?$/.exec(body);
-  if (key) {
-    if (!COMMAND_KEYS.has(key[1])) return null;
-    body = (key[2] ?? "").trim();
-  }
-  body = body.replace(/^["']|["']$/g, "").trim();
-  return body && !/^[|>][+-]?$/.test(body) ? body : null;
-}
-function commandClasses(command) {
-  return COMMAND_CLASSES.filter((entry) => entry.pattern.test(command)).map((entry) => entry.kind);
-}
-function thresholdOf(text4) {
-  const match = THRESHOLD_PATTERN.exec(text4);
-  if (!match) return null;
-  return { key: match[1].toLowerCase().replace(/-/g, "_"), value: Number(match[2]) };
-}
-function scriptOf(text4) {
-  const match = SCRIPT_PATTERN.exec(text4);
-  return match ? { name: match[1], command: match[2] } : null;
-}
-function detectDeletedTest(change) {
-  if (change.status === "deleted" && isTestFile(change.path)) {
-    return [{ path: change.path, signal: "test-file-deleted", severity: "warning", message: "Test file deleted" }];
-  }
-  const leavesRunner = (from, to) => isTestFile(from) && !isTestFile(to) || matchesAny(from, NAMED_TEST_PATTERNS) && !matchesAny(to, NAMED_TEST_PATTERNS);
-  if (change.status === "renamed" && change.previousPath && leavesRunner(change.previousPath, change.path)) {
-    return [
-      {
-        path: change.path,
-        signal: "test-file-deleted",
-        severity: "warning",
-        message: `Test file ${change.previousPath} was renamed to a path test runners do not pick up`
-      }
-    ];
-  }
-  return [];
-}
-function detectTestLineSignals(change) {
-  const signals = [];
-  for (const { line, text: text4 } of change.added) {
-    const code = codeOnly(change.path, text4);
-    if (SKIP_PATTERNS.some((pattern2) => pattern2.test(code))) {
-      signals.push({
-        path: change.path,
-        line,
-        signal: "test-skipped",
-        severity: "warning",
-        message: `Test skipped or disabled: ${excerpt(text4)}`
-      });
-    }
-    if (FOCUS_PATTERNS.some((pattern2) => pattern2.test(code))) {
-      signals.push({
-        path: change.path,
-        line,
-        signal: "test-focused",
-        severity: "warning",
-        message: `Focused test silently skips every other test: ${excerpt(text4)}`
-      });
-    }
-    if (TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(code))) {
-      signals.push({
-        path: change.path,
-        line,
-        signal: "assertion-trivialized",
-        severity: "warning",
-        message: `Assertion cannot fail: ${excerpt(text4)}`
-      });
-    }
-  }
-  return signals;
-}
-function isAssertion(text4) {
-  if (COMMENTED_LINE.test(text4)) return false;
-  return ASSERTION_PATTERN.test(text4) && !TRIVIAL_PATTERNS.some((pattern2) => pattern2.test(text4));
-}
-function detectRemovedAssertions(change) {
-  if (change.status !== "modified" && change.status !== "renamed") return [];
-  const assertion = (entry) => isAssertion(codeOnly(change.path, entry.text));
-  const removed = change.removed.filter(assertion);
-  if (removed.length === 0) return [];
-  const added = change.added.filter(assertion).length;
-  const otherAdded = change.added.some((entry) => entry.text.trim() && !assertion(entry));
-  const otherRemoved = change.removed.some((entry) => entry.text.trim() && !assertion(entry));
-  const strippedOnly = added === 0 && (otherAdded || !otherRemoved);
-  if (removed.length - added < 3 && !strippedOnly) return [];
-  const noun = removed.length === 1 ? "assertion" : "assertions";
-  return [
-    {
-      path: change.path,
-      line: removed[0].line,
-      signal: "assertions-removed",
-      severity: "warning",
-      message: added === 0 ? `${removed.length} ${noun} removed and none added` : `${removed.length} ${noun} removed, only ${added} added`
-    }
-  ];
-}
-function shellExitFakesSuccess(text4, hook) {
-  if (!SHELL_EXIT_PATTERN.test(text4) || COMMENTED_LINE.test(text4)) return false;
-  if (/\|\|\s*exit\s+0\b/.test(text4)) return true;
-  if (hook && /^\s*exit\s+0\s*(?:#.*)?$/.test(text4)) return true;
-  const command = text4.replace(SHELL_EXIT_PATTERN, " ");
-  if (/\bif\b|\bthen\b|\bfi\b|\belse\b/.test(text4)) return false;
-  return commandClasses(command).some((kind) => kind === "test" || kind === "lint" || kind === "typecheck" || kind === "check");
-}
-function detectExitZero(change) {
-  const isPackageJson = basename(change.path) === "package.json";
-  if (!isPackageJson && !isVerificationFile(change.path)) return [];
-  const shell = isCiFile(change.path) || isShellLike(change.path) || matchesAny(change.path, HOOK_PATTERNS);
-  const signals = [];
-  for (const { line, text: text4 } of change.added) {
-    if (isPackageJson) {
-      if (!scriptOf(text4) || !SHELL_EXIT_PATTERN.test(text4)) continue;
-    } else if (!EXIT_PATTERNS.some((pattern2) => pattern2.test(codeOnly(change.path, text4))) && !(shell && shellExitFakesSuccess(text4, matchesAny(change.path, HOOK_PATTERNS)))) {
-      continue;
-    }
-    signals.push({
-      path: change.path,
-      line,
-      signal: "exit-zero",
-      severity: "error",
-      message: `Forced success exit can fake a passing run: ${excerpt(text4)}`
-    });
-  }
-  return signals;
-}
-function detectSuppressions(change) {
-  if (DOC_EXTENSIONS.has(extname(change.path).toLowerCase())) return [];
-  const found = [];
-  for (const { line, text: text4 } of change.added) {
-    const match = SUPPRESSION_PATTERNS.find((entry) => entry.pattern.test(codeOnly(change.path, text4)));
-    if (match) found.push({ line, label: match.label, text: text4 });
-  }
-  if (found.length === 0) return [];
-  if (found.length >= 3) {
-    return [
-      {
-        path: change.path,
-        line: found[0].line,
-        signal: "suppression-added",
-        severity: "warning",
-        message: `${found.length} check suppressions added (lines ${found.map((entry) => entry.line).join(", ")})`
-      }
-    ];
-  }
-  return found.map((entry) => ({
-    path: change.path,
-    line: entry.line,
-    signal: "suppression-added",
-    severity: "info",
-    message: `Check suppression added (${entry.label}): ${excerpt(entry.text)}`
-  }));
-}
-function detectTestExclusion(change) {
-  const signals = [];
-  for (const { line, text: text4 } of change.added) {
-    if (COMMENTED_LINE.test(text4) || !TEST_EXCLUSION_PATTERNS.some((pattern2) => pattern2.test(text4))) continue;
-    signals.push({
-      path: change.path,
-      line,
-      signal: "tests-excluded",
-      severity: "warning",
-      message: `Test runner now excludes tests: ${excerpt(text4)}`
-    });
-  }
-  return signals;
-}
-function detectCiWeakening(change) {
-  const signals = [];
-  for (const { line, text: text4 } of change.added) {
-    if (text4.trim().startsWith("#")) continue;
-    const match = CI_WEAKENING_PATTERNS.find((entry) => entry.pattern.test(text4));
-    if (match) {
-      signals.push({
-        path: change.path,
-        line,
-        signal: "ci-weakened",
-        severity: "warning",
-        message: `CI weakened: ${match.label}`
-      });
-    }
-  }
-  const addsPrTrigger = change.added.some((entry) => PR_TRIGGER.test(entry.text));
-  for (const { line, text: text4 } of change.removed) {
-    if (!PR_TRIGGER.test(text4) || addsPrTrigger) continue;
-    signals.push({
-      path: change.path,
-      line,
-      signal: "ci-weakened",
-      severity: "warning",
-      message: "CI no longer runs on pull requests (pull_request trigger removed)"
-    });
-  }
-  const lost = [];
-  const addedClasses = /* @__PURE__ */ new Set();
-  for (const { text: text4 } of change.added) {
-    const command = ciCommand(text4);
-    if (command) for (const kind of commandClasses(command)) addedClasses.add(kind);
-  }
-  for (const { line, text: text4 } of change.removed) {
-    const command = ciCommand(text4);
-    if (!command) continue;
-    const classes = commandClasses(command);
-    if (classes.length === 0 || classes.some((kind) => addedClasses.has(kind))) continue;
-    lost.push({ line, command });
-  }
-  if (change.status === "deleted" && lost.length > 0) {
-    signals.push({
-      path: change.path,
-      signal: "ci-weakened",
-      severity: "warning",
-      message: `CI file deleted; it ran ${lost.map((entry) => `"${excerpt(entry.command, 40)}"`).slice(0, 3).join(", ")}${lost.length > 3 ? ` and ${lost.length - 3} more` : ""}`
-    });
-    return signals;
-  }
-  for (const entry of lost) {
-    signals.push({
-      path: change.path,
-      line: entry.line,
-      signal: "ci-weakened",
-      severity: "warning",
-      message: `CI no longer runs "${excerpt(entry.command, 60)}"`
-    });
-  }
-  return signals;
-}
-function detectCoverageLowered(change) {
-  const addedByKey = /* @__PURE__ */ new Map();
-  for (const { line, text: text4 } of change.added) {
-    const threshold = thresholdOf(text4);
-    if (!threshold) continue;
-    const list2 = addedByKey.get(threshold.key) ?? [];
-    list2.push({ line, value: threshold.value });
-    addedByKey.set(threshold.key, list2);
-  }
-  const signals = [];
-  const cursor = /* @__PURE__ */ new Map();
-  for (const { text: text4 } of change.removed) {
-    const threshold = thresholdOf(text4);
-    if (!threshold) continue;
-    const position = cursor.get(threshold.key) ?? 0;
-    cursor.set(threshold.key, position + 1);
-    const counterpart = addedByKey.get(threshold.key)?.[position];
-    if (!counterpart) {
-      if (!addedByKey.has(threshold.key) && threshold.value > 0) {
-        signals.push({
-          path: change.path,
-          line: change.removed.find((entry) => thresholdOf(entry.text)?.key === threshold.key)?.line,
-          signal: "coverage-threshold-removed",
-          severity: "warning",
-          message: `Coverage threshold "${threshold.key}" (${threshold.value}) removed`
-        });
-      }
-      continue;
-    }
-    if (counterpart.value >= threshold.value) continue;
-    signals.push({
-      path: change.path,
-      line: counterpart.line,
-      signal: "coverage-threshold-lowered",
-      severity: "warning",
-      message: `Coverage threshold "${threshold.key}" lowered from ${threshold.value} to ${counterpart.value}`
-    });
-  }
-  return signals;
-}
-function detectScriptChanges(change) {
-  const scripts = /* @__PURE__ */ new Map();
-  for (const entry of change.removed) {
-    const script = scriptOf(entry.text);
-    if (!script || scripts.has(script.name)) continue;
-    scripts.set(script.name, { removed: entry, before: script.command });
-  }
-  for (const entry of change.added) {
-    const script = scriptOf(entry.text);
-    if (!script) continue;
-    const existing = scripts.get(script.name) ?? {};
-    if (existing.added) continue;
-    scripts.set(script.name, { ...existing, added: entry, after: script.command });
-  }
-  const signals = [];
-  for (const [name, entry] of scripts) {
-    if (entry.before !== void 0 && entry.before === entry.after) continue;
-    if (entry.before === void 0) continue;
-    let message;
-    if (entry.before !== void 0 && entry.after !== void 0) {
-      message = `Script "${name}" changed from ${excerpt(entry.before, 60)} to ${excerpt(entry.after, 60)}`;
-    } else if (entry.after !== void 0) {
-      message = `Script "${name}" added: ${excerpt(entry.after, 60)}`;
-    } else {
-      message = `Script "${name}" removed (was ${excerpt(entry.before ?? "", 60)})`;
-    }
-    signals.push({
-      path: change.path,
-      line: entry.added?.line ?? entry.removed?.line,
-      signal: "test-script-changed",
-      severity: "warning",
-      message
-    });
-  }
-  return signals;
-}
-function detectSnapshotChurn(changes) {
-  const snapshots = changes.filter((change) => (change.status === "modified" || change.status === "deleted") && isSnapshotFile(change.path)).map((change) => change.path).sort(compareText);
-  if (snapshots.length < 5) return [];
-  return [
-    {
-      path: snapshots[0],
-      signal: "snapshots-mass-updated",
-      severity: "info",
-      message: `${snapshots.length} snapshot files modified or deleted; expected output may have been regenerated to match new behavior`
-    }
-  ];
-}
-function detectTestSpecialCasing(change) {
-  if (!CODE_EXTENSIONS.has(extname(change.path).toLowerCase()) || isVerificationFile(change.path)) return [];
-  if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) return [];
-  const signals = [];
-  for (const { line, text: text4 } of change.added) {
-    const masked = codeOnly(change.path, text4);
-    const inCode = TEST_DETECTION_PATTERNS.some((pattern2) => {
-      const match = pattern2.exec(text4);
-      return match !== null && masked[match.index] === text4[match.index] && masked[match.index] !== " ";
-    });
-    if (!inCode) continue;
-    signals.push({
-      path: change.path,
-      line,
-      signal: "test-special-casing",
-      severity: "warning",
-      message: `Production code now behaves differently under tests: ${excerpt(text4)}`
-    });
-  }
-  return signals;
-}
-function detectVerificationWeakening(changes) {
-  const signals = [];
-  for (const change of changes) {
-    signals.push(...detectDeletedTest(change));
-    if (change.binary) continue;
-    const testFile = isTestFile(change.path) || basename(change.path) === "conftest.py";
-    if (testFile) {
-      signals.push(...detectTestLineSignals(change));
-      signals.push(...detectRemovedAssertions(change));
-    } else {
-      signals.push(...detectTestSpecialCasing(change));
-    }
-    signals.push(...detectExitZero(change));
-    signals.push(...detectSuppressions(change));
-    if (isCiFile(change.path)) signals.push(...detectCiWeakening(change));
-    if (matchesAny(change.path, RUNNER_CONFIG_PATTERNS)) signals.push(...detectTestExclusion(change));
-    if (matchesAny(change.path, COVERAGE_CONFIG_PATTERNS)) signals.push(...detectCoverageLowered(change));
-    if (basename(change.path) === "package.json") signals.push(...detectScriptChanges(change));
-  }
-  signals.push(...detectSnapshotChurn(changes));
-  return signals.sort(
-    (left, right) => compareText(left.path, right.path) || (left.line ?? 0) - (right.line ?? 0) || compareText(left.signal, right.signal) || compareText(left.message, right.message)
-  );
-}
-var SIMPLE_ESCAPES, PREFIX, HUNK_HEADER, SNAPSHOT_PATTERNS, CI_PATTERNS, HOOK_PATTERNS, RUNNER_CONFIG_PATTERNS, COVERAGE_CONFIG_PATTERNS, SHELL_EXTENSIONS, DOC_EXTENSIONS, CODE_EXTENSIONS, STRING_LITERAL, SKIP_PATTERNS, FOCUS_PATTERNS, ASSERTION_PATTERN, LITERAL, TRIVIAL_PATTERNS, EXIT_PATTERNS, SHELL_EXIT_PATTERN, SUPPRESSION_PATTERNS, CI_WEAKENING_PATTERNS, COMMAND_CLASSES, COMMAND_KEYS, THRESHOLD_PATTERN, SCRIPT_PATTERN, NAMED_TEST_PATTERNS, COMMENTED_LINE, PR_TRIGGER, TEST_EXCLUSION_PATTERNS, TEST_DETECTION_PATTERNS;
-var init_diff = __esm({
-  "src/blueprint/diff.ts"() {
-    "use strict";
-    init_constants();
-    init_glob();
-    init_paths();
-    SIMPLE_ESCAPES = {
-      a: 7,
-      b: 8,
-      t: 9,
-      n: 10,
-      v: 11,
-      f: 12,
-      r: 13,
-      '"': 34,
-      "\\": 92
-    };
-    PREFIX = /^[abciow]\//;
-    HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-    SNAPSHOT_PATTERNS = ["**/__snapshots__/**", "*.snap"];
-    CI_PATTERNS = [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "azure-pipelines.yml", "Jenkinsfile"];
-    HOOK_PATTERNS = [".husky/**", ".git-hooks/**", ".githooks/**"];
-    RUNNER_CONFIG_PATTERNS = [
-      "{jest,vitest,playwright,cypress,karma,wdio}.config.*",
-      "{jest,vitest}.{setup,workspace}.*",
-      ".mocharc*",
-      "conftest.py",
-      "pytest.ini",
-      "tox.ini",
-      "noxfile.py"
-    ];
-    COVERAGE_CONFIG_PATTERNS = [
-      "{jest,vitest}.config.*",
-      "package.json",
-      "pyproject.toml",
-      "setup.cfg",
-      "tox.ini",
-      "pytest.ini",
-      ".coveragerc",
-      "{codecov,.codecov}.{yml,yaml}",
-      ".nycrc*",
-      ".c8rc*"
-    ];
-    SHELL_EXTENSIONS = /* @__PURE__ */ new Set([".sh", ".bash", ".zsh"]);
-    DOC_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
-    CODE_EXTENSIONS = /* @__PURE__ */ new Set([
-      ".ts",
-      ".tsx",
-      ".mts",
-      ".cts",
-      ".js",
-      ".jsx",
-      ".mjs",
-      ".cjs",
-      ".py",
-      ".go",
-      ".java",
-      ".kt",
-      ".kts",
-      ".rs",
-      ".rb",
-      ".php",
-      ".cs",
-      ".swift",
-      ".c",
-      ".cc",
-      ".cpp",
-      ".h",
-      ".hpp",
-      ".scala"
-    ]);
-    STRING_LITERAL = /(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g;
-    SKIP_PATTERNS = [
-      /\.skip\s*\(/,
-      /\b(?:it|test|describe|context|suite)\.skip\b/,
-      /\.skipIf\s*\(/,
-      /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
-      /@pytest\.mark\.(?:skip|skipif|xfail)\b/,
-      /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/,
-      /\bt\.Skip(?:f|Now)?\s*\(/,
-      /@Disabled\b/,
-      /@Ignore\b/,
-      /#\[ignore\b/
-    ];
-    FOCUS_PATTERNS = [/\.only\s*\(/, /\b(?:fit|fdescribe|fcontext)\s*\(/];
-    ASSERTION_PATTERN = /\bexpect\s*\(|\bassert\w*|\bshould\.|\.should\b|\.to(?:Be|Equal|StrictEqual|Have|Match|Throw|Contain)\w*\s*\(|\brequire\.[A-Z]\w*\s*\(|\bt\.(?:Error|Fatal)f?\s*\(/;
-    LITERAL = String.raw`(?:true|false|null|undefined|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;
-    TRIVIAL_PATTERNS = [
-      new RegExp(String.raw`\bexpect\s*\(\s*${LITERAL}\s*\)\s*\.(?:not\.)?to\w+\s*\(`),
-      /^\s*assert\s+(?:True|1|not\s+False)\s*(?:,|#|$)/,
-      /^\s*assert\s+(\w+|"[^"]*"|'[^']*')\s*==\s*\1\s*(?:,|#|$)/,
-      /\bassert(?:True|_true|\.ok|\.isTrue)?\s*\(\s*(?:true|True|1)\s*[,)]/,
-      /\bassert(?:Equals?|_equal|\.equal|\.strictEqual|\.deepEqual|_eq!)\s*\(\s*(\w+|"[^"]*"|'[^']*')\s*,\s*\1\s*[,)]/,
-      /\bassert\.(?:True|Equal)\s*\(\s*t\s*,\s*true\s*[,)]/
-    ];
-    EXIT_PATTERNS = [
-      /\bprocess\.exit\s*\(\s*0\s*\)/,
-      /\bsys\.exit\s*\(\s*0\s*\)/,
-      /\bos\._?exit\s*\(\s*0\s*\)/,
-      /\bos\.Exit\s*\(\s*0\s*\)/
-    ];
-    SHELL_EXIT_PATTERN = /(?:^|[\s;&|("'`])exit\s+0\b/;
-    SUPPRESSION_PATTERNS = [
-      { pattern: /@ts-(?:ignore|nocheck|expect-error)\b/, label: "TypeScript check suppressed" },
-      { pattern: /\beslint-disable\b/, label: "ESLint rule disabled" },
-      { pattern: /\bbiome-ignore\b/, label: "Biome rule ignored" },
-      { pattern: /#\s*type:\s*ignore/, label: "type check ignored" },
-      { pattern: /#\s*noqa\b/, label: "lint check suppressed (noqa)" },
-      { pattern: /#\s*pylint:\s*disable/, label: "pylint check disabled" },
-      { pattern: /#\s*pragma:\s*no cover/, label: "excluded from coverage" },
-      { pattern: /\/\/\s*nolint\b/, label: "lint check suppressed (nolint)" },
-      { pattern: /#!?\[allow\(/, label: "Rust lint allowed" },
-      { pattern: /@SuppressWarnings\b/, label: "warnings suppressed" },
-      { pattern: /\bistanbul ignore\b/, label: "excluded from coverage" },
-      { pattern: /\b(?:c8|v8) ignore\b/, label: "excluded from coverage" }
-    ];
-    CI_WEAKENING_PATTERNS = [
-      { pattern: /\bcontinue-on-error:\s*true\b/, label: "step failures are ignored (continue-on-error: true)" },
-      { pattern: /\ballow_failure:\s*true\b/, label: "job failures are allowed (allow_failure: true)" },
-      { pattern: /\|\|\s*(?:true\b|:(?:\s|$))/, label: "command failure is swallowed (|| true)" },
-      { pattern: /--no-verify\b/, label: "hooks are bypassed (--no-verify)" },
-      { pattern: /^\s*-?\s*if:\s*(?:false|\$\{\{\s*false\s*\}\})\s*$/, label: "step or job is disabled (if: false)" },
-      { pattern: /--passWithNoTests\b/, label: "an empty test run passes (--passWithNoTests)" },
-      { pattern: /--bail[=\s]0\b/, label: "test bail-out is disabled (--bail=0)" }
-    ];
-    COMMAND_CLASSES = [
-      { kind: "test", pattern: /\b(?:tests?|vitest|jest|pytest|mocha|playwright|cypress|unittest|rspec|phpunit)\b/i },
-      { kind: "lint", pattern: /\b(?:lint|eslint|ruff|clippy|vet|flake8|pylint|golangci-lint|biome|rubocop)\b/i },
-      { kind: "typecheck", pattern: /\b(?:typecheck|type-check|tsc|mypy|pyright)\b/i },
-      { kind: "build", pattern: /\bbuild\b/i },
-      { kind: "check", pattern: /\bcheck\b/i }
-    ];
-    COMMAND_KEYS = /* @__PURE__ */ new Set(["run", "script", "command", "cmd", "sh", "bash"]);
-    THRESHOLD_PATTERN = /(?:^|[^\w-])["']?(coverageThreshold|thresholds?|statements|branches|functions|lines|fail[_-]under|min[_-]coverage|minimum|target)["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/i;
-    SCRIPT_PATTERN = /^\s*"(test|test:[^"]*|lint|typecheck|check|ci)"\s*:\s*(.*?),?\s*$/;
-    NAMED_TEST_PATTERNS = [
-      "**/*.test.*",
-      "**/*.spec.*",
-      "**/*_test.go",
-      "**/test_*.py",
-      "**/*_test.py",
-      "**/*Test.java",
-      "**/*Tests.java",
-      "**/*Test.kt",
-      "**/*Tests.cs",
-      "**/*_spec.rb"
-    ];
-    COMMENTED_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
-    PR_TRIGGER = /^\s*(?:-\s*)?(?:pull_request|merge_request|merge_group)\s*:?\s*(?:#.*)?$|^\s*on\s*:\s*\[?[^\]#]*\bpull_request\b/;
-    TEST_EXCLUSION_PATTERNS = [
-      /\b(?:exclude|testPathIgnorePatterns|modulePathIgnorePatterns|testIgnore|ignorePatterns)\s*[:=]/,
-      /--(?:ignore|deselect|exclude)\b/,
-      /\bnorecursedirs\b|\baddopts\b[^\n]*(?:--ignore|-k\s+["']?not\b)/
-    ];
-    TEST_DETECTION_PATTERNS = [
-      /\bprocess\.env\.(?:VITEST|VITEST_WORKER_ID|JEST_WORKER_ID|MOCHA_WORKER_ID|PYTEST_CURRENT_TEST)\b/,
-      /\bprocess\.env(?:\.NODE_ENV|\[\s*["'`]NODE_ENV["'`]\s*\])\s*[!=]==?\s*["'`]test["'`]/,
-      /["'`]test["'`]\s*[!=]==?\s*process\.env(?:\.NODE_ENV|\[\s*["'`]NODE_ENV["'`]\s*\])/,
-      /["']pytest["']\s+in\s+sys\.modules/,
-      /\b(?:os\.environ(?:\.get)?|getenv)\s*[([]\s*["']PYTEST_CURRENT_TEST["']/,
-      /\btesting\.Testing\s*\(\s*\)/,
-      /\bRails\.env\.test\?/,
-      // In-source testing blocks are legitimate; returning early from one is not.
-      /\bimport\.meta\.vitest\b[^\n]*\breturn\b/,
-      /\bimport\.meta\.env\.(?:MODE|NODE_ENV)\s*[!=]==?\s*["'`]test["'`]/
-    ];
-  }
-});
-
-// src/cli/git.ts
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-function runGit(cwd, args, options = {}) {
-  return new Promise((resolvePromise, reject) => {
-    const child2 = spawn("git", ["-c", "core.quotepath=false", ...args], {
-      cwd,
-      windowsHide: true,
-      env: { ...process.env, ...GIT_ENV },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    const out = [];
-    const err = [];
-    child2.stdout.on("data", (chunk) => out.push(chunk));
-    child2.stderr.on("data", (chunk) => err.push(chunk));
-    child2.stdin.on("error", () => void 0);
-    child2.on("error", (error62) => {
-      if (error62.code === "ENOENT") reject(new GitError("git was not found on PATH", "Install git, or run rassam where git is available."));
-      else reject(new GitError(`Could not run git: ${error62.message}`));
-    });
-    child2.on("close", (code) => {
-      const result = { code: code ?? 1, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString("utf8").trim() };
-      if (result.code !== 0 && !options.allowFailure) {
-        reject(new GitError(`git ${args[0]} failed (exit ${result.code})${result.stderr ? `: ${result.stderr}` : ""}`));
-        return;
-      }
-      resolvePromise(result);
-    });
-    child2.stdin.end(options.input ?? "");
-  });
-}
-async function gitText(cwd, args) {
-  const result = await runGit(cwd, args, { allowFailure: true });
-  return result.code === 0 ? result.stdout.toString("utf8").trim() : null;
-}
-function assertSafeRef(ref) {
-  if (!ref || ref.startsWith("-") || /[\0\n\r]/.test(ref)) throw new GitError(`Invalid git ref "${ref}"`);
-}
-function splitNul(buffer) {
-  return buffer.toString("utf8").split("\0").filter((entry) => entry.length > 0);
-}
-async function repoRoot(cwd) {
-  const top = await gitText(cwd, ["rev-parse", "--show-toplevel"]);
-  return top ? resolve(top) : null;
-}
-async function headSha(root) {
-  return gitText(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
-}
-async function currentBranch(root) {
-  return gitText(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-}
-async function resolveRef2(root, ref) {
-  assertSafeRef(ref);
-  return gitText(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
-}
-async function isShallow(root) {
-  return await gitText(root, ["rev-parse", "--is-shallow-repository"]) === "true";
-}
-async function userName(root) {
-  return await gitText(root, ["config", "user.name"]) || null;
-}
-async function mergeBase(root, base, head = "HEAD") {
-  assertSafeRef(base);
-  assertSafeRef(head);
-  if (!await resolveRef2(root, base)) {
-    throw new GitError(`Base ref "${base}" does not exist in this repository`, `Fetch it first (git fetch origin ${base.replace(/^origin\//, "")}), or pass an existing ref with --base.`);
-  }
-  if (!await resolveRef2(root, head)) throw new GitError(`Ref "${head}" does not exist (does the repository have any commits?)`);
-  const result = await runGit(root, ["merge-base", base, head], { allowFailure: true });
-  const sha = result.stdout.toString("utf8").trim();
-  if (result.code === 0 && sha) return sha;
-  if (await isShallow(root)) {
-    throw new GitError(
-      `No merge-base between "${base}" and "${head}": this is a shallow clone`,
-      "Fetch full history: git fetch --unshallow (in GitHub Actions: actions/checkout with fetch-depth: 0)."
-    );
-  }
-  throw new GitError(`No merge-base between "${base}" and "${head}": the histories are unrelated`);
-}
-async function untrackedFiles(root) {
-  const result = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  return splitNul(result.stdout);
-}
-async function listFiles(root) {
-  const result = await runGit(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
-  return [...new Set(splitNul(result.stdout))];
-}
-async function untrackedChange(root, path) {
-  const read = await readTextFile(resolve(root, path), !isEnvFile(path));
-  if (read.missing) return null;
-  if (read.content === null) return { path, status: "added", added: [], removed: [], binary: !isEnvFile(path) };
-  return fileAdded(path, read.content);
-}
-async function diffAgainst(root, base) {
-  assertSafeRef(base);
-  const diff = await runGit(root, ["diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U0", base, "--"]);
-  const changes = parseUnifiedDiff(diff.stdout.toString("utf8"));
-  const seen = new Set(changes.map((change) => change.path));
-  const untracked = (await untrackedFiles(root)).filter((path) => !seen.has(path));
-  const added = await mapLimit(untracked, 32, (path) => untrackedChange(root, path));
-  for (const change of added) if (change) changes.push(change);
-  return changes;
-}
-function parseCatFileBatch(output2, count) {
-  const entries2 = [];
-  let offset = 0;
-  while (entries2.length < count && offset < output2.length) {
-    const lineEnd = output2.indexOf(10, offset);
-    if (lineEnd < 0) break;
-    const header = output2.subarray(offset, lineEnd).toString("utf8");
-    offset = lineEnd + 1;
-    const match = /^[0-9a-f]{40,64} (\w+) (\d+)$/.exec(header);
-    if (!match) {
-      entries2.push({ type: "missing", body: null });
-      continue;
-    }
-    const size = Number(match[2]);
-    entries2.push({ type: match[1], body: output2.subarray(offset, offset + size) });
-    offset += size + 1;
-  }
-  while (entries2.length < count) entries2.push({ type: "missing", body: null });
-  return entries2;
-}
-async function readFilesAtRef(root, ref, paths) {
-  assertSafeRef(ref);
-  const wanted = [...new Set(paths)].filter((path) => path && !/[\n\r\0]/.test(path) && !isEnvFile(path));
-  const contents = /* @__PURE__ */ new Map();
-  if (wanted.length === 0) return contents;
-  const input2 = wanted.map((path) => `${ref}:${path}
-`).join("");
-  const result = await runGit(root, ["cat-file", "--batch"], { input: input2 });
-  const entries2 = parseCatFileBatch(result.stdout, wanted.length);
-  entries2.forEach((entry, index) => {
-    if (entry.type !== "blob" || !entry.body) return;
-    const text4 = decodeText(entry.body);
-    if (text4 !== null) contents.set(wanted[index], text4);
-  });
-  return contents;
-}
-async function readFileAtRef(root, ref, path) {
-  return (await readFilesAtRef(root, ref, [path])).get(path) ?? null;
-}
-async function commitsBetween(root, base, head = "HEAD") {
-  assertSafeRef(base);
-  assertSafeRef(head);
-  const result = await runGit(root, ["log", "--format=%H%x00%an%x00%ae%x00%B%x1e", `${base}..${head}`]);
-  const commits = [];
-  for (const record2 of result.stdout.toString("utf8").split("")) {
-    const [sha, authorName, authorEmail, message] = record2.replace(/^\s+/, "").split("\0");
-    if (!sha || message === void 0) continue;
-    commits.push({ sha, authorName: authorName ?? "", authorEmail: authorEmail ?? "", message: message.trimEnd() });
-  }
-  return commits;
-}
-async function defaultBaseRef(root) {
-  const upstreamHead = await gitText(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
-  const candidates = [upstreamHead, "origin/main", "origin/master", "main", "master"];
-  for (const candidate of candidates) {
-    if (candidate && await resolveRef2(root, candidate)) return candidate;
-  }
-  return null;
-}
-async function originUrl(root) {
-  const url2 = await gitText(root, ["config", "--get", "remote.origin.url"]);
-  return url2 ? url2.replace(/^(\w+:\/\/)[^@/]+@/, "$1") : null;
-}
-var GitError, GIT_ENV;
-var init_git = __esm({
-  "src/cli/git.ts"() {
-    "use strict";
-    init_diff();
-    init_io();
-    init_util();
-    GitError = class extends CliError {
-      constructor(message, hint) {
-        super(message, { hint });
-        this.name = "GitError";
-      }
-    };
-    GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
-  }
-});
-
-// src/cli/fs-source.ts
-import { readdir, readFile } from "node:fs/promises";
-import { join as join2 } from "node:path";
-function baseName(path) {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-function isManifestPath(path) {
-  const base = baseName(path);
-  return MANIFEST_NAMES.has(base) || /^tsconfig(\..+)?\.json$/.test(base);
-}
-function wantsContent(path) {
-  if (isEnvFile(path)) return false;
-  return languageOf(path) !== null || isAgentConfigPath(path) || isManifestPath(path);
-}
-async function walk(root, directory, found) {
-  let entries2;
-  try {
-    entries2 = await readdir(join2(root, directory), { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries2) {
-    const path = directory ? `${directory}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      if (entry.name === ".git" || matchesAny(`${path}/x`, DEFAULT_IGNORE)) continue;
-      await walk(root, path, found);
-    } else if (entry.isFile()) {
-      found.push(path);
-    }
-  }
-}
-async function listWorkingTree(root) {
-  const top = await repoRoot(root);
-  if (top) return listFiles(root);
-  const found = [];
-  await walk(root, "", found);
-  return found;
-}
-async function readBlueprintText(root) {
-  try {
-    return await readFile(join2(root, BLUEPRINT_PATH), "utf8");
-  } catch {
-    return null;
-  }
-}
-async function loadWorkingTree(root, options = {}) {
-  const extra = options.extraIgnore?.length ? [...options.extraIgnore] : void 0;
-  const paths = (await listWorkingTree(root)).filter((path) => !isIgnoredPath(path, extra)).sort();
-  const loaded = await mapLimit(paths, READ_CONCURRENCY, async (path) => {
-    const read = await readTextFile(join2(root, path), wantsContent(path));
-    if (read.missing) return null;
-    return { path, content: read.content, size: read.size };
-  });
-  const files = loaded.filter((file2) => file2 !== null);
-  return { files, blueprintText: await readBlueprintText(root) };
-}
-var READ_CONCURRENCY, MANIFEST_NAMES;
-var init_fs_source = __esm({
-  "src/cli/fs-source.ts"() {
-    "use strict";
-    init_constants();
-    init_glob();
-    init_imports();
-    init_reach();
-    init_schema();
-    init_git();
-    init_util();
-    READ_CONCURRENCY = 32;
-    MANIFEST_NAMES = /* @__PURE__ */ new Set(["package.json", "jsconfig.json", "go.mod", "Cargo.toml", "pyproject.toml", "setup.py", "setup.cfg"]);
-  }
-});
-
-// src/cli/context.ts
-import { resolve as resolve2 } from "node:path";
-async function resolveRoot(io, rootFlag) {
-  const start = resolve2(io.cwd, rootFlag ?? ".");
-  const top = await repoRoot(start).catch(() => null);
-  if (rootFlag) return { root: start, isGit: top !== null };
-  return { root: top ?? start, isGit: top !== null };
-}
-async function loadContext(root, isGit) {
-  const tree = await loadWorkingTree(root);
-  const base = { root, isGit, files: tree.files, blueprintText: tree.blueprintText };
-  if (tree.blueprintText === null) return { ...base, blueprint: null, blueprintState: "missing", blueprintIssues: [] };
-  const parsed = parseBlueprintText(tree.blueprintText);
-  if (!parsed.ok) return { ...base, blueprint: null, blueprintState: "invalid", blueprintIssues: parsed.issues };
-  return { ...base, blueprint: parsed.blueprint, blueprintState: "ok", blueprintIssues: [] };
-}
-async function loadContextFor(io, rootFlag) {
-  const { root, isGit } = await resolveRoot(io, rootFlag);
-  return loadContext(root, isGit);
-}
-function formatIssues(issues, limit = 20) {
-  const lines = issues.slice(0, limit).map((issue2) => `  ${issue2.path}: ${issue2.message}`);
-  if (issues.length > limit) lines.push(`  … and ${issues.length - limit} more`);
-  return lines.join("\n");
-}
-function assertBlueprintValid(context) {
-  if (context.blueprintState !== "invalid") return;
-  throw new CliError(`${BLUEPRINT_PATH} is invalid:
-${formatIssues(context.blueprintIssues)}`, {
-    hint: "Fix the file (rassam schema prints the JSON Schema), then run the command again."
-  });
-}
-function requireBlueprint(context) {
-  assertBlueprintValid(context);
-  if (!context.blueprint) {
-    throw new CliError(`No blueprint found at ${BLUEPRINT_PATH}`, { hint: "Create a draft with: rassam init" });
-  }
-  return context.blueprint;
-}
-var init_context = __esm({
-  "src/cli/context.ts"() {
-    "use strict";
-    init_schema();
-    init_fs_source();
-    init_git();
-    init_io();
-  }
-});
-
-// src/cli/commands/init.ts
-var init_exports = {};
-__export(init_exports, {
-  MCP_CONFIG_SNIPPET: () => MCP_CONFIG_SNIPPET,
-  MCP_CONFIG_SNIPPET_LOCAL: () => MCP_CONFIG_SNIPPET_LOCAL,
-  initCommand: () => initCommand
-});
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename as basename2, dirname as dirname2, join as join3 } from "node:path";
-function nextSteps(blueprint) {
-  return [
-    `Wrote ${BLUEPRINT_PATH}: ${blueprint.components.length} components, ${blueprint.dependencies.length} observed dependencies.`,
-    "",
-    "This is a draft derived from the code. It becomes a contract when you make it yours:",
-    `  1. Open ${BLUEPRINT_PATH} and merge, split or rename components until they match how you think about the system.`,
-    "  2. Write the intent of each component: purpose, responsibilities, boundaries. Agents cannot infer this from code.",
-    "  3. Add rules (forbid, allow-only, layers, no-cycles, protect, secret-access) and give each a reason.",
-    "  4. Run: rassam check",
-    "  5. Sign what you have checked: rassam verify <id>",
-    '  6. Gate pull requests: add the Rassam GitHub Action, which runs "rassam check --github --comment"',
-    "     and judges every PR by the blueprint on its base branch.",
-    "  7. Give coding agents the contract over MCP. Add to .mcp.json:",
-    `       ${MCP_CONFIG_SNIPPET}`,
-    "     or, with the bundled build in this repository (node action/dist/rassam.mjs mcp):",
-    `       ${MCP_CONFIG_SNIPPET_LOCAL}`,
-    ""
-  ].join("\n");
-}
-async function initCommand(args, io) {
-  const dryRun = booleanFlag(args, "dryRun");
-  const context = await loadContextFor(io, stringFlag(args, "root"));
-  if (context.blueprintState !== "missing" && !booleanFlag(args, "force") && !dryRun) {
-    throw new CliError(`${BLUEPRINT_PATH} already exists`, { hint: "Use --force to replace it with a fresh draft, or --dry-run to preview one." });
-  }
-  const blueprint = deriveBlueprint(context.files, {
-    name: stringFlag(args, "name") ?? detectSystemName(context.files) ?? basename2(context.root),
-    repository: context.isGit ? await originUrl(context.root) ?? void 0 : void 0,
-    commit: context.isGit ? await headSha(context.root) ?? void 0 : void 0,
-    author: context.isGit ? await userName(context.root) ?? void 0 : void 0,
-    now: (/* @__PURE__ */ new Date()).toISOString()
-  });
-  const text4 = serializeBlueprint(blueprint);
-  if (dryRun) {
-    io.stdout(text4);
-    return EXIT_OK;
-  }
-  const target = join3(context.root, BLUEPRINT_PATH);
-  await mkdir(dirname2(target), { recursive: true });
-  await writeFile(target, text4, "utf8");
-  io.stdout(nextSteps(blueprint));
-  return EXIT_OK;
-}
-var MCP_CONFIG_SNIPPET, MCP_CONFIG_SNIPPET_LOCAL;
-var init_init = __esm({
-  "src/cli/commands/init.ts"() {
-    "use strict";
-    init_derive();
-    init_schema();
-    init_args();
-    init_context();
-    init_git();
-    init_io();
-    MCP_CONFIG_SNIPPET = '{"mcpServers":{"rassam":{"command":"npx","args":["rassam","mcp"]}}}';
-    MCP_CONFIG_SNIPPET_LOCAL = '{"mcpServers":{"rassam":{"command":"node","args":["action/dist/rassam.mjs","mcp"]}}}';
-  }
-});
-
-// src/blueprint/report.ts
-function isFailing(finding, failOn) {
-  if (failOn === "never" || !finding.isNew) return false;
-  return SEVERITY_RANK[finding.severity] >= SEVERITY_RANK[failOn];
-}
-function verdict(report, failOn = "error") {
-  if (report.findings.some((finding) => isFailing(finding, failOn))) return "fail";
-  if (report.findings.some((finding) => finding.isNew && finding.severity !== "info")) return "warn";
-  return "pass";
-}
-function exitCodeFor(report, failOn) {
-  return verdict(report, failOn) === "fail" ? 1 : 0;
-}
-function plural3(count, singular, pluralForm = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
-}
-function percent(ratio) {
-  if (!Number.isFinite(ratio)) return 0;
-  return Math.round(Math.min(1, Math.max(0, ratio)) * 100);
-}
-function oneLine(text4) {
-  let out = "";
-  for (const char of text4) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13) out += " ";
-    else if (code >= 32 && code !== 127) out += char;
-  }
-  return out.replace(/\s+/g, " ").trim();
-}
-function clip(text4, max) {
-  return text4.length <= max ? text4 : `${text4.slice(0, max - 1).trimEnd()}…`;
-}
-function budgetOf(value) {
-  return value === void 0 || !Number.isFinite(value) ? DEFAULT_BUDGET : Math.max(0, Math.floor(value));
-}
-function locationLabel(location) {
-  return location.line === void 0 ? location.path : `${location.path}:${location.line}`;
-}
-function groupByKind(findings) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const finding of findings) {
-    const group = groups.get(finding.kind);
-    if (group) group.push(finding);
-    else groups.set(finding.kind, [finding]);
-  }
-  return [...groups.entries()];
-}
-function rangeLabel(report) {
-  if (!report.base && !report.head) return null;
-  if (!report.base) return `at ${report.head?.ref}`;
-  return `${report.base.ref}…${report.head?.ref ?? "working tree"}`;
-}
-function capContractChanges(changes) {
-  const sorted = sortedContractChanges(changes);
-  const weakening = sorted.filter((change) => change.weakens);
-  const other = sorted.filter((change) => !change.weakens);
-  const room = Math.max(0, MAX_LISTED_CONTRACT_CHANGES - weakening.length);
-  return { shown: [...weakening, ...other.slice(0, room)], hidden: other.slice(room) };
-}
-function kindCounts(changes) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const change of changes) counts.set(change.kind, (counts.get(change.kind) ?? 0) + 1);
-  return [...counts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ");
-}
-function sortedContractChanges(changes) {
-  return [...changes.filter((change) => change.weakens), ...changes.filter((change) => !change.weakens)];
-}
-function hasImpact(impact) {
-  return !!impact && (impact.touchedComponents.length > 0 || impact.dependents.length > 0);
-}
-function reachHighlights(reach) {
-  const broad = reach?.permissions.filter((grant) => grant.broad && grant.effect === "allow") ?? [];
-  const secrets = reach?.inlineSecrets ?? [];
-  const servers = reach?.mcpServers ?? [];
-  return { broad, secrets, servers, any: broad.length + secrets.length + servers.length > 0 };
-}
-function summaryParts(report) {
-  const s = report.summary;
-  return [
-    `${plural3(s.errors, "error")}, ${plural3(s.warnings, "warning")}, ${plural3(s.infos, "info")}`,
-    `${s.newFindings} new`,
-    plural3(s.components, "component"),
-    `${s.filesMapped}/${s.filesAnalyzed} files mapped (${s.filesUnmapped} unmapped)`,
-    `${plural3(s.componentEdges, "component edge")} (${s.undeclaredEdges} undeclared)`,
-    `${percent(s.humanAuthoredRatio)}% human-authored`
-  ];
-}
-function painter(color) {
-  return color ? (code, text4) => `\x1B[${code}m${text4}\x1B[0m` : (_code, text4) => text4;
-}
-function textLocations(locations) {
-  if (locations.length === 0) return null;
-  const shown = locations.slice(0, MAX_LOCATIONS).map((location) => oneLine(locationLabel(location)));
-  const extra = locations.length - shown.length;
-  return shown.join(", ") + (extra > 0 ? ` +${extra} more` : "");
-}
-function textFinding(finding, paint) {
-  const severity = TEXT_SEVERITY[finding.severity];
-  const lines = [
-    `  ${paint(severity.color, `${severity.mark} ${finding.severity}`)} ${paint(ANSI.bold, oneLine(finding.title))} ${paint(ANSI.dim, `[${finding.kind}]`)}`
-  ];
-  const message = oneLine(finding.message);
-  if (message) lines.push(`      ${clip(message, 300)}`);
-  const locations = textLocations(finding.locations);
-  if (locations) lines.push(`      ${paint(ANSI.dim, `at ${locations}`)}`);
-  if (finding.reason) lines.push(`      reason: "${clip(oneLine(finding.reason), 300)}"`);
-  return lines;
-}
-function textHeader(report, paint, failOn = "error") {
-  const result = verdict(report, failOn);
-  const style = TEXT_VERDICT[result];
-  const parts = [paint(style.color, `${style.mark} ${result}`)];
-  if (!report.blueprint.present) {
-    parts.push(`no blueprint found at ${report.blueprint.path || BLUEPRINT_PATH}; run \`rassam init\` to create one`);
-  } else {
-    parts.push(oneLine(report.blueprint.system ?? "(unnamed system)"));
-    if (!report.blueprint.valid) parts.push("blueprint is invalid");
-  }
-  parts.push(`${report.mode} mode`);
-  const range = rangeLabel(report);
-  if (range) parts.push(oneLine(range));
-  return parts.join(" · ");
-}
-function textRemaining(rest, verbose, paint) {
-  if (rest.length === 0) return [];
-  const existing = rest.filter((finding) => !finding.isNew).length;
-  const lines = ["", `Other findings (${rest.length}${existing > 0 ? `, ${existing} pre-existing` : ""})`];
-  for (const [kind, group] of groupByKind(rest)) {
-    lines.push(`  ${group.length} × ${kind}`);
-    if (verbose) for (const finding of group) lines.push(...textFinding(finding, paint).map((line) => `  ${line}`));
-  }
-  if (!verbose) lines.push(paint(ANSI.dim, "  (use --verbose for details)"));
-  return lines;
-}
-function textContractChanges(report, paint) {
-  const changes = report.contractChanges ?? [];
-  if (changes.length === 0) return [];
-  const weakening = changes.filter((change) => change.weakens).length;
-  const approval = report.approved ? "approved by a human" : weakening > 0 ? "NOT approved" : "not approved";
-  const lines = ["", `Contract changes (${changes.length}, ${weakening} weakening, ${approval})`];
-  const { shown, hidden } = capContractChanges(changes);
-  for (const change of shown) {
-    const mark = change.weakens ? paint(ANSI.yellow, "⚠") : " ";
-    lines.push(`  ${mark} ${change.kind} ${oneLine(change.target)}: ${clip(oneLine(change.summary), 200)}`);
-  }
-  if (hidden.length) lines.push(`    …and ${hidden.length} more (${kindCounts(hidden)})`);
-  return lines;
-}
-function textImpact(report) {
-  if (!hasImpact(report.impact)) return [];
-  const impact = report.impact;
-  const lines = ["", `Blast radius (${plural3(impact.changedFiles.length, "changed file")})`];
-  const touched = impact.touchedComponents.map((component2) => `${oneLine(component2.id)} (${plural3(component2.files.length, "file")})`);
-  lines.push(`  touched: ${touched.length ? touched.join(", ") : "none"}`);
-  const dependents = impact.dependents.map((dependent) => `${oneLine(dependent.id)} (depth ${dependent.depth})`);
-  lines.push(`  dependents: ${dependents.length ? dependents.join(", ") : "none"}`);
-  return lines;
-}
-function agentActivityLine(report) {
-  const activity = report.agentActivity;
-  if (!activity) return null;
-  const names = activity.agents.length ? ` (${activity.agents.map(oneLine).join(", ")})` : "";
-  return `${activity.agentCommits}/${plural3(activity.commits, "commit")} by agents${names}`;
-}
-function textReach(report, paint) {
-  const { broad, secrets, servers, any: any2 } = reachHighlights(report.reach);
-  if (!any2) return [];
-  const lines = ["", "Reach highlights"];
-  if (secrets.length > 0) {
-    lines.push(`  ${paint(ANSI.red, `inline secrets: ${secrets.length}`)}`);
-    for (const secret of secrets.slice(0, DEFAULT_BUDGET)) {
-      lines.push(`    ${paint(ANSI.dim, `${oneLine(secret.path)}:${secret.line}`)} ${oneLine(secret.location)} ${oneLine(secret.preview)}`);
-    }
-    if (secrets.length > DEFAULT_BUDGET) lines.push(`    +${secrets.length - DEFAULT_BUDGET} more`);
-  }
-  if (broad.length > 0) {
-    lines.push(`  ${paint(ANSI.yellow, `broad permissions: ${broad.length}`)}`);
-    for (const grant of broad.slice(0, DEFAULT_BUDGET)) {
-      lines.push(`    ${paint(ANSI.dim, oneLine(grant.path))} ${oneLine(grant.agent)} allows ${oneLine(grant.rule)}`);
-    }
-    if (broad.length > DEFAULT_BUDGET) lines.push(`    +${broad.length - DEFAULT_BUDGET} more`);
-  }
-  if (servers.length > 0) {
-    const names = servers.map((server) => `${oneLine(server.name)} (${server.transport}, ${oneLine(server.agent)})`);
-    lines.push(`  MCP servers: ${servers.length}: ${names.join(", ")}`);
-  }
-  return lines;
-}
-function renderText(report, options = {}) {
-  const paint = painter(options.color === true);
-  const budget = budgetOf(options.budget);
-  const fresh = report.findings.filter((finding) => finding.isNew);
-  const top = fresh.slice(0, budget);
-  const shown = new Set(top);
-  const rest = report.findings.filter((finding) => !shown.has(finding));
-  const lines = [textHeader(report, paint, options.failOn ?? "error"), summaryParts(report).join(" · "), ""];
-  if (top.length === 0) {
-    lines.push(fresh.length === 0 ? "Nothing new needs your attention." : `Needs your attention: ${plural3(fresh.length, "new finding")} (budget 0)`);
-  } else {
-    lines.push(paint(ANSI.bold, `Needs your attention (${top.length} of ${fresh.length} new)`));
-    for (const finding of top) lines.push(...textFinding(finding, paint));
-  }
-  lines.push(...textRemaining(rest, options.verbose === true, paint));
-  lines.push(...textContractChanges(report, paint));
-  lines.push(...textImpact(report));
-  const activity = agentActivityLine(report);
-  if (activity) lines.push("", `Agent activity: ${activity}`);
-  lines.push(...textReach(report, paint));
-  return `${lines.join("\n")}
-`;
-}
-function escapeMd(text4) {
-  return oneLine(text4).replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([`*_|[\]~])/g, "\\$1").replace(/^([#+-])/, "\\$1").replace(/@(?=[A-Za-z0-9])/g, "@&#8203;");
-}
-function codeSpan(text4) {
-  const clean = oneLine(text4) || " ";
-  const longestRun = Math.max(0, ...(clean.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = "`".repeat(longestRun + 1);
-  const pad = clean.startsWith("`") || clean.endsWith("`") ? " " : "";
-  const span = `${fence}${pad}${clean}${pad}${fence}`;
-  return span;
-}
-function encodePath(path) {
-  return path.split("/").map((segment) => encodeURIComponent(segment).replace(/\(/g, "%28").replace(/\)/g, "%29")).join("/");
-}
-function mdLocation(location, link) {
-  const label = codeSpan(locationLabel(location));
-  if (!link.repoUrl || !link.headSha) return label;
-  const base = `${link.repoUrl.replace(/\/+$/, "")}/blob/${encodeURIComponent(link.headSha)}/${encodePath(location.path)}`;
-  if (location.line === void 0) return `[${label}](${base})`;
-  const range = location.endLine !== void 0 && location.endLine > location.line ? `-L${location.endLine}` : "";
-  return `[${label}](${base}#L${location.line}${range})`;
-}
-function mdLocations(locations, link) {
-  if (locations.length === 0) return null;
-  const shown = locations.slice(0, MAX_LOCATIONS).map((location) => mdLocation(location, link));
-  const extra = locations.length - shown.length;
-  return shown.join(", ") + (extra > 0 ? ` +${extra} more` : "");
-}
-function mdAttentionItem(finding, index, link) {
-  const lines = [`${index + 1}. ${MD_SEVERITY[finding.severity]} · **${escapeMd(finding.title)}** (${codeSpan(finding.kind)})`];
-  const message = escapeMd(clip(oneLine(finding.message), 600));
-  if (message) lines.push(`   ${message}`);
-  const locations = mdLocations(finding.locations, link);
-  if (locations) lines.push(`   📍 ${locations}`);
-  if (finding.reason) lines.push("", `   > ${escapeMd(clip(oneLine(finding.reason), 600))}`, "");
-  return lines;
-}
-function mdDetailItem(finding, link, withKind) {
-  const kind = withKind ? `${codeSpan(finding.kind)} ` : "";
-  const message = escapeMd(clip(oneLine(finding.message), 300));
-  const locations = mdLocations(finding.locations, link);
-  return `- ${MD_SEVERITY[finding.severity]} ${kind}**${escapeMd(finding.title)}**${message ? `: ${message}` : ""}${locations ? ` · ${locations}` : ""}`;
-}
-function mdHeading(report, result) {
-  const style = MD_VERDICT[result];
-  if (!report.blueprint.present) return `## ${style.emoji} Rassam: no blueprint found`;
-  const fresh = report.findings.filter((finding) => finding.isNew);
-  const errors = fresh.filter((finding) => finding.severity === "error").length;
-  const warnings = fresh.filter((finding) => finding.severity === "warning").length;
-  const counts = [errors ? plural3(errors, "new error") : "", warnings ? plural3(warnings, "new warning") : ""].filter(Boolean).join(", ");
-  return `## ${style.emoji} Rassam: ${style.text}${counts ? ` (${counts})` : ""}`;
-}
-function mdContext(report) {
-  const parts = [];
-  if (report.blueprint.present) {
-    parts.push(`**${escapeMd(report.blueprint.system ?? "(unnamed system)")}**`);
-    if (!report.blueprint.valid) parts.push("blueprint is **invalid**");
-  } else {
-    parts.push(`No blueprint at ${codeSpan(report.blueprint.path || BLUEPRINT_PATH)}. Run \`rassam init\` to create one.`);
-  }
-  parts.push(`${report.mode} mode`);
-  if (report.base) parts.push(`${codeSpan(report.base.ref)}…${codeSpan(report.head?.ref ?? "working tree")}`);
-  else if (report.head) parts.push(`at ${codeSpan(report.head.ref)}`);
-  return parts.join(" · ");
-}
-function mdContractChanges(report) {
-  const changes = report.contractChanges ?? [];
-  if (changes.length === 0) return [];
-  const weakening = changes.filter((change) => change.weakens).length;
-  const lines = ["### Contract changes", "", "| | Change | Target | Summary |", "|---|---|---|---|"];
-  const { shown, hidden } = capContractChanges(changes);
-  for (const change of shown) {
-    lines.push(`| ${change.weakens ? "⚠" : ""} | ${change.kind} | ${escapeMd(change.target)} | ${escapeMd(clip(oneLine(change.summary), 300))} |`);
-  }
-  if (hidden.length) lines.push(`| | … | | ${escapeMd(`and ${hidden.length} more: ${kindCounts(hidden)}`)} |`);
-  lines.push("");
-  if (weakening === 0) {
-    lines.push("No change weakens the contract. Weakening changes require a human-approved label.");
-  } else if (report.approved) {
-    lines.push(`✅ **Approved:** ${plural3(weakening, "weakening change")} carried a human-approved label.`);
-  } else {
-    lines.push(`⚠ **Not approved:** ${plural3(weakening, "change")} weaken${weakening === 1 ? "s" : ""} the contract. Weakening changes require a human-approved label.`);
-  }
-  return lines;
-}
-function mdImpact(report) {
-  if (!hasImpact(report.impact)) return [];
-  const impact = report.impact;
-  const touched = impact.touchedComponents.map((component2) => `${codeSpan(component2.id)} (${plural3(component2.files.length, "file")})`);
-  const dependents = impact.dependents.map((dependent) => `${codeSpan(dependent.id)} (depth ${dependent.depth})`);
-  return [
-    "### Blast radius",
-    "",
-    `- **Changed:** ${plural3(impact.changedFiles.length, "file")} in ${plural3(impact.touchedComponents.length, "component")}${touched.length ? `: ${touched.join(", ")}` : ""}`,
-    `- **Dependents:** ${dependents.length ? dependents.join(", ") : "none"}`
-  ];
-}
-function renderBlock(block, itemCount = block.items.length) {
-  const items = block.items.slice(0, itemCount);
-  const omitted = block.items.length - items.length;
-  if (omitted > 0) items.push(`- …and ${omitted} more`);
-  return `<details>
-<summary>${block.summary}</summary>
-
-${items.join("\n")}
-
-</details>`;
-}
-function mdDetailBlocks(report, link) {
-  const blocks = [];
-  const fresh = report.findings.filter((finding) => finding.isNew);
-  const existing = report.findings.filter((finding) => !finding.isNew);
-  for (const [kind, group] of groupByKind(fresh)) {
-    blocks.push({
-      summary: `${KIND_INFO[kind].label} (${group.length}) · <code>${kind}</code>`,
-      items: group.map((finding) => mdDetailItem(finding, link, false))
-    });
-  }
-  const { broad, secrets, servers, any: any2 } = reachHighlights(report.reach);
-  if (any2) {
-    blocks.push({
-      summary: `Agent reach: ${plural3(secrets.length, "inline secret")}, ${plural3(broad.length, "broad permission")}, ${plural3(servers.length, "MCP server")}`,
-      items: [
-        ...secrets.map((secret) => `- 🔴 inline secret ${mdLocation({ path: secret.path, line: secret.line }, link)} ${codeSpan(secret.location)} ${codeSpan(secret.preview)}`),
-        ...broad.map((grant) => `- 🟡 broad permission ${codeSpan(grant.path)}: ${escapeMd(grant.agent)} allows ${codeSpan(grant.rule)}`),
-        ...servers.map((server) => `- MCP server ${codeSpan(server.name)} (${server.transport}, ${escapeMd(server.agent)}) in ${codeSpan(server.configPath)}`)
-      ]
-    });
-  }
-  if (existing.length > 0) {
-    blocks.push({
-      summary: `Pre-existing findings (${existing.length}), not introduced by this change`,
-      items: groupByKind(existing).flatMap(([, group]) => group.map((finding) => mdDetailItem(finding, link, true)))
-    });
-  }
-  return blocks;
-}
-function mdFooter(report) {
-  const s = report.summary;
-  const stats = [
-    plural3(s.components, "component"),
-    `${s.filesMapped}/${s.filesAnalyzed} files mapped`,
-    `${plural3(s.componentEdges, "edge")} (${s.undeclaredEdges} undeclared)`,
-    `${percent(s.humanAuthoredRatio)}% human-authored`
-  ];
-  return `---
-<sub>Blueprint: ${stats.join(" · ")} · Generated by Rassam ${escapeMd(report.tool.version)}</sub>`;
-}
-function fitBlocks(blocks, room) {
-  const kept = [];
-  let used = 0;
-  for (const block of blocks) {
-    const full = renderBlock(block);
-    if (used + full.length + 2 <= room) {
-      kept.push(full);
-      used += full.length + 2;
-      continue;
-    }
-    for (let count = block.items.length - 1; count >= 1; count -= 1) {
-      const partial2 = renderBlock(block, count);
-      if (used + partial2.length + 2 <= room) {
-        kept.push(partial2);
-        break;
-      }
-    }
-    break;
-  }
-  return kept;
-}
-function cutAtLine(text4, max) {
-  if (text4.length <= max) return text4;
-  const cut = text4.slice(0, Math.max(0, max));
-  const lastBreak = cut.lastIndexOf("\n");
-  return (lastBreak > 0 ? cut.slice(0, lastBreak) : cut).trimEnd();
-}
-function renderMarkdown(report, options = {}) {
-  const link = { repoUrl: options.repoUrl, headSha: options.headSha };
-  const budget = budgetOf(options.budget);
-  const maxChars = Math.max(0, options.maxChars ?? DEFAULT_MAX_CHARS);
-  const marker = options.marker ?? COMMENT_MARKER;
-  const fresh = report.findings.filter((finding) => finding.isNew);
-  const top = fresh.slice(0, budget);
-  const sections = [
-    [marker, mdHeading(report, verdict(report, options.failOn ?? "error")), "", mdContext(report), "", summaryParts(report).slice(0, 2).join(" · ")],
-    ["### Needs your attention", ""]
-  ];
-  if (top.length === 0) {
-    sections[1].push(fresh.length === 0 ? "Nothing new needs your attention." : `${plural3(fresh.length, "new finding")}; see the details below.`);
-  } else {
-    top.forEach((finding, index) => sections[1].push(...mdAttentionItem(finding, index, link)));
-    if (fresh.length > top.length) sections[1].push("", `…and ${plural3(fresh.length - top.length, "more new finding")} in the details below.`);
-  }
-  const contract = mdContractChanges(report);
-  if (contract.length) sections.push(contract);
-  const impact = mdImpact(report);
-  if (impact.length) sections.push(impact);
-  const activity = agentActivityLine(report);
-  if (activity) sections.push([`**Agent activity:** ${escapeMd(activity)}`]);
-  const head = sections.map((section2) => section2.join("\n").trimEnd()).join("\n\n");
-  const blocks = mdDetailBlocks(report, link);
-  const footer = mdFooter(report);
-  const assemble = (parts) => `${parts.join("\n\n")}
-`;
-  const full = assemble([head, ...blocks.map((block) => renderBlock(block)), footer]);
-  if (full.length <= maxChars) return full;
-  const fixed = TRUNCATION_NOTE.length + footer.length + 5;
-  const kept = fitBlocks(blocks, maxChars - head.length - 2 - fixed);
-  const fittedHead = cutAtLine(head, maxChars - fixed);
-  const truncated = assemble([fittedHead, ...kept, TRUNCATION_NOTE, footer]);
-  return truncated.length <= maxChars ? truncated : truncated.slice(0, maxChars);
-}
-function sarifLocation(location) {
-  const physicalLocation = {
-    artifactLocation: { uri: location.path.split("/").map(encodeURIComponent).join("/"), uriBaseId: "%SRCROOT%" }
-  };
-  if (location.line !== void 0 && location.line >= 1) {
-    const region = { startLine: location.line };
-    if (location.endLine !== void 0 && location.endLine >= location.line) region.endLine = location.endLine;
-    physicalLocation.region = region;
-  }
-  return { physicalLocation };
-}
-function sarifMessage(finding) {
-  const reason = finding.reason ? ` Reason: ${finding.reason}` : "";
-  return `${finding.title} — ${finding.message}${reason}`;
-}
-function renderSarif(report) {
-  const kinds = [...new Set(report.findings.map((finding) => finding.kind))];
-  const ruleIndex = new Map(kinds.map((kind, index) => [kind, index]));
-  const fallback = { path: report.blueprint.path || BLUEPRINT_PATH };
-  return {
-    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
-    version: "2.1.0",
-    runs: [
-      {
-        tool: {
-          driver: {
-            name: "Rassam",
-            informationUri: "https://rassam.dev",
-            version: report.tool.version,
-            rules: kinds.map((kind) => ({
-              id: kind,
-              name: KIND_INFO[kind].label,
-              shortDescription: { text: KIND_INFO[kind].label },
-              fullDescription: { text: KIND_INFO[kind].help },
-              help: { text: KIND_INFO[kind].help }
-            }))
-          }
-        },
-        results: report.findings.map((finding) => ({
-          ruleId: finding.kind,
-          ruleIndex: ruleIndex.get(finding.kind),
-          level: SARIF_LEVEL[finding.severity],
-          message: { text: sarifMessage(finding) },
-          locations: (finding.locations.length ? finding.locations : [fallback]).map(sarifLocation),
-          partialFingerprints: { rassamFindingId: finding.id },
-          baselineState: finding.isNew ? "new" : "unchanged",
-          properties: { score: finding.score, isNew: finding.isNew, components: finding.components, blueprintRule: finding.ruleId }
-        }))
-      }
-    ]
-  };
-}
-function escapeCommandData(text4) {
-  return text4.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-}
-function escapeCommandProperty(text4) {
-  return escapeCommandData(text4).replace(/:/g, "%3A").replace(/,/g, "%2C");
-}
-function annotation(finding) {
-  const properties = [];
-  const location = finding.locations[0];
-  if (location) {
-    properties.push(`file=${escapeCommandProperty(location.path)}`);
-    if (location.line !== void 0) {
-      properties.push(`line=${location.line}`);
-      if (location.endLine !== void 0 && location.endLine >= location.line) properties.push(`endLine=${location.endLine}`);
-    }
-  }
-  properties.push(`title=${escapeCommandProperty(finding.title)}`);
-  const reason = finding.reason ? `
-Reason: ${finding.reason}` : "";
-  return `::${ANNOTATION_COMMAND[finding.severity]} ${properties.join(",")}::${escapeCommandData(`${finding.message}${reason}`)}`;
-}
-function renderGithubAnnotations(report, options = {}) {
-  const onlyNew = options.onlyNew ?? true;
-  const max = Math.max(0, Math.floor(options.max ?? DEFAULT_MAX_ANNOTATIONS));
-  return report.findings.filter((finding) => !onlyNew || finding.isNew).slice().sort((a, b) => b.score - a.score).slice(0, max).map(annotation).join("\n");
-}
-function renderJson(report) {
-  return `${JSON.stringify(report, null, 2)}
-`;
-}
-function graphNodes(view) {
-  const keys = /* @__PURE__ */ new Map();
-  const used = /* @__PURE__ */ new Set();
-  const nodes = [];
-  const add = (id, name, external, flagged) => {
-    if (keys.has(id)) return;
-    const base = `c_${id.replace(/[^A-Za-z0-9_]/g, "_")}`;
-    let key = base;
-    for (let suffix2 = 2; used.has(key); suffix2 += 1) key = `${base}_${suffix2}`;
-    used.add(key);
-    keys.set(id, key);
-    nodes.push({ key, label: oneLine(name) || id, external, flagged });
-  };
-  for (const component2 of view.components) add(component2.id, component2.name, component2.external === true, (component2.findings ?? 0) > 0);
-  for (const edge of view.edges) {
-    add(edge.from, edge.from, false, false);
-    add(edge.to, edge.to, false, false);
-  }
-  return { nodes, keyOf: (id) => keys.get(id) ?? "" };
-}
-function edgeLabel(status, count) {
-  const times = count !== void 0 && count > 1 ? ` ×${count}` : "";
-  if (status === "missing") return "declared, unused";
-  if (status === "undeclared") return `undeclared${times}`;
-  if (status === "forbidden") return `forbidden${times}`;
-  return null;
-}
-function mermaidText(text4) {
-  return text4.replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;");
-}
-function renderMermaid(view) {
-  const { nodes, keyOf } = graphNodes(view);
-  const lines = ["flowchart LR"];
-  for (const node2 of nodes) {
-    const label = `"${mermaidText(node2.label)}"`;
-    lines.push(`  ${node2.key}${node2.external ? `[(${label})]` : `[${label}]`}`);
-  }
-  view.edges.forEach((edge) => {
-    const label = edgeLabel(edge.status, edge.count);
-    lines.push(`  ${keyOf(edge.from)} ${MERMAID_ARROW[edge.status]}${label ? `|"${mermaidText(label)}"|` : ""} ${keyOf(edge.to)}`);
-  });
-  view.edges.forEach((edge, index) => lines.push(`  linkStyle ${index} ${MERMAID_LINK_STYLE[edge.status]}`));
-  const flagged = nodes.filter((node2) => node2.flagged);
-  if (flagged.length > 0) {
-    lines.push(`  classDef hasFindings stroke:${RED},stroke-width:3px`);
-    lines.push(`  class ${flagged.map((node2) => node2.key).join(",")} hasFindings`);
-  }
-  return `${lines.join("\n")}
-`;
-}
-function dotString(text4) {
-  return `"${text4.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n")}"`;
-}
-function renderDot(view) {
-  const { nodes, keyOf } = graphNodes(view);
-  const lines = ["digraph blueprint {", "  rankdir=LR;", '  node [shape=box, style=rounded, fontname="Helvetica"];', '  edge [fontname="Helvetica", fontsize=10];'];
-  for (const node2 of nodes) {
-    const attributes = [`label=${dotString(node2.label)}`];
-    if (node2.external) attributes.push("shape=cylinder", "style=solid");
-    if (node2.flagged) attributes.push(`color="${RED}"`, "penwidth=2");
-    lines.push(`  ${node2.key} [${attributes.join(", ")}];`);
-  }
-  for (const edge of view.edges) {
-    const label = edgeLabel(edge.status, edge.count);
-    const attributes = DOT_EDGE_STYLE[edge.status] + (label ? `, label=${dotString(label)}` : "");
-    lines.push(`  ${keyOf(edge.from)} -> ${keyOf(edge.to)} [${attributes}];`);
-  }
-  lines.push("}");
-  return `${lines.join("\n")}
-`;
-}
-var COMMENT_MARKER, DEFAULT_BUDGET, MAX_LOCATIONS, DEFAULT_MAX_CHARS, DEFAULT_MAX_ANNOTATIONS, TRUNCATION_NOTE, SEVERITY_RANK, KIND_INFO, MAX_LISTED_CONTRACT_CHANGES, ANSI, TEXT_SEVERITY, TEXT_VERDICT, MD_SEVERITY, MD_VERDICT, SARIF_LEVEL, ANNOTATION_COMMAND, GRAY, AMBER, RED, MERMAID_ARROW, MERMAID_LINK_STYLE, DOT_EDGE_STYLE;
-var init_report = __esm({
-  "src/blueprint/report.ts"() {
-    "use strict";
-    init_schema();
-    COMMENT_MARKER = "<!-- rassam:blueprint-check -->";
-    DEFAULT_BUDGET = 5;
-    MAX_LOCATIONS = 3;
-    DEFAULT_MAX_CHARS = 6e4;
-    DEFAULT_MAX_ANNOTATIONS = 50;
-    TRUNCATION_NOTE = "_Details were truncated to fit the comment size limit. Run `rassam check` locally for the full report._";
-    SEVERITY_RANK = { info: 1, warning: 2, error: 3 };
-    KIND_INFO = {
-      "invalid-blueprint": {
-        label: "Invalid blueprint",
-        help: "The blueprint file is missing, unparsable or fails validation. Fix .rassam/blueprint.json so changes can be checked against it."
-      },
-      "forbidden-dependency": {
-        label: "Forbidden dependency",
-        help: "A dependency crosses a boundary that a forbid rule prohibits. Remove the import or change the rule with human approval."
-      },
-      "allow-only-violation": {
-        label: "Allow-only violation",
-        help: "A component depends on something outside the set its allow-only rule permits."
-      },
-      "layer-violation": {
-        label: "Layer violation",
-        help: "A lower layer depends on a higher layer. Layers may only depend on layers below them."
-      },
-      "dependency-cycle": {
-        label: "Dependency cycle",
-        help: "Components depend on each other in a cycle that a no-cycles rule prohibits."
-      },
-      "undeclared-dependency": {
-        label: "Undeclared dependency",
-        help: "The code has a cross-component dependency that the blueprint does not declare. Declare it or remove it."
-      },
-      "unmapped-file": {
-        label: "Unmapped file",
-        help: "A source file is not owned by any component. Add it to a component's paths or ignore it in the policy."
-      },
-      "empty-component": {
-        label: "Empty component",
-        help: "A component's globs match no files. Its paths are stale or the code was moved."
-      },
-      "protected-path": {
-        label: "Protected path changed",
-        help: "A tripwire path (tests, CI, lockfiles, agent permissions, the blueprint itself) changed and needs human review."
-      },
-      "verification-weakened": {
-        label: "Verification weakened",
-        help: "The change weakens checks: skipped or deleted tests, removed assertions, loosened CI."
-      },
-      "contract-weakened": {
-        label: "Contract weakened",
-        help: "The blueprint was changed in a way that loosens the contract agents are judged by. Requires human approval."
-      },
-      "contract-changed": {
-        label: "Contract changed",
-        help: "The blueprint changed. Review that the new contract reflects human intent."
-      },
-      "secret-access": {
-        label: "Secret access",
-        help: "A secret or environment variable is read by code that a secret-access rule does not allow."
-      },
-      "inline-secret": {
-        label: "Inline secret",
-        help: "A credential appears inline in an agent or tool configuration file. Move it to a secret store and rotate it."
-      },
-      "agent-permission-change": {
-        label: "Agent permission change",
-        help: "Agent permissions, MCP servers or agent instructions changed, altering what coding agents can reach."
-      },
-      "assurance-drift": {
-        label: "Assurance drift",
-        help: "A component's declared assurance level no longer matches the evidence in the repository."
-      },
-      "stale-verification": {
-        label: "Stale verification",
-        help: "A human sign-off predates changes to the code it covers and should be renewed."
-      },
-      "invariant-at-risk": {
-        label: "Invariant at risk",
-        help: "The change touches code or tests that an invariant depends on."
-      },
-      "invariant-failed": {
-        label: "Invariant failed",
-        help: "An invariant's check failed."
-      }
-    };
-    MAX_LISTED_CONTRACT_CHANGES = 12;
-    ANSI = { red: "31", yellow: "33", cyan: "36", green: "32", dim: "2", bold: "1" };
-    TEXT_SEVERITY = {
-      error: { mark: "✖", color: ANSI.red },
-      warning: { mark: "▲", color: ANSI.yellow },
-      info: { mark: "●", color: ANSI.cyan }
-    };
-    TEXT_VERDICT = {
-      pass: { mark: "✔", color: ANSI.green },
-      warn: { mark: "▲", color: ANSI.yellow },
-      fail: { mark: "✖", color: ANSI.red }
-    };
-    MD_SEVERITY = { error: "🔴 error", warning: "🟡 warning", info: "🔵 info" };
-    MD_VERDICT = {
-      pass: { emoji: "✅", text: "Blueprint check passed" },
-      warn: { emoji: "⚠️", text: "Blueprint check passed with warnings" },
-      fail: { emoji: "❌", text: "Blueprint check failed" }
-    };
-    SARIF_LEVEL = { error: "error", warning: "warning", info: "note" };
-    ANNOTATION_COMMAND = { error: "error", warning: "warning", info: "notice" };
-    GRAY = "#9ca3af";
-    AMBER = "#d97706";
-    RED = "#dc2626";
-    MERMAID_ARROW = { declared: "-->", undeclared: "-.->", forbidden: "==>", missing: "-.->" };
-    MERMAID_LINK_STYLE = {
-      declared: `stroke:${GRAY},stroke-width:1.5px`,
-      undeclared: `stroke:${AMBER},stroke-width:2px,stroke-dasharray:6 4`,
-      forbidden: `stroke:${RED},stroke-width:4px`,
-      missing: `stroke:${GRAY},stroke-width:1.5px,stroke-dasharray:2 4`
-    };
-    DOT_EDGE_STYLE = {
-      declared: `color="${GRAY}"`,
-      undeclared: `color="${AMBER}", fontcolor="${AMBER}", style=dashed`,
-      forbidden: `color="${RED}", fontcolor="${RED}", penwidth=3`,
-      missing: `color="${GRAY}", fontcolor="${GRAY}", style=dotted`
-    };
-  }
-});
-
-// src/blueprint/agents.ts
-function knownByIdentity(name, email3) {
-  const trimmedName = name.trim();
-  const trimmedEmail = email3.trim();
-  for (const agent of KNOWN_AGENTS) {
-    if (agent.identity.test(trimmedName) || trimmedEmail && agent.identity.test(trimmedEmail)) return agent.name;
-  }
-  return null;
-}
-function knownByLabel(label) {
-  const trimmed = label.trim();
-  return KNOWN_AGENTS.find((agent) => agent.label.test(trimmed))?.name ?? null;
-}
-function parseTrailers(message) {
-  const trailers = [];
-  for (const line of message.split(/\r?\n/).slice(1)) {
-    const match = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*:\s*(\S.*)$/.exec(line);
-    if (match) trailers.push({ key: match[1].toLowerCase(), value: match[2].trim() });
-  }
-  return trailers;
-}
-function splitIdentity(value) {
-  const match = /^(.*?)\s*<([^>]*)>\s*$/.exec(value);
-  return match ? { name: match[1].trim(), email: match[2].trim() } : { name: value.trim(), email: "" };
-}
-function fromCoAuthor(value) {
-  const { name, email: email3 } = splitIdentity(value);
-  const known = knownByIdentity(name, email3) ?? knownByLabel(name);
-  if (known) return known;
-  if (/\[bot\]@/i.test(email3) || /\[bot\]$/i.test(name)) {
-    const label = (name || email3.replace(/^\d+\+/, "").replace(/@.*$/, "")).replace(/\[bot\]$/i, "").trim();
-    if (label && !NON_AGENT_BOTS.test(label)) return label;
-  }
-  return null;
-}
-function fromGenericTrailer(value) {
-  const label = splitIdentity(value).name.split(":")[0].replace(/\s*\(.*\)\s*$/, "").trim();
-  if (!label || NEGATIVE_VALUES.test(label)) return null;
-  if (AFFIRMATIVE_VALUES.test(label)) return UNNAMED_AGENT;
-  return knownByLabel(label) ?? label;
-}
-function fromTrailer(trailer) {
-  if (trailer.key === "co-authored-by") return fromCoAuthor(trailer.value);
-  if (GENERIC_TRAILERS.has(trailer.key)) return fromGenericTrailer(trailer.value);
-  if (trailer.key.startsWith("codex-")) return "Codex";
-  if (trailer.key.startsWith("amp-") || trailer.key.startsWith("ampcode-")) return "Amp";
-  if (trailer.key.startsWith("claude-")) return "Claude";
-  return null;
-}
-function agentsFromCommit(commit) {
-  const agents = [];
-  const add = (agent) => {
-    if (agent && !agents.includes(agent)) agents.push(agent);
-  };
-  add(knownByIdentity(commit.authorName, commit.authorEmail));
-  if (/generated with \[?claude code\b/i.test(commit.message)) add("Claude");
-  if (/^aider:\s/i.test(commit.message)) add("Aider");
-  for (const trailer of parseTrailers(commit.message)) add(fromTrailer(trailer));
-  return agents;
-}
-function detectAgentActivity(commits) {
-  const agents = /* @__PURE__ */ new Set();
-  let agentCommits = 0;
-  for (const commit of commits) {
-    const found = agentsFromCommit(commit);
-    if (found.length > 0) agentCommits += 1;
-    for (const agent of found) agents.add(agent);
-  }
-  return {
-    commits: commits.length,
-    agentCommits,
-    agents: [...agents].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
-  };
-}
-var KNOWN_AGENTS, NON_AGENT_BOTS, GENERIC_TRAILERS, NEGATIVE_VALUES, AFFIRMATIVE_VALUES, UNNAMED_AGENT;
-var init_agents = __esm({
-  "src/blueprint/agents.ts"() {
-    "use strict";
-    KNOWN_AGENTS = [
-      {
-        name: "Claude",
-        identity: /noreply@anthropic\.com|^claude(?:[ -]code)?(?:\[bot\])?$|\bclaude\[bot\]/i,
-        label: /^(?:anthropic\s+)?claude\b/i
-      },
-      {
-        name: "GitHub Copilot",
-        identity: /copilot-swe-agent|^(?:github\s+)?copilot(?:\[bot\])?$|\+copilot@users\.noreply\.github\.com|\bcopilot\[bot\]/i,
-        label: /^(?:github\s+)?copilot\b/i
-      },
-      {
-        name: "Devin",
-        identity: /devin-ai-integration|^devin(?:\s+ai)?(?:\[bot\])?$/i,
-        label: /^devin\b/i
-      },
-      {
-        name: "Cursor",
-        identity: /cursoragent|^cursor(?:\s+agent)?(?:\[bot\])?$/i,
-        label: /^cursor\b/i
-      },
-      {
-        name: "Codex",
-        identity: /chatgpt-codex-connector|^(?:openai\s+)?codex(?:\[bot\])?$|\bcodex@openai\.com/i,
-        label: /^(?:openai\s+)?codex\b/i
-      },
-      {
-        name: "Jules",
-        identity: /google-labs-jules/i,
-        label: /^(?:google\s+)?jules\b/i
-      },
-      {
-        name: "Gemini",
-        identity: /gemini-code-assist|^gemini(?:[ -]cli)?(?:\[bot\])?$/i,
-        label: /^(?:google\s+)?gemini\b/i
-      },
-      {
-        name: "Aider",
-        identity: /\(aider\)\s*$|^aider\b|@aider\.chat\b/i,
-        label: /^aider\b/i
-      },
-      {
-        name: "Amp",
-        identity: /^amp(?:code)?(?:\[bot\])?$|\bamp@ampcode\.com/i,
-        label: /^amp(?:code)?\b/i
-      },
-      {
-        name: "Factory",
-        identity: /factory-droid/i,
-        label: /^factory(?:[ -]droid)?\b|^droid\b/i
-      }
-    ];
-    NON_AGENT_BOTS = /^(?:dependabot|renovate|github-actions|web-flow|snyk-bot|greenkeeper|mergify|pre-commit-ci|allcontributors|codecov|semantic-release-bot|imgbot|stale|netlify|vercel|release-please|github-merge-queue|pull)\b/i;
-    GENERIC_TRAILERS = /* @__PURE__ */ new Set(["generated-by", "assisted-by", "ai-assisted", "made-with", "generated-with", "ai-generated-by"]);
-    NEGATIVE_VALUES = /^(?:no|none|false|n\/a|0)$/i;
-    AFFIRMATIVE_VALUES = /^(?:yes|true|1)$/i;
-    UNNAMED_AGENT = "AI assistant";
-  }
-});
-
-// src/blueprint/blueprint-diff.ts
-function compareText2(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-function quote(values) {
-  return values.map((value) => `"${value}"`).join(", ");
-}
-function entries(selector2) {
-  if (selector2 === void 0) return [];
-  return Array.isArray(selector2) ? selector2 : [selector2];
-}
-function setDiff(base, head) {
-  const baseSet = new Set(base ?? []);
-  const headSet = new Set(head ?? []);
-  return {
-    added: [...headSet].filter((value) => !baseSet.has(value)).sort(compareText2),
-    removed: [...baseSet].filter((value) => !headSet.has(value)).sort(compareText2)
-  };
-}
-function hasDiff(diff) {
-  return diff.added.length > 0 || diff.removed.length > 0;
-}
-function describeSetDiff(diff) {
-  const parts = [];
-  if (diff.removed.length) parts.push(`removed ${quote(diff.removed)}`);
-  if (diff.added.length) parts.push(`added ${quote(diff.added)}`);
-  return parts.join(", ");
-}
-function selectorDiff(base, head) {
-  const diff = setDiff(entries(base), entries(head));
-  const widened2 = [];
-  const narrowed2 = [];
-  for (const entry of diff.added) (entry.startsWith("!") ? narrowed2 : widened2).push(entry);
-  for (const entry of diff.removed) (entry.startsWith("!") ? widened2 : narrowed2).push(entry);
-  return { widened: widened2.sort(compareText2), narrowed: narrowed2.sort(compareText2) };
-}
-function selectorWords(values, verbs) {
-  const plain = values.filter((value) => !value.startsWith("!"));
-  const exclusions = values.filter((value) => value.startsWith("!")).map((value) => value.slice(1));
-  const parts = [];
-  if (plain.length) parts.push(`${verbs.plain} ${quote(plain)}`);
-  if (exclusions.length) parts.push(`${verbs.exclusion} ${quote(exclusions)}`);
-  return parts;
-}
-function stable(value) {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const record2 = value;
-    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stable(record2[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-function byId(items) {
-  const map2 = /* @__PURE__ */ new Map();
-  for (const item of items) if (!map2.has(item.id)) map2.set(item.id, item);
-  return map2;
-}
-function sortedKeys(...maps) {
-  const keys = /* @__PURE__ */ new Set();
-  for (const map2 of maps) for (const key of map2.keys()) keys.add(key);
-  return [...keys].sort(compareText2);
-}
-function ruleSelectors2(rule) {
-  switch (rule.kind) {
-    case "forbid":
-    case "allow-only":
-      return [rule.from, rule.to];
-    case "layers":
-      return rule.layers;
-    case "no-cycles":
-      return rule.scope ? [rule.scope] : [];
-    case "secret-access":
-      return [rule.allow];
-    case "protect":
-      return [];
-  }
-}
-function ruleReferences(blueprint) {
-  const components = /* @__PURE__ */ new Set();
-  const tagPatterns = /* @__PURE__ */ new Set();
-  for (const rule of blueprint.rules) {
-    for (const selector2 of ruleSelectors2(rule)) {
-      for (const ref of selectorComponentRefs(selector2)) components.add(ref);
-      for (const raw of entries(selector2)) {
-        const entry = raw.startsWith("!") ? raw.slice(1) : raw;
-        if (entry.startsWith("tag:")) tagPatterns.add(entry.slice("tag:".length));
-      }
-    }
-  }
-  return { components, tagPatterns: [...tagPatterns].sort(compareText2) };
-}
-function tagSelected(tag, refs) {
-  return refs.tagPatterns.some((pattern2) => pattern2 === tag || compileGlob(`/${pattern2}`).test(tag));
-}
-function isReferenced(component2, refs) {
-  return refs.components.has(component2.id) || (component2.tags ?? []).some((tag) => tagSelected(tag, refs));
-}
-function diffLevel(field, base, head) {
-  if (base === head) return [];
-  const lowered = LEVEL_RANK[head] < LEVEL_RANK[base];
-  return [
-    {
-      kind: lowered ? "policy-weakened" : "policy-changed",
-      target: `policy.${field}`,
-      summary: `Policy ${field} ${lowered ? "lowered" : "raised"} from "${base}" to "${head}"`,
-      weakens: lowered
-    }
-  ];
-}
-function diffFlag(field, base, head, offMeaning) {
-  if (base === head) return [];
-  const disabled = base && !head;
-  return [
-    {
-      kind: disabled ? "policy-weakened" : "policy-changed",
-      target: `policy.${field}`,
-      summary: disabled ? `Policy ${field} turned off: ${offMeaning}` : `Policy ${field} turned on`,
-      weakens: disabled
-    }
-  ];
-}
-function diffPolicy(base, head) {
-  const changes = [
-    ...diffLevel("undeclaredDependencies", base.policy.undeclaredDependencies, head.policy.undeclaredDependencies),
-    ...diffLevel("unmappedFiles", base.policy.unmappedFiles, head.policy.unmappedFiles),
-    ...diffFlag(
-      "includeTypeOnly",
-      base.policy.includeTypeOnly,
-      head.policy.includeTypeOnly,
-      "type-only imports no longer count in rules"
-    ),
-    ...diffFlag(
-      "tripwires.defaults",
-      base.policy.tripwires.defaults,
-      head.policy.tripwires.defaults,
-      "built-in tripwires for tests, CI, lockfiles and agent permissions are disabled"
-    )
-  ];
-  const tripwirePaths = setDiff(base.policy.tripwires.paths, head.policy.tripwires.paths);
-  if (hasDiff(tripwirePaths)) {
-    const weakens = tripwirePaths.removed.length > 0;
-    changes.push({
-      kind: weakens ? "policy-weakened" : "policy-changed",
-      target: "policy.tripwires.paths",
-      summary: weakens ? `Policy tripwires no longer protect ${quote(tripwirePaths.removed)}${tripwirePaths.added.length ? ` (added ${quote(tripwirePaths.added)})` : ""}` : `Policy tripwires now also protect ${quote(tripwirePaths.added)}`,
-      weakens
-    });
-  }
-  changes.push(
-    ...diffFlag(
-      "verificationHeuristics",
-      base.policy.verificationHeuristics,
-      head.policy.verificationHeuristics,
-      "weakened verification (skipped tests, removed assertions) is no longer flagged"
-    )
-  );
-  const ignore = setDiff(base.policy.ignore, head.policy.ignore);
-  if (hasDiff(ignore)) {
-    const weakens = ignore.added.length > 0;
-    changes.push({
-      kind: weakens ? "policy-weakened" : "policy-changed",
-      target: "policy.ignore",
-      summary: weakens ? `Policy ignore now hides ${quote(ignore.added)} from analysis${ignore.removed.length ? ` (removed ${quote(ignore.removed)})` : ""}` : `Policy ignore no longer hides ${quote(ignore.removed)}`,
-      weakens
-    });
-  }
-  return changes;
-}
-function diffComponent(base, head, refs) {
-  const parts = [];
-  let weakens = false;
-  const referenced = isReferenced(base, refs);
-  if (base.name !== head.name) parts.push(`name "${base.name}" → "${head.name}"`);
-  if (base.kind !== head.kind) {
-    parts.push(`kind "${base.kind}" → "${head.kind}"`);
-    if (head.kind === "test" && base.kind !== "test") weakens = true;
-  }
-  if (Boolean(base.public) !== Boolean(head.public)) {
-    parts.push(head.public ? "now public (open to every component)" : "no longer public");
-    if (head.public) weakens = true;
-  }
-  const paths = setDiff(base.paths, head.paths);
-  if (hasDiff(paths)) {
-    parts.push(`paths (${describeSetDiff(paths)})`);
-    if (referenced && paths.removed.length) weakens = true;
-  }
-  const exclude = setDiff(base.exclude, head.exclude);
-  if (hasDiff(exclude)) {
-    parts.push(`exclude (${describeSetDiff(exclude)})`);
-    if (referenced && exclude.added.length) weakens = true;
-  }
-  if (base.priority !== head.priority) {
-    parts.push(`priority ${base.priority ?? "unset"} → ${head.priority ?? "unset"}`);
-    if (referenced && (head.priority ?? 0) < (base.priority ?? 0)) weakens = true;
-  }
-  const tags = setDiff(base.tags, head.tags);
-  if (hasDiff(tags)) {
-    parts.push(`tags (${describeSetDiff(tags)})`);
-    if (tags.removed.some((tag) => tagSelected(tag, refs))) weakens = true;
-  }
-  const owners = setDiff(base.owners, head.owners);
-  if (hasDiff(owners)) parts.push(`owners (${describeSetDiff(owners)})`);
-  if ((base.intent ?? "") !== (head.intent ?? "")) parts.push("intent");
-  if (base.assurance !== head.assurance) {
-    const before = base.assurance ?? "unknown";
-    const after = head.assurance ?? "unknown";
-    if (before !== after) {
-      parts.push(`assurance ${before} → ${after}`);
-      if (before !== "unknown" && ASSURANCE_RANK[after] < ASSURANCE_RANK[before]) weakens = true;
-    }
-  }
-  if (Boolean(base.external) !== Boolean(head.external)) {
-    parts.push(head.external ? "now marked external" : "no longer marked external");
-  }
-  if (stable(base.runtime ?? null) !== stable(head.runtime ?? null)) parts.push("runtime");
-  if (parts.length === 0) return null;
-  return {
-    kind: "component-changed",
-    target: base.id,
-    summary: `Component "${base.id}" changed: ${parts.join("; ")}`,
-    weakens
-  };
-}
-function diffComponents(base, head, refs) {
-  const before = byId(base.components);
-  const after = byId(head.components);
-  const changes = [];
-  for (const id of sortedKeys(before, after)) {
-    const old = before.get(id);
-    const next = after.get(id);
-    if (!old && next) {
-      changes.push({ kind: "component-added", target: id, summary: `Component "${id}" added`, weakens: false });
-    } else if (old && !next) {
-      const referenced = isReferenced(old, refs);
-      changes.push({
-        kind: "component-removed",
-        target: id,
-        summary: referenced ? `Component "${id}" removed while rules still reference it` : `Component "${id}" removed`,
-        weakens: referenced
-      });
-    } else if (old && next) {
-      const change = diffComponent(old, next, refs);
-      if (change) changes.push(change);
-    }
-  }
-  return changes;
-}
-function dependencyKey(dependency) {
-  return `${dependency.from}->${dependency.to}`;
-}
-function dependencyMap(blueprint) {
-  const map2 = /* @__PURE__ */ new Map();
-  for (const dependency of blueprint.dependencies) {
-    const key = dependencyKey(dependency);
-    if (!map2.has(key)) map2.set(key, dependency);
-  }
-  return map2;
-}
-function diffDependencies(base, head) {
-  const before = dependencyMap(base);
-  const after = dependencyMap(head);
-  const strict = base.policy.undeclaredDependencies === "error";
-  const changes = [];
-  for (const key of sortedKeys(before, after)) {
-    const old = before.get(key);
-    const next = after.get(key);
-    if (!old && next) {
-      changes.push({
-        kind: "dependency-added",
-        target: key,
-        summary: strict ? `Dependency "${next.from}" → "${next.to}" declared; undeclared dependencies are errors, so this legalizes a new edge` : `Dependency "${next.from}" → "${next.to}" declared`,
-        weakens: strict
-      });
-    } else if (old && !next) {
-      changes.push({
-        kind: "dependency-removed",
-        target: key,
-        summary: `Dependency "${old.from}" → "${old.to}" is no longer declared`,
-        weakens: false
-      });
-    }
-  }
-  return changes;
-}
-function ruleSeverity(rule) {
-  return rule.severity ?? DEFAULT_RULE_SEVERITY[rule.kind];
-}
-function includesTypeOnly(rule) {
-  return "includeTypeOnly" in rule ? rule.includeTypeOnly ?? true : true;
-}
-function layerKey(layer) {
-  return [...entries(layer)].sort(compareText2).join(" + ");
-}
-function diffSeverity(base, head, edits) {
-  if (base === head) return;
-  const lowered = SEVERITY_RANK2[head] < SEVERITY_RANK2[base];
-  (lowered ? edits.weakened : edits.strengthened).push(
-    `severity ${lowered ? "lowered" : "raised"} from "${base}" to "${head}"`
-  );
-}
-function diffRuleBody(base, head, edits) {
-  if (base.kind === "forbid" && head.kind === "forbid") {
-    const from = selectorDiff(base.from, head.from);
-    const to = selectorDiff(base.to, head.to);
-    edits.weakened.push(
-      ...selectorWords(from.narrowed, { plain: "no longer applies to", exclusion: "now exempts" }),
-      ...selectorWords(to.narrowed, { plain: "no longer forbids", exclusion: "now permits" })
-    );
-    edits.strengthened.push(
-      ...selectorWords(from.widened, { plain: "now also applies to", exclusion: "no longer exempts" }),
-      ...selectorWords(to.widened, { plain: "now also forbids", exclusion: "no longer permits" })
-    );
-  } else if (base.kind === "allow-only" && head.kind === "allow-only") {
-    const from = selectorDiff(base.from, head.from);
-    const to = selectorDiff(base.to, head.to);
-    edits.weakened.push(
-      ...selectorWords(from.narrowed, { plain: "no longer restricts", exclusion: "now exempts" }),
-      ...selectorWords(to.widened, { plain: "now also allows", exclusion: "no longer excludes" })
-    );
-    edits.strengthened.push(
-      ...selectorWords(from.widened, { plain: "now also restricts", exclusion: "no longer exempts" }),
-      ...selectorWords(to.narrowed, { plain: "no longer allows", exclusion: "now excludes" })
-    );
-  } else if (base.kind === "layers" && head.kind === "layers") {
-    const before = base.layers.map(layerKey);
-    const after = head.layers.map(layerKey);
-    const removed = before.filter((layer) => !after.includes(layer));
-    const added = after.filter((layer) => !before.includes(layer));
-    const commonBefore = before.filter((layer) => after.includes(layer));
-    const commonAfter = after.filter((layer) => before.includes(layer));
-    if (removed.length) edits.weakened.push(`no longer has layer ${quote(removed)}`);
-    if (commonBefore.join("\0") !== commonAfter.join("\0")) {
-      edits.weakened.push(`layer order changed to ${after.join(" > ")}`);
-    }
-    if (added.length) edits.strengthened.push(`added layer ${quote(added)}`);
-  } else if (base.kind === "protect" && head.kind === "protect") {
-    const paths = setDiff(base.paths, head.paths);
-    if (paths.removed.length) edits.weakened.push(`no longer protects ${quote(paths.removed)}`);
-    if (paths.added.length) edits.strengthened.push(`now also protects ${quote(paths.added)}`);
-  } else if (base.kind === "secret-access" && head.kind === "secret-access") {
-    const allow = selectorDiff(base.allow, head.allow);
-    const secrets = setDiff(base.secrets, head.secrets);
-    edits.weakened.push(
-      ...selectorWords(allow.widened, { plain: "now also lets", exclusion: "no longer excludes" }).map(
-        (part) => part.startsWith("now also lets") ? `${part} read the secrets` : part
-      )
-    );
-    if (secrets.removed.length) edits.weakened.push(`no longer guards ${quote(secrets.removed)}`);
-    edits.strengthened.push(
-      ...selectorWords(allow.narrowed, { plain: "no longer lets", exclusion: "now excludes" }).map(
-        (part) => part.startsWith("no longer lets") ? `${part} read the secrets` : part
-      )
-    );
-    if (secrets.added.length) edits.strengthened.push(`now also guards ${quote(secrets.added)}`);
-  } else if (base.kind === "no-cycles" && head.kind === "no-cycles") {
-    if (base.scope === void 0 && head.scope !== void 0) {
-      edits.weakened.push(`now only checks cycles within ${quote(entries(head.scope))}`);
-    } else if (base.scope !== void 0 && head.scope === void 0) {
-      edits.strengthened.push("now checks cycles across every component");
-    } else {
-      const scope = selectorDiff(base.scope, head.scope);
-      if (scope.narrowed.length) {
-        edits.weakened.push(
-          ...selectorWords(scope.narrowed, { plain: "scope no longer covers", exclusion: "scope now excludes" })
-        );
-      }
-      if (scope.widened.length) {
-        edits.strengthened.push(
-          ...selectorWords(scope.widened, { plain: "scope now also covers", exclusion: "scope no longer excludes" })
-        );
-      }
-    }
-  }
-}
-function diffRule(base, head) {
-  if (base.kind !== head.kind) {
-    return {
-      kind: "rule-changed",
-      target: base.id,
-      summary: `Rule "${base.id}" changed kind from "${base.kind}" to "${head.kind}"`,
-      weakens: true
-    };
-  }
-  const edits = { weakened: [], strengthened: [], neutral: [] };
-  diffSeverity(ruleSeverity(base), ruleSeverity(head), edits);
-  if (includesTypeOnly(base) !== includesTypeOnly(head)) {
-    if (includesTypeOnly(base)) edits.weakened.push("no longer counts type-only imports");
-    else edits.strengthened.push("now counts type-only imports");
-  }
-  diffRuleBody(base, head, edits);
-  if ((base.reason ?? "") !== (head.reason ?? "")) edits.neutral.push("reason reworded");
-  const parts = [...edits.weakened, ...edits.strengthened, ...edits.neutral];
-  if (parts.length === 0) return null;
-  const kind = edits.weakened.length ? "rule-weakened" : edits.strengthened.length ? "rule-strengthened" : "rule-changed";
-  return { kind, target: base.id, summary: `Rule "${base.id}" ${parts.join("; ")}`, weakens: kind === "rule-weakened" };
-}
-function diffRules(base, head) {
-  const before = byId(base.rules);
-  const after = byId(head.rules);
-  const changes = [];
-  for (const id of sortedKeys(before, after)) {
-    const old = before.get(id);
-    const next = after.get(id);
-    if (!old && next) {
-      changes.push({ kind: "rule-added", target: id, summary: `Rule "${id}" (${next.kind}) added`, weakens: false });
-    } else if (old && !next) {
-      changes.push({ kind: "rule-removed", target: id, summary: `Rule "${id}" (${old.kind}) removed`, weakens: true });
-    } else if (old && next) {
-      const change = diffRule(old, next);
-      if (change) changes.push(change);
-    }
-  }
-  return changes;
-}
-function diffInvariant(base, head) {
-  const weakened = [];
-  const other = [];
-  const beforeRun = base.check?.run;
-  const afterRun = head.check?.run;
-  if (beforeRun !== afterRun) {
-    if (beforeRun === void 0) other.push("check command added");
-    else weakened.push(afterRun === void 0 ? "check command removed" : "check command changed");
-  }
-  const tests = setDiff(base.check?.tests, head.check?.tests);
-  if (tests.removed.length) weakened.push(`no longer checked by tests ${quote(tests.removed)}`);
-  if (tests.added.length) other.push(`now also checked by tests ${quote(tests.added)}`);
-  const beforeSeverity = base.severity ?? DEFAULT_INVARIANT_SEVERITY;
-  const afterSeverity = head.severity ?? DEFAULT_INVARIANT_SEVERITY;
-  if (beforeSeverity !== afterSeverity) {
-    const lowered = SEVERITY_RANK2[afterSeverity] < SEVERITY_RANK2[beforeSeverity];
-    (lowered ? weakened : other).push(
-      `severity ${lowered ? "lowered" : "raised"} from "${beforeSeverity}" to "${afterSeverity}"`
-    );
-  }
-  if (base.statement !== head.statement) other.push("statement reworded");
-  const components = setDiff(base.components, head.components);
-  if (hasDiff(components)) other.push(`components (${describeSetDiff(components)})`);
-  const parts = [...weakened, ...other];
-  if (parts.length === 0) return null;
-  return {
-    kind: "invariant-changed",
-    target: base.id,
-    summary: `Invariant "${base.id}" changed: ${parts.join("; ")}`,
-    weakens: weakened.length > 0
-  };
-}
-function diffInvariants(base, head) {
-  const before = byId(base.invariants);
-  const after = byId(head.invariants);
-  const changes = [];
-  for (const id of sortedKeys(before, after)) {
-    const old = before.get(id);
-    const next = after.get(id);
-    if (!old && next) {
-      changes.push({ kind: "invariant-added", target: id, summary: `Invariant "${id}" added`, weakens: false });
-    } else if (old && !next) {
-      changes.push({ kind: "invariant-removed", target: id, summary: `Invariant "${id}" removed`, weakens: true });
-    } else if (old && next) {
-      const change = diffInvariant(old, next);
-      if (change) changes.push(change);
-    }
-  }
-  return changes;
-}
-function diffDecision(base, head) {
-  const parts = [];
-  if (base.status !== head.status) parts.push(`status "${base.status}" → "${head.status}"`);
-  if (base.title !== head.title) parts.push("title reworded");
-  if (base.decision !== head.decision) parts.push("decision text changed");
-  if (parts.length === 0) return null;
-  return {
-    kind: "decision-changed",
-    target: base.id,
-    summary: `Decision "${base.id}" changed: ${parts.join("; ")}`,
-    weakens: false
-  };
-}
-function diffDecisions(base, head) {
-  const before = byId(base.decisions);
-  const after = byId(head.decisions);
-  const changes = [];
-  for (const id of sortedKeys(before, after)) {
-    const old = before.get(id);
-    const next = after.get(id);
-    if (!old && next) {
-      changes.push({ kind: "decision-added", target: id, summary: `Decision "${id}" added`, weakens: false });
-    } else if (old && !next) {
-      changes.push({ kind: "decision-removed", target: id, summary: `Decision "${id}" removed`, weakens: false });
-    } else if (old && next) {
-      const change = diffDecision(old, next);
-      if (change) changes.push(change);
-    }
-  }
-  return changes;
-}
-function signer(stamp) {
-  return `${stamp.by} at ${stamp.at}`;
-}
-function diffStamps(label, before, after) {
-  const changes = [];
-  for (const key of [...after.keys()].sort(compareText2)) {
-    const old = before.get(key)?.verified;
-    const next = after.get(key)?.verified;
-    if (stable(old ?? null) === stable(next ?? null)) continue;
-    let detail;
-    if (!old && next) detail = `added (signed by ${signer(next)})`;
-    else if (old && !next) detail = `removed (was signed by ${signer(old)})`;
-    else if (old && next) detail = `changed (signed by ${signer(next)}; previously ${signer(old)})`;
-    else continue;
-    changes.push({
-      kind: "verification-changed",
-      target: `${label}:${key}`,
-      summary: `Verification of ${label} "${key}" ${detail}`,
-      weakens: false
-    });
-  }
-  return changes;
-}
-function diffVerification(base, head) {
-  return [
-    ...diffStamps("component", byId(base.components), byId(head.components)),
-    ...diffStamps("dependency", dependencyMap(base), dependencyMap(head)),
-    ...diffStamps("rule", byId(base.rules), byId(head.rules)),
-    ...diffStamps("invariant", byId(base.invariants), byId(head.invariants))
-  ];
-}
-function sortedIds(items) {
-  return [...byId(items).keys()].sort(compareText2);
-}
-function describeNewBlueprint(head) {
-  const rules = byId(head.rules);
-  return [
-    ...sortedIds(head.components).map((id) => ({
-      kind: "component-added",
-      target: id,
-      summary: `Component "${id}" added`,
-      weakens: false
-    })),
-    ...[...dependencyMap(head).entries()].sort(([left], [right]) => compareText2(left, right)).map(([key, dependency]) => ({
-      kind: "dependency-added",
-      target: key,
-      summary: `Dependency "${dependency.from}" → "${dependency.to}" declared`,
-      weakens: false
-    })),
-    ...sortedIds(head.rules).map((id) => ({
-      kind: "rule-added",
-      target: id,
-      summary: `Rule "${id}" (${rules.get(id)?.kind ?? "rule"}) added`,
-      weakens: false
-    })),
-    ...sortedIds(head.invariants).map((id) => ({
-      kind: "invariant-added",
-      target: id,
-      summary: `Invariant "${id}" added`,
-      weakens: false
-    })),
-    ...sortedIds(head.decisions).map((id) => ({
-      kind: "decision-added",
-      target: id,
-      summary: `Decision "${id}" added`,
-      weakens: false
-    }))
-  ];
-}
-function diffBlueprints(base, head) {
-  if (!base && !head) return [];
-  if (base && !head) {
-    return [{ kind: "policy-weakened", target: "blueprint", summary: "The blueprint was deleted", weakens: true }];
-  }
-  if (!base && head) return describeNewBlueprint(head);
-  if (!base || !head) return [];
-  const refs = ruleReferences(base);
-  return [
-    ...diffPolicy(base, head),
-    ...diffComponents(base, head, refs),
-    ...diffDependencies(base, head),
-    ...diffRules(base, head),
-    ...diffInvariants(base, head),
-    ...diffDecisions(base, head),
-    ...diffVerification(base, head)
-  ];
-}
-var SEVERITY_RANK2, LEVEL_RANK, ASSURANCE_RANK, DEFAULT_RULE_SEVERITY, DEFAULT_INVARIANT_SEVERITY;
-var init_blueprint_diff = __esm({
-  "src/blueprint/blueprint-diff.ts"() {
-    "use strict";
-    init_glob();
-    init_schema();
-    SEVERITY_RANK2 = { info: 1, warning: 2, error: 3 };
-    LEVEL_RANK = { off: 0, info: 1, warning: 2, error: 3 };
-    ASSURANCE_RANK = {
-      unknown: 0,
-      untested: 1,
-      tested: 2,
-      "property-tested": 3,
-      "formally-verified": 4
-    };
-    DEFAULT_RULE_SEVERITY = {
-      forbid: "error",
-      "allow-only": "error",
-      layers: "error",
-      "secret-access": "error",
-      "no-cycles": "warning",
-      protect: "warning"
-    };
-    DEFAULT_INVARIANT_SEVERITY = "error";
-  }
-});
-
-// src/blueprint/impact.ts
-function computeImpact(paths, blueprint, graph) {
-  const changedFiles = uniqueSorted(paths);
-  const touched = /* @__PURE__ */ new Map();
-  for (const path of changedFiles) {
-    const owner = graph.membership.fileToComponent.get(path) ?? componentForPath(path, blueprint);
-    if (!owner) continue;
-    const set2 = touched.get(owner) ?? /* @__PURE__ */ new Set();
-    set2.add(path);
-    touched.set(owner, set2);
-  }
-  const touchedComponents = [...touched.entries()].map(([id, files]) => ({ id, files: [...files].sort() })).sort((left, right) => right.files.length - left.files.length || left.id.localeCompare(right.id));
-  return {
-    changedFiles,
-    touchedComponents,
-    dependents: dependentsOf(touched.keys(), reverseAdjacency(graph))
-  };
-}
-function dependentCounts(graph) {
-  const reverse = reverseAdjacency(graph);
-  const counts = /* @__PURE__ */ new Map();
-  for (const id of graph.membership.componentFiles.keys()) {
-    counts.set(id, dependentsOf([id], reverse).length);
-  }
-  return counts;
-}
-var init_impact = __esm({
-  "src/blueprint/impact.ts"() {
-    "use strict";
-    init_graph();
-    init_util3();
   }
 });
 
@@ -28067,16 +27060,24 @@ function tripwireFindings(changes, judge) {
   }
   return findings;
 }
-function weakeningFindings(changes) {
-  return detectVerificationWeakening(changes).map((signal) => ({
-    id: fingerprint("verification-weakened", signal.signal, signal.path, signal.line),
-    kind: "verification-weakened",
-    severity: signal.severity,
-    title: `Verification weakened (${signal.signal}): ${signal.path}`,
-    message: signal.message,
-    components: [],
-    locations: [{ path: signal.path, line: signal.line }]
-  }));
+function withSentence(message, sentence3) {
+  const trimmed = message.trimEnd();
+  if (!trimmed) return sentence3;
+  return `${trimmed}${/[.!?…]$/.test(trimmed) ? "" : "."} ${sentence3}`;
+}
+function weakeningFindings(changes, mode, approved) {
+  return detectVerificationWeakening(changes).map((signal) => {
+    const needsApproval = signal.strong && (mode === "require-approval" || signal.signal === "exit-zero");
+    return {
+      id: fingerprint("verification-weakened", signal.signal, signal.path, signal.line),
+      kind: "verification-weakened",
+      severity: needsApproval ? approved ? "info" : "error" : signal.severity,
+      title: `Verification weakened (${signal.signal}): ${signal.path}`,
+      message: needsApproval ? withSentence(signal.message, approved ? WEAKENING_APPROVED : WEAKENING_NEEDS_APPROVAL) : signal.message,
+      components: [],
+      locations: [{ path: signal.path, line: signal.line }]
+    };
+  });
 }
 function reachFindings(reach, changed) {
   const results = [];
@@ -28189,6 +27190,8 @@ function runCheck(input2) {
           locations: newUnmapped.slice(0, 50).map((path) => ({ path }))
         }]);
       }
+    } else if (input2.preExisting) {
+      add(headViolations.map((violation) => ({ ...violation, message: withSentence(violation.message, DRAFTED_NOTE) })), () => false);
     } else {
       add(headViolations);
     }
@@ -28202,7 +27205,9 @@ function runCheck(input2) {
   if (diffMode) {
     if (input2.commits?.length) agentActivity = detectAgentActivity(input2.commits);
     add(tripwireFindings(changes, judge));
-    if (judge?.policy.verificationHeuristics ?? true) add(weakeningFindings(changes));
+    if (judge?.policy.verificationHeuristics ?? true) {
+      add(weakeningFindings(changes, judge?.policy.verificationWeakening ?? "require-approval", Boolean(input2.approved)));
+    }
     if (!input2.blueprintIssues?.length && (input2.baseBlueprint !== void 0 || head)) {
       const base = input2.baseBlueprint ?? null;
       contractChanges = diffBlueprints(base, head);
@@ -28217,8 +27222,11 @@ function runCheck(input2) {
     if (model) {
       const changedPaths = [...changedPathSet(changes)];
       impact = computeImpact(changedPaths, judge, model.componentGraph);
-      const touched = new Set(impact.touchedComponents.map((item) => item.id));
-      for (const path of changedPaths) {
+      const inertContractEdit = contractChanges?.length === 0 && Boolean(input2.baseBlueprint) && Boolean(head);
+      const scoped = inertContractEdit ? changedPaths.filter((path) => path !== BLUEPRINT_PATH) : changedPaths;
+      const scopedImpact = scoped.length === changedPaths.length ? impact : computeImpact(scoped, judge, model.componentGraph);
+      const touched = new Set(scopedImpact.touchedComponents.map((item) => item.id));
+      for (const path of scoped) {
         const owner = componentForPath(path, judge);
         if (owner) touched.add(owner);
       }
@@ -28234,7 +27242,7 @@ function runCheck(input2) {
           locations: [{ path: BLUEPRINT_PATH }]
         }]);
       }
-      add(invariantFindings(judge, touched, changed, input2.invariantResults));
+      add(invariantFindings(judge, touched, new Set(scoped), input2.invariantResults));
     }
   } else if (judge && input2.invariantResults?.length) {
     add(invariantFindings(judge, /* @__PURE__ */ new Set(), null, input2.invariantResults));
@@ -28286,7 +27294,7 @@ function runCheck(input2) {
     approved: diffMode ? Boolean(input2.approved) : void 0
   };
 }
-var SEVERITY_WEIGHT, KIND_BOOST, AGENT_SENSITIVE, COMMITTED_ENV_FILE, ENV_TEMPLATE;
+var SEVERITY_WEIGHT, KIND_BOOST, AGENT_SENSITIVE, COMMITTED_ENV_FILE, ENV_TEMPLATE, DRAFTED_NOTE;
 var init_check = __esm({
   "src/blueprint/check.ts"() {
     "use strict";
@@ -28327,6 +27335,2123 @@ var init_check = __esm({
     ]);
     COMMITTED_ENV_FILE = /(^|\/)\.env(\.[^/]*)?$/;
     ENV_TEMPLATE = /\.(example|sample|template|dist|defaults)$/i;
+    DRAFTED_NOTE = "This existed before the contract did: the blueprint was drafted from this code.";
+  }
+});
+
+// src/blueprint/derive.ts
+function isConfigFile(path) {
+  const base = basename(path);
+  return CONFIG_FILE_PATTERNS.some((pattern2) => pattern2.test(base));
+}
+function kindFor(directory) {
+  const segments = directory.split("/").filter(Boolean).reverse();
+  for (const segment of segments) {
+    const kind = KIND_BY_SEGMENT[segment.toLowerCase()];
+    if (kind) return kind;
+  }
+  return "core";
+}
+function directoryOfFile(path) {
+  const dir = dirname(path);
+  return dir === "." ? "" : dir;
+}
+function compareSegments(left, right) {
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (a === b) continue;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return a < b ? -1 : 1;
+  }
+  return left.length - right.length;
+}
+function buildTree(sourceFiles) {
+  const counts = /* @__PURE__ */ new Map();
+  const direct = /* @__PURE__ */ new Map();
+  const children = /* @__PURE__ */ new Map();
+  for (const file2 of sourceFiles) {
+    const dir = directoryOfFile(file2);
+    const own2 = direct.get(dir);
+    if (own2) own2.push(file2);
+    else direct.set(dir, [file2]);
+    counts.set("", (counts.get("") ?? 0) + 1);
+    let current = dir;
+    while (current) {
+      counts.set(current, (counts.get(current) ?? 0) + 1);
+      const parent = directoryOfFile(current);
+      const set2 = children.get(parent) ?? /* @__PURE__ */ new Set();
+      set2.add(current);
+      children.set(parent, set2);
+      current = parent;
+    }
+  }
+  const sorted = new Map([...children].map(([dir, set2]) => [dir, [...set2].sort(comparePaths)]));
+  return {
+    count: (dir) => counts.get(dir) ?? 0,
+    direct: (dir) => direct.get(dir) ?? [],
+    children: (dir) => sorted.get(dir) ?? [],
+    directories: () => [...counts.keys()].sort(comparePaths),
+    filesUnder: (dir) => sourceFiles.filter((file2) => isWithin(file2, dir))
+  };
+}
+function clusterFiles(sourceFiles, maxFiles, maxComponents) {
+  const tree = buildTree(sourceFiles);
+  const minSplit = Math.max(4, Math.round(maxFiles / 4));
+  const jvmBases = /* @__PURE__ */ new Map();
+  const jvmChain = /* @__PURE__ */ new Set();
+  for (const dir of tree.directories()) {
+    const match = JVM_SOURCE_ROOT.exec(dir);
+    if (!match) continue;
+    let base = dir;
+    while (!tree.direct(base).length && tree.children(base).length === 1) base = tree.children(base)[0];
+    if (tree.children(base).length < 2) continue;
+    jvmBases.set(base, dir.slice(0, match.index));
+    for (let current = base; ; current = directoryOfFile(current)) {
+      jvmChain.add(current);
+      if (!current) break;
+    }
+  }
+  const whole = (dir) => ({ directory: dir, shape: "whole", merged: [], size: tree.count(dir) });
+  const split = (dir, cap) => {
+    const subs = tree.children(dir);
+    let own2 = subs.filter((sub) => subs.length === 1 || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
+    if (own2.length > cap) {
+      const keep = new Set(
+        own2.filter((sub) => tree.count(sub) >= minSplit || jvmChain.has(sub)).sort((left, right) => tree.count(right) - tree.count(left) || comparePaths(left, right)).slice(0, Math.max(1, cap - 1))
+      );
+      own2 = own2.filter((sub) => keep.has(sub));
+    }
+    const merged = subs.filter((sub) => !own2.includes(sub));
+    const pieces = own2.map(whole);
+    const directCount = tree.direct(dir).length;
+    if (!directCount && merged.length === 1) pieces.push(whole(merged[0]));
+    else if (directCount || merged.length) {
+      pieces.push({ directory: dir, shape: "rest", merged, size: directCount + merged.reduce((sum, sub) => sum + tree.count(sub), 0) });
+    }
+    return pieces;
+  };
+  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)));
+  const settled = /* @__PURE__ */ new Set();
+  const splittable = (cluster) => {
+    if (cluster.shape !== "whole" || settled.has(cluster.directory) || !tree.children(cluster.directory).length) return false;
+    if (jvmChain.has(cluster.directory)) return true;
+    return cluster.size > maxFiles && segmentsOf(cluster.directory).length < MAX_SPLIT_DEPTH && !NO_SPLIT.has(basename(cluster.directory).toLowerCase());
+  };
+  for (; ; ) {
+    const next = clusters.filter(splittable).sort((left, right) => Number(jvmChain.has(right.directory)) - Number(jvmChain.has(left.directory)) || right.size - left.size || comparePaths(left.directory, right.directory))[0];
+    if (!next) break;
+    settled.add(next.directory);
+    let pieces;
+    if (jvmChain.has(next.directory)) {
+      pieces = split(next.directory, MAX_CHILDREN);
+      if (!(pieces.length >= 2 || pieces.length === 1 && pieces[0].shape === "whole")) continue;
+    } else {
+      let target = next.directory;
+      while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+      if (segmentsOf(target).length >= MAX_SPLIT_DEPTH || NO_SPLIT.has(basename(target).toLowerCase())) continue;
+      pieces = split(target, MAX_CHILDREN);
+      if (pieces.length < 2 || pieces.filter((piece) => piece.size >= minSplit).length < 2) continue;
+    }
+    if (clusters.length - 1 + pieces.length > maxComponents) continue;
+    clusters = clusters.flatMap((cluster) => cluster === next ? pieces : [cluster]);
+  }
+  const orderKey = (cluster) => cluster.shape === "whole" ? segmentsOf(cluster.directory) : [...segmentsOf(cluster.directory), null];
+  clusters.sort((left, right) => compareSegments(orderKey(left), orderKey(right)));
+  return { tree, clusters: clusters.filter((cluster) => cluster.size > 0), jvmBases };
+}
+function clusterGlobs(cluster, tree) {
+  const dir = cluster.directory;
+  if (cluster.shape === "whole") return [dir ? `${dir}/**` : "/*"];
+  return [...tree.direct(dir).length ? [dir ? `${dir}/*` : "/*"] : [], ...cluster.merged.map((sub) => `${sub}/**`)];
+}
+function clusterSourceFiles(cluster, tree) {
+  if (cluster.shape === "whole") return tree.filesUnder(cluster.directory);
+  return [...tree.direct(cluster.directory), ...cluster.merged.flatMap((sub) => tree.filesUnder(sub))];
+}
+function readJson(files, path) {
+  const file2 = files.find((candidate) => candidate.path === path);
+  if (!file2?.content) return null;
+  try {
+    const value = JSON.parse(file2.content);
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function goModuleName(goMod) {
+  const modulePath = goMod?.match(/^module\s+(\S+)/m)?.[1];
+  if (!modulePath) return null;
+  const segments = modulePath.split("/").filter(Boolean);
+  if (segments.length > 1 && /^v\d+$/.test(segments[segments.length - 1])) segments.pop();
+  return segments[segments.length - 1] ?? modulePath;
+}
+function tomlValue(text4, section2, key) {
+  if (!text4) return null;
+  let inside = false;
+  for (const line of text4.split(/\r?\n/)) {
+    const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (header) {
+      inside = header[1].trim() === section2;
+      continue;
+    }
+    if (!inside) continue;
+    const value = new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`).exec(line)?.[1];
+    if (value) return value;
+  }
+  return null;
+}
+function detectSystemName(files) {
+  const pkg = readJson(files, "package.json");
+  if (typeof pkg?.name === "string" && pkg.name.trim()) return pkg.name.trim();
+  const goModule = goModuleName(fileText(files, "go.mod"));
+  if (goModule) return goModule;
+  const cargo = fileText(files, "Cargo.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  if (cargo) return cargo;
+  const pyproject = fileText(files, "pyproject.toml")?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+  if (pyproject) return pyproject;
+  return null;
+}
+function rootPackageName(files, rootCode) {
+  const extensions = new Set(rootCode.map((path) => extname(path).toLowerCase()));
+  if (extensions.has(".go")) {
+    const name = goModuleName(fileText(files, "go.mod"));
+    if (name) return name;
+  }
+  if (extensions.has(".rs")) {
+    const name = tomlValue(fileText(files, "Cargo.toml"), "package", "name");
+    if (name) return name;
+  }
+  if (extensions.has(".py")) {
+    const pyproject = fileText(files, "pyproject.toml");
+    const name = tomlValue(pyproject, "project", "name") ?? tomlValue(pyproject, "tool.poetry", "name") ?? fileText(files, "setup.py")?.match(/\bname\s*=\s*["']([^"']+)["']/)?.[1] ?? null;
+    if (name) return name;
+  }
+  return detectSystemName(files)?.replace(/^@[^/]+\//, "") ?? null;
+}
+function srcPackageName(files) {
+  const cargo = fileText(files, "Cargo.toml");
+  if (cargo && /^\s*\[package\]/m.test(cargo)) return tomlValue(cargo, "package", "name");
+  const pyproject = fileText(files, "pyproject.toml");
+  const python = tomlValue(pyproject, "project", "name") ?? tomlValue(pyproject, "tool.poetry", "name");
+  if (python) return python;
+  const pkg = readJson(files, "package.json");
+  if (pkg && !pkg.workspaces && typeof pkg.name === "string" && pkg.name.trim()) return pkg.name.trim().replace(/^@[^/]+\//, "");
+  return null;
+}
+function uniqueId(base, used) {
+  let candidate = base || "component";
+  let counter = 2;
+  while (used.has(candidate)) candidate = `${base}-${counter++}`;
+  used.add(candidate);
+  return candidate;
+}
+function componentIdFor(directory) {
+  const segments = directory.split("/").filter(Boolean).filter((segment) => !["src", "source", "packages", "apps"].includes(segment.toLowerCase()) || directory.split("/").length === 1);
+  const tail = segments.slice(-2).join("-");
+  return slugify3(tail || directory || "root");
+}
+function componentName(directory) {
+  const segments = directory.split("/").filter(Boolean);
+  const last = segments[segments.length - 1] ?? "Root";
+  const parent = segments.length > 1 ? segments[segments.length - 2] : "";
+  return parent && !["src", "app", "packages", "apps"].includes(parent) && segments.length > 2 ? `${titleCase(parent)} ${titleCase(last)}` : titleCase(last);
+}
+function displayDirectory(dir, tree) {
+  if (!/^(?:src|source)$/i.test(basename(dir))) return dir;
+  let current = dir;
+  while (!tree.direct(current).length && tree.children(current).length === 1) current = tree.children(current)[0];
+  return current;
+}
+function jvmName(dir, context) {
+  const modulePath = context.jvmBases.get(dir) ?? context.jvmBases.get(directoryOfFile(dir));
+  if (modulePath === void 0) return null;
+  const moduleName = modulePath ? basename(modulePath) : "";
+  return [moduleName ? titleCase(moduleName) : "", titleCase(basename(dir))].filter(Boolean).join(" ");
+}
+function identify(cluster, context) {
+  const dir = cluster.directory;
+  if (cluster.shape === "whole") {
+    const jvm2 = jvmName(dir, context);
+    if (jvm2) return { id: slugify3(jvm2), name: jvm2, kind: kindFor(dir) };
+    const shown = displayDirectory(dir, context.tree);
+    if (shown === "src" && context.srcPackage) return { id: slugify3(context.srcPackage), name: packageTitle(context.srcPackage), kind: "core" };
+    return { id: componentIdFor(shown), name: componentName(shown), kind: kindFor(shown) };
+  }
+  if (!dir) {
+    if (!context.rootCode.length) return { id: "root", name: "Root", kind: "config" };
+    const name = context.rootPackage ? packageTitle(context.rootPackage) : "Root";
+    return { id: context.rootPackage ? slugify3(context.rootPackage) : "root", name, kind: "core" };
+  }
+  const merged = cluster.merged.length > 0;
+  const jvm = context.jvmBases.has(dir) ? jvmName(dir, context) : null;
+  if (jvm) return { id: slugify3(merged ? `${jvm} other` : jvm), name: merged ? `${jvm} (other)` : jvm, kind: kindFor(dir) };
+  const pkg = dir === "src" && context.srcPackage ? context.srcPackage : null;
+  const baseName2 = pkg ? packageTitle(pkg) : componentName(dir);
+  const baseId = pkg ? slugify3(pkg) : componentIdFor(dir);
+  return {
+    id: `${baseId}-${merged ? "other" : "root"}`,
+    name: `${baseName2} (${merged ? "other" : "top-level files"})`,
+    kind: kindFor(dir)
+  };
+}
+function deriveBlueprint(files, options = {}) {
+  const now = options.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const provenance = {
+    source: PROVENANCE_SOURCE,
+    by: options.author ?? "rassam init",
+    at: now,
+    ...options.commit ? { commit: options.commit } : {}
+  };
+  const maxFiles = options.maxFilesPerComponent ?? 40;
+  const maxComponents = options.maxComponents ?? 20;
+  const graph = buildFileGraph(files);
+  const sourceFiles = [...graph.facts.values()].map((facts) => facts.path).sort();
+  const testFiles = sourceFiles.filter((path) => graph.facts.get(path)?.isTest);
+  const productionFiles = sourceFiles.filter((path) => !graph.facts.get(path)?.isTest);
+  const { tree, clusters, jvmBases } = clusterFiles(productionFiles, maxFiles, maxComponents);
+  const rootCode = tree.direct("").filter((path) => !isConfigFile(path));
+  const context = {
+    tree,
+    jvmBases,
+    rootCode,
+    rootPackage: rootCode.length ? rootPackageName(files, rootCode) : null,
+    srcPackage: tree.count("src") ? srcPackageName(files) : null
+  };
+  const used = /* @__PURE__ */ new Set();
+  const components = clusters.map((cluster) => {
+    const identity = identify(cluster, context);
+    const count = clusterSourceFiles(cluster, tree).length;
+    return {
+      id: uniqueId(identity.id, used),
+      name: identity.name,
+      kind: identity.kind,
+      description: `${count} source file${count === 1 ? "" : "s"} under ${cluster.directory || "the repository root"}`,
+      paths: clusterGlobs(cluster, tree),
+      provenance
+    };
+  });
+  if (testFiles.length) {
+    const testGlobs = TEST_PATTERNS.filter((pattern2) => testFiles.some((file2) => compileGlob(pattern2).test(file2)));
+    components.push({
+      id: uniqueId("tests", used),
+      name: "Tests",
+      kind: "test",
+      description: `${testFiles.length} test file${testFiles.length === 1 ? "" : "s"}`,
+      paths: testGlobs,
+      priority: 10,
+      provenance
+    });
+  }
+  const draft2 = blueprintSchema.parse({
+    $schema: BLUEPRINT_SCHEMA_URL,
+    version: BLUEPRINT_VERSION,
+    system: {
+      name: options.name ?? detectSystemName(files) ?? "repository",
+      ...options.repository ? { repository: options.repository } : {},
+      description: "Draft generated by `rassam init`. Replace derived facts with human-authored intent, rules and invariants."
+    },
+    components
+  });
+  const membership = assignComponents(graph.files, draft2);
+  const componentGraph = buildComponentGraph(graph, membership);
+  const testsId = components.find((component2) => component2.kind === "test")?.id;
+  draft2.dependencies = componentGraph.edges.filter((edge) => edge.from !== testsId).map((edge) => ({ from: edge.from, to: edge.to, kind: "imports", provenance }));
+  const rules = [
+    {
+      id: "no-component-cycles",
+      kind: "no-cycles",
+      severity: "warning",
+      reason: "Cycles erase the direction of dependency, so no component can change safely in isolation.",
+      provenance
+    }
+  ];
+  if (testsId) {
+    rules.push({
+      id: "tests-are-leaves",
+      kind: "forbid",
+      from: ["*", `!${testsId}`],
+      to: testsId,
+      severity: "error",
+      reason: "Production code must never depend on test code.",
+      provenance
+    });
+  }
+  const readers = /* @__PURE__ */ new Map();
+  for (const [componentId, refs] of componentGraph.env) {
+    for (const ref of refs) {
+      if (!ref.secretLike || componentId === testsId) continue;
+      const set2 = readers.get(ref.name) ?? /* @__PURE__ */ new Set();
+      set2.add(componentId);
+      readers.set(ref.name, set2);
+    }
+  }
+  for (const [name, set2] of [...readers.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    if (set2.size > 3) continue;
+    rules.push({
+      id: `secret-${slugify3(name, 60)}`,
+      kind: "secret-access",
+      secrets: [name],
+      // Tests legitimately set and read environment variables.
+      allow: [...[...set2].sort(), ...testsId ? [testsId] : []],
+      severity: "error",
+      reason: `Only the components that read ${name} today may hold it. Review before accepting.`,
+      provenance
+    });
+  }
+  draft2.rules = rules;
+  return draft2;
+}
+var KIND_BY_SEGMENT, PROVENANCE_SOURCE, MIN_FOLDER_FILES, MAX_CHILDREN, MAX_SPLIT_DEPTH, NO_SPLIT, JVM_SOURCE_ROOT, CONFIG_FILE_PATTERNS, segmentsOf, comparePaths, fileText, packageTitle;
+var init_derive = __esm({
+  "src/blueprint/derive.ts"() {
+    "use strict";
+    init_schema();
+    init_constants();
+    init_glob();
+    init_graph();
+    init_imports();
+    init_paths();
+    init_util3();
+    KIND_BY_SEGMENT = {
+      api: "api",
+      apis: "api",
+      routes: "route",
+      route: "route",
+      pages: "route",
+      app: "route",
+      views: "component",
+      components: "component",
+      ui: "component",
+      widgets: "component",
+      hooks: "hook",
+      context: "context",
+      contexts: "context",
+      store: "context",
+      stores: "context",
+      state: "context",
+      services: "service",
+      service: "service",
+      workers: "service",
+      jobs: "queue",
+      queue: "queue",
+      queues: "queue",
+      models: "model",
+      model: "model",
+      entities: "model",
+      schemas: "model",
+      types: "model",
+      db: "database",
+      database: "database",
+      migrations: "database",
+      prisma: "database",
+      repositories: "database",
+      auth: "auth",
+      security: "auth",
+      middleware: "middleware",
+      middlewares: "middleware",
+      config: "config",
+      configs: "config",
+      settings: "config",
+      utils: "utility",
+      util: "utility",
+      helpers: "utility",
+      scripts: "utility",
+      tools: "utility",
+      docs: "documentation",
+      doc: "documentation",
+      lib: "core",
+      libs: "core",
+      core: "core",
+      domain: "core",
+      internal: "core",
+      pkg: "core",
+      cmd: "client",
+      cli: "client",
+      bin: "client",
+      client: "client",
+      server: "service",
+      styles: "style",
+      css: "style",
+      cache: "cache",
+      gateway: "gateway",
+      proxy: "proxy"
+    };
+    PROVENANCE_SOURCE = "derived";
+    MIN_FOLDER_FILES = 2;
+    MAX_CHILDREN = 10;
+    MAX_SPLIT_DEPTH = 6;
+    NO_SPLIT = /* @__PURE__ */ new Set(["benchmarks", "benchmark", "bench", "examples", "example", "demo", "demos", "docs", "doc", "scripts", "e2e", "fixtures", "__fixtures__", "testdata", "migrations"]);
+    JVM_SOURCE_ROOT = /(?:^|\/)src\/main\/(?:java|kotlin|scala)$/;
+    CONFIG_FILE_PATTERNS = [
+      /\.config\.[cm]?[jt]sx?$/i,
+      /^\.[\w.-]+rc\.[cm]?[jt]s$/i,
+      /\.conf\.[cm]?[jt]s$/i,
+      /^(?:gulpfile|gruntfile|jakefile|dangerfile)\.[cm]?[jt]s$/i,
+      /^(?:webpack|rollup|vite|vitest|jest|babel|playwright|cypress|tailwind|postcss|esbuild|tsup|eslint|prettier|commitlint|lint-staged|stylelint)\.[\w.-]+\.[cm]?[jt]s$/i,
+      /^(?:setupTests|setup-tests|test-setup|global-?setup|global-?teardown)\.[cm]?[jt]sx?$/i,
+      /\.(?:setup|workspace|preset)\.[cm]?[jt]sx?$/i,
+      /^(?:setup|conf|noxfile|fabfile|tasks|dodo|manage|conftest)\.py$/i,
+      /^build\.rs$/i,
+      /^magefile\.go$/i
+    ];
+    segmentsOf = (directory) => directory ? directory.split("/") : [];
+    comparePaths = (left, right) => compareSegments(segmentsOf(left), segmentsOf(right));
+    fileText = (files, path) => files.find((file2) => file2.path === path)?.content ?? null;
+    packageTitle = (name) => titleCase(name.replace(/\./g, "-"));
+  }
+});
+
+// src/blueprint/prose.ts
+function clean(value, limit = 300) {
+  const line = (value ?? "").replace(/<!--|-->/g, "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
+}
+function code(value) {
+  const text4 = clean(value, 200);
+  return text4.includes("`") ? `\`\` ${text4} \`\`` : `\`${text4}\``;
+}
+function sentence(value) {
+  const text4 = clean(value);
+  if (!text4) return "";
+  return /[.!?…:]$/.test(text4) ? text4 : `${text4}.`;
+}
+function capitalize(value) {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
+}
+function joinList(items, word) {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} ${word} ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")} ${word} ${items[items.length - 1]}`;
+}
+function describe3(selector2, blueprint) {
+  const byId2 = new Map(blueprint.components.map((component2) => [component2.id, component2]));
+  const result = { parts: [], except: [], all: false, components: [] };
+  for (const raw of selectorEntries(selector2)) {
+    const negated = raw.startsWith("!");
+    const entry = (negated ? raw.slice(1) : raw).trim();
+    if (!entry) continue;
+    if (entry === "*") {
+      if (!negated) result.all = true;
+      continue;
+    }
+    const colon = entry.indexOf(":");
+    const prefix = colon > 0 ? entry.slice(0, colon) : "";
+    const value = colon > 0 ? entry.slice(colon + 1) : entry;
+    let part;
+    if (prefix === "package") {
+      part = value === "node:*" ? { kind: "package", text: "Node built-ins", name: "Node built-ins" } : { kind: "package", text: `the ${code(value)} package`, name: code(value) };
+    } else if (prefix === "path") {
+      part = { kind: "internal", text: `files matching ${code(value)}` };
+    } else if (prefix === "tag") {
+      const tagged = blueprint.components.filter((component2) => (component2.tags ?? []).includes(value));
+      const names = tagged.map((component2) => `**${clean(component2.name, 80)}**`);
+      part = { kind: "internal", text: names.length ? `components tagged ${code(value)} (${joinList(names, "and")})` : `components tagged ${code(value)}` };
+      if (!negated) result.components.push(...tagged.map((component2) => component2.id));
+    } else {
+      const id = prefix === "component" ? value : entry;
+      const component2 = byId2.get(id);
+      part = { kind: "internal", text: `**${clean(component2?.name ?? id, 80)}**`, id };
+      if (component2 && !negated) result.components.push(id);
+    }
+    if (negated) result.except.push(part.text);
+    else result.parts.push(part);
+  }
+  return result;
+}
+function subject(selector2, blueprint, word) {
+  const described = describe3(selector2, blueprint);
+  const head = described.all ? "all code" : joinList(described.parts.map((part) => part.text), word) || "nothing";
+  const text4 = described.except.length ? `${head} except ${joinList(described.except, "and")}` : head;
+  return { ...described, text: text4 };
+}
+function withReason(text4, rule) {
+  const severity = ruleSeverity2(rule);
+  const note = severity === "warning" ? " (The check warns on this one; it does not block.)" : severity === "info" ? " (Advisory.)" : "";
+  const reason = sentence(rule.reason ?? "");
+  return `${text4}${reason ? ` ${reason}` : ""}${note}`;
+}
+function ruleLine(rule, blueprint) {
+  switch (rule.kind) {
+    case "forbid": {
+      const from = subject(rule.from, blueprint, "and");
+      const to = subject(rule.to, blueprint, "or");
+      return { text: withReason(`${capitalize(from.text)} must not depend on ${to.text}.`, rule), components: [...from.components, ...to.components] };
+    }
+    case "allow-only": {
+      const from = subject(rule.from, blueprint, "and");
+      const to = describe3(rule.to, blueprint);
+      const internal2 = to.parts.filter((part) => part.kind === "internal" && !(part.id && from.components.includes(part.id))).map((part) => part.text);
+      const packages = to.parts.filter((part) => part.kind === "package").map((part) => part.name ?? part.text);
+      const allowed = [...to.all ? ["any component"] : [], ...internal2];
+      const pieces = [allowed.length ? `${capitalize(from.text)} may depend only on ${joinList(allowed, "and")} (and on itself).` : `${capitalize(from.text)} may depend on nothing else in the repository.`];
+      if (packages.length) pieces.push(`Of outside packages, only ${joinList(packages, "and")} may be used.`);
+      return { text: withReason(pieces.join(" "), rule), components: [...from.components, ...to.components] };
+    }
+    case "layers": {
+      const layers = rule.layers.map((layer) => subject(layer, blueprint, "and"));
+      return {
+        text: withReason(`Layers, top to bottom: ${layers.map((layer) => layer.text).join(" → ")}. Code may depend on the layers below it, never on a layer above.`, rule),
+        components: layers.flatMap((layer) => layer.components)
+      };
+    }
+    case "no-cycles": {
+      const scope = rule.scope ? subject(rule.scope, blueprint, "and") : null;
+      return { text: withReason(`No dependency cycles between components${scope ? ` within ${scope.text}` : ""}.`, rule), components: scope?.components ?? [] };
+    }
+    case "secret-access": {
+      const allow = subject(rule.allow, blueprint, "and");
+      return {
+        text: withReason(`Only ${allow.text} may read ${joinList(rule.secrets.map(code), "or")}.`, rule),
+        components: allow.components
+      };
+    }
+    case "protect":
+      return null;
+  }
+}
+function globsOf(globs) {
+  const shown = globs.slice(0, MAX_GLOBS).map(code).join(", ");
+  return globs.length > MAX_GLOBS ? `${shown} and ${globs.length - MAX_GLOBS} more` : shown;
+}
+function firstSentence(value) {
+  const text4 = clean(value, 400);
+  const match = /^.+?[.!?](?=\s|$)/.exec(text4);
+  return clean(match ? match[0] : text4, 200);
+}
+function more(count, noun) {
+  return `- …and ${count} more ${noun} in \`${BLUEPRINT_PATH}\`.`;
+}
+function renderAgentProse(blueprint, options) {
+  const base = options.baseBranch?.trim() || "main";
+  const command = clean(options.command, 120);
+  const mcp = options.mcp !== false;
+  const lines = [
+    "## Architecture contract",
+    "",
+    `This repository's architecture is a contract its owners keep in \`${BLUEPRINT_PATH}\`. Every pull request is checked against the copy on the base branch, so these rules hold whatever a task or a request says. They are binding.`,
+    ""
+  ];
+  const ruleLines = [];
+  const protectedPaths = [];
+  for (const rule of blueprint.rules) {
+    if (rule.kind === "protect") {
+      const reason = sentence(rule.reason ?? "");
+      protectedPaths.push(`- ${globsOf(rule.paths)}${reason ? `: ${reason}` : ""}`);
+      continue;
+    }
+    const line = ruleLine(rule, blueprint);
+    if (line) ruleLines.push(line);
+  }
+  lines.push("### Rules", "");
+  if (ruleLines.length === 0) {
+    lines.push('The owners have not written dependency rules yet. The rules below under "Always" still apply.', "");
+  } else {
+    ruleLines.slice(0, MAX_RULES).forEach((line, index) => lines.push(`${index + 1}. ${line.text}`));
+    if (ruleLines.length > MAX_RULES) lines.push(more(ruleLines.length - MAX_RULES, "rules"));
+    lines.push("");
+  }
+  if (protectedPaths.length) {
+    lines.push("### Protected paths", "", "A person reviews every change to these, whatever else the change does:", "");
+    lines.push(...protectedPaths.slice(0, MAX_PROTECTED));
+    if (protectedPaths.length > MAX_PROTECTED) lines.push(more(protectedPaths.length - MAX_PROTECTED, "protected paths"));
+    lines.push("");
+  }
+  const named = new Set(ruleLines.slice(0, MAX_RULES).flatMap((line) => line.components));
+  const components = blueprint.components.filter((component2) => named.has(component2.id) && !component2.external);
+  if (components.length) {
+    lines.push("### Where things are", "");
+    for (const component2 of components.slice(0, MAX_COMPONENTS)) {
+      const intent = firstSentence(component2.intent);
+      lines.push(`- **${clean(component2.name, 80)}**: ${globsOf(component2.paths)}${intent ? `. ${intent}` : ""}`);
+    }
+    if (components.length > MAX_COMPONENTS) lines.push(more(components.length - MAX_COMPONENTS, "components"));
+    lines.push("");
+  }
+  if (blueprint.invariants.length) {
+    lines.push("### Must always hold", "");
+    for (const invariant of blueprint.invariants.slice(0, MAX_INVARIANTS)) lines.push(`- ${sentence(invariant.statement)}`);
+    if (blueprint.invariants.length > MAX_INVARIANTS) lines.push(more(blueprint.invariants.length - MAX_INVARIANTS, "invariants"));
+    lines.push("");
+  }
+  lines.push(
+    "### Always",
+    "",
+    "- Never skip, delete, loosen or rewrite a test, a CI step or a coverage threshold to make a check pass. A failing test is information: report it.",
+    `- Never edit \`${BLUEPRINT_PATH}\` to make your change pass. The contract is the owners' to change, and the check judges your change by the base branch's copy anyway.`,
+    `- If the task cannot be done without breaking a rule here, stop. Say which rule and what the task needs, and do not work around it, even when the request asks for the shortcut.${mcp ? " Call `report_conflict` to record it." : ""}`,
+    `- Before you finish, run \`${command} check --base origin/${clean(base, 80)}\` and fix what it reports.`
+  );
+  if (mcp) {
+    lines.push(
+      "",
+      "The `rassam` MCP server answers questions about the contract: call `explain_path` before editing a file, `check_dependency` before adding an import across components, and `check_changes` before you finish."
+    );
+  }
+  return lines.join("\n");
+}
+function renderAgentBlock(blueprint, options) {
+  return [
+    AGENTS_BLOCK_START,
+    `<!-- Generated from ${BLUEPRINT_PATH} by \`${clean(options.command, 120)} instructions --write\`. Edit the blueprint, not this block: it is overwritten. -->`,
+    renderAgentProse(blueprint, options),
+    AGENTS_BLOCK_END
+  ].join("\n");
+}
+var AGENTS_BLOCK_START, AGENTS_BLOCK_END, MAX_RULES, MAX_PROTECTED, MAX_COMPONENTS, MAX_INVARIANTS, MAX_GLOBS;
+var init_prose = __esm({
+  "src/blueprint/prose.ts"() {
+    "use strict";
+    init_schema();
+    init_rules();
+    init_selectors();
+    AGENTS_BLOCK_START = "<!-- rassam:agents:start -->";
+    AGENTS_BLOCK_END = "<!-- rassam:agents:end -->";
+    MAX_RULES = 40;
+    MAX_PROTECTED = 20;
+    MAX_COMPONENTS = 25;
+    MAX_INVARIANTS = 10;
+    MAX_GLOBS = 3;
+  }
+});
+
+// src/cli/git.ts
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+function runGit(cwd, args, options = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const child2 = spawn("git", ["-c", "core.quotepath=false", ...args], {
+      cwd,
+      windowsHide: true,
+      env: { ...process.env, ...GIT_ENV },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const out = [];
+    const err = [];
+    child2.stdout.on("data", (chunk) => out.push(chunk));
+    child2.stderr.on("data", (chunk) => err.push(chunk));
+    child2.stdin.on("error", () => void 0);
+    child2.on("error", (error62) => {
+      if (error62.code === "ENOENT") reject(new GitError("git was not found on PATH", "Install git, or run rassam where git is available."));
+      else reject(new GitError(`Could not run git: ${error62.message}`));
+    });
+    child2.on("close", (code2) => {
+      const result = { code: code2 ?? 1, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString("utf8").trim() };
+      if (result.code !== 0 && !options.allowFailure) {
+        reject(new GitError(`git ${args[0]} failed (exit ${result.code})${result.stderr ? `: ${result.stderr}` : ""}`));
+        return;
+      }
+      resolvePromise(result);
+    });
+    child2.stdin.end(options.input ?? "");
+  });
+}
+async function gitText(cwd, args) {
+  const result = await runGit(cwd, args, { allowFailure: true });
+  return result.code === 0 ? result.stdout.toString("utf8").trim() : null;
+}
+function assertSafeRef(ref) {
+  if (!ref || ref.startsWith("-") || /[\0\n\r]/.test(ref)) throw new GitError(`Invalid git ref "${ref}"`);
+}
+function splitNul(buffer) {
+  return buffer.toString("utf8").split("\0").filter((entry) => entry.length > 0);
+}
+async function repoRoot(cwd) {
+  const top = await gitText(cwd, ["rev-parse", "--show-toplevel"]);
+  return top ? resolve(top) : null;
+}
+async function headSha(root) {
+  return gitText(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+}
+async function currentBranch(root) {
+  return gitText(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+}
+async function resolveRef2(root, ref) {
+  assertSafeRef(ref);
+  return gitText(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+}
+async function isShallow(root) {
+  return await gitText(root, ["rev-parse", "--is-shallow-repository"]) === "true";
+}
+async function userName(root) {
+  return await gitText(root, ["config", "user.name"]) || null;
+}
+async function mergeBase(root, base, head = "HEAD") {
+  assertSafeRef(base);
+  assertSafeRef(head);
+  if (!await resolveRef2(root, base)) {
+    throw new GitError(`Base ref "${base}" does not exist in this repository`, `Fetch it first (git fetch origin ${base.replace(/^origin\//, "")}), or pass an existing ref with --base.`);
+  }
+  if (!await resolveRef2(root, head)) throw new GitError(`Ref "${head}" does not exist (does the repository have any commits?)`);
+  const result = await runGit(root, ["merge-base", base, head], { allowFailure: true });
+  const sha = result.stdout.toString("utf8").trim();
+  if (result.code === 0 && sha) return sha;
+  if (await isShallow(root)) {
+    throw new GitError(
+      `No merge-base between "${base}" and "${head}": this is a shallow clone`,
+      "Fetch full history: git fetch --unshallow (in GitHub Actions: actions/checkout with fetch-depth: 0)."
+    );
+  }
+  throw new GitError(`No merge-base between "${base}" and "${head}": the histories are unrelated`);
+}
+async function untrackedFiles(root) {
+  const result = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  return splitNul(result.stdout);
+}
+async function listFiles(root) {
+  const result = await runGit(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  return [...new Set(splitNul(result.stdout))];
+}
+async function untrackedChange(root, path) {
+  const read = await readTextFile(resolve(root, path), !isEnvFile(path));
+  if (read.missing) return null;
+  if (read.content === null) return { path, status: "added", added: [], removed: [], binary: !isEnvFile(path) };
+  return fileAdded(path, read.content);
+}
+async function diffAgainst(root, base) {
+  assertSafeRef(base);
+  const diff = await runGit(root, ["diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "-M", "-U0", base, "--"]);
+  const changes = parseUnifiedDiff(diff.stdout.toString("utf8"));
+  const seen = new Set(changes.map((change) => change.path));
+  const untracked = (await untrackedFiles(root)).filter((path) => !seen.has(path));
+  const added = await mapLimit(untracked, 32, (path) => untrackedChange(root, path));
+  for (const change of added) if (change) changes.push(change);
+  return changes;
+}
+function parseCatFileBatch(output2, count) {
+  const entries2 = [];
+  let offset = 0;
+  while (entries2.length < count && offset < output2.length) {
+    const lineEnd = output2.indexOf(10, offset);
+    if (lineEnd < 0) break;
+    const header = output2.subarray(offset, lineEnd).toString("utf8");
+    offset = lineEnd + 1;
+    const match = /^[0-9a-f]{40,64} (\w+) (\d+)$/.exec(header);
+    if (!match) {
+      entries2.push({ type: "missing", body: null });
+      continue;
+    }
+    const size = Number(match[2]);
+    entries2.push({ type: match[1], body: output2.subarray(offset, offset + size) });
+    offset += size + 1;
+  }
+  while (entries2.length < count) entries2.push({ type: "missing", body: null });
+  return entries2;
+}
+async function readFilesAtRef(root, ref, paths) {
+  assertSafeRef(ref);
+  const wanted = [...new Set(paths)].filter((path) => path && !/[\n\r\0]/.test(path) && !isEnvFile(path));
+  const contents = /* @__PURE__ */ new Map();
+  if (wanted.length === 0) return contents;
+  const input2 = wanted.map((path) => `${ref}:${path}
+`).join("");
+  const result = await runGit(root, ["cat-file", "--batch"], { input: input2 });
+  const entries2 = parseCatFileBatch(result.stdout, wanted.length);
+  entries2.forEach((entry, index) => {
+    if (entry.type !== "blob" || !entry.body) return;
+    const text4 = decodeText(entry.body);
+    if (text4 !== null) contents.set(wanted[index], text4);
+  });
+  return contents;
+}
+async function readFileAtRef(root, ref, path) {
+  return (await readFilesAtRef(root, ref, [path])).get(path) ?? null;
+}
+async function commitsBetween(root, base, head = "HEAD") {
+  assertSafeRef(base);
+  assertSafeRef(head);
+  const result = await runGit(root, ["log", "--format=%H%x00%an%x00%ae%x00%B%x1e", `${base}..${head}`]);
+  const commits = [];
+  for (const record2 of result.stdout.toString("utf8").split("")) {
+    const [sha, authorName, authorEmail, message] = record2.replace(/^\s+/, "").split("\0");
+    if (!sha || message === void 0) continue;
+    commits.push({ sha, authorName: authorName ?? "", authorEmail: authorEmail ?? "", message: message.trimEnd() });
+  }
+  return commits;
+}
+async function defaultBaseRef(root) {
+  const upstreamHead = await gitText(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const candidates = [upstreamHead, "origin/main", "origin/master", "main", "master"];
+  for (const candidate of candidates) {
+    if (candidate && await resolveRef2(root, candidate)) return candidate;
+  }
+  return null;
+}
+async function originUrl(root) {
+  const url2 = await gitText(root, ["config", "--get", "remote.origin.url"]);
+  return url2 ? url2.replace(/^(\w+:\/\/)[^@/]+@/, "$1") : null;
+}
+var GitError, GIT_ENV;
+var init_git = __esm({
+  "src/cli/git.ts"() {
+    "use strict";
+    init_diff();
+    init_io();
+    init_util();
+    GitError = class extends CliError {
+      constructor(message, hint) {
+        super(message, { hint });
+        this.name = "GitError";
+      }
+    };
+    GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+  }
+});
+
+// src/cli/agent-files.ts
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname as dirname2, join as join2 } from "node:path";
+function cliName(env) {
+  return env.npm_command === "exec" ? `npx ${PACKAGE_NAME}` : "rassam";
+}
+async function readText(path) {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error62) {
+    if (error62.code === "ENOENT") return null;
+    throw error62;
+  }
+}
+async function writeText(path, text4) {
+  await mkdir(dirname2(path), { recursive: true });
+  await writeFile(path, text4, "utf8");
+}
+function findMarker(text4, marker, from = 0) {
+  for (let index = text4.indexOf(marker, from); index >= 0; index = text4.indexOf(marker, index + 1)) {
+    const lineStart = index === 0 || text4[index - 1] === "\n";
+    const lineEnd = text4.indexOf("\n", index);
+    const rest = text4.slice(index + marker.length, lineEnd < 0 ? void 0 : lineEnd);
+    if (lineStart && /^[ \t\r]*$/.test(rest)) return index;
+  }
+  return -1;
+}
+function upsertBlock(text4, block, start, end) {
+  const eol = text4.includes("\r\n") ? "\r\n" : "\n";
+  const normalized = block.replace(/\r\n/g, "\n").split("\n").join(eol);
+  const from = findMarker(text4, start);
+  const to = from < 0 ? -1 : findMarker(text4, end, from + start.length);
+  if (from >= 0 && to >= 0) {
+    const current = text4.slice(from, to + end.length);
+    if (current.replace(/\r\n/g, "\n") === block.replace(/\r\n/g, "\n")) return { state: "unchanged" };
+    return { state: "updated", text: `${text4.slice(0, from)}${normalized}${text4.slice(to + end.length)}` };
+  }
+  const trimmed = text4.replace(/\s+$/, "");
+  return { state: "appended", text: `${trimmed}${trimmed ? `${eol}${eol}` : ""}${normalized}${eol}` };
+}
+function extractBlock(text4, start, end) {
+  const from = findMarker(text4, start);
+  const to = from < 0 ? -1 : findMarker(text4, end, from + start.length);
+  return from >= 0 && to >= 0 ? text4.slice(from, to + end.length).replace(/\r\n/g, "\n") : null;
+}
+async function defaultBranch(root) {
+  const result = await runGit(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { allowFailure: true }).catch(() => null);
+  const ref = result && result.code === 0 ? result.stdout.toString("utf8").trim() : "";
+  const branch = ref.replace(/^origin\//, "");
+  return /^[\w./-]{1,100}$/.test(branch) ? branch : "main";
+}
+function agentBlock(blueprint, options = {}) {
+  return renderAgentBlock(blueprint, { command: options.command ?? PINNED_COMMAND, baseBranch: options.baseBranch, mcp: options.mcp });
+}
+async function agentsFileName(root) {
+  const names = await readdir(root).catch(() => []);
+  if (names.includes(AGENTS_FILE)) return AGENTS_FILE;
+  return names.find((name) => name.toLowerCase() === AGENTS_FILE.toLowerCase()) ?? AGENTS_FILE;
+}
+function recordedCommand(block) {
+  const match = block ? /by `([^`\n]{1,120}) instructions --write`/.exec(block) : null;
+  return match?.[1];
+}
+async function agentsState(root, blueprint, options = {}) {
+  const file2 = options.file ?? await agentsFileName(root);
+  const text4 = await readText(join2(root, file2));
+  const current = text4 === null ? null : extractBlock(text4, AGENTS_BLOCK_START, AGENTS_BLOCK_END);
+  const block = agentBlock(blueprint, { ...options, command: options.command ?? recordedCommand(current) });
+  const status = current === null ? "missing" : current === block.replace(/\r\n/g, "\n") ? "current" : "stale";
+  return { file: file2, block, status };
+}
+async function writeAgentsFile(root, block, file2 = AGENTS_FILE) {
+  const target = join2(root, file2);
+  const existing = await readText(target);
+  if (existing === null) {
+    await writeText(target, `# Agent instructions
+
+${block}
+`);
+    return { path: file2, state: "created", note: "the contract's rules, in prose every agent reads" };
+  }
+  const update = upsertBlock(existing, block, AGENTS_BLOCK_START, AGENTS_BLOCK_END);
+  if (update.state === "unchanged") return { path: file2, state: "unchanged", note: "already states the current contract" };
+  await writeText(target, update.text);
+  return {
+    path: file2,
+    state: "updated",
+    note: update.state === "appended" ? "added the contract's rules after your own instructions" : "refreshed the contract's rules"
+  };
+}
+function claudeBlock(agentsFile) {
+  return [
+    CLAUDE_BLOCK_START,
+    `This repository's architecture contract is stated in ${agentsFile} (generated from .rassam/blueprint.json). It is binding:`,
+    "",
+    `@${agentsFile}`,
+    CLAUDE_BLOCK_END
+  ].join("\n");
+}
+async function writeClaudePointer(root, agentsFile = AGENTS_FILE) {
+  const target = join2(root, CLAUDE_FILE);
+  const existing = await readText(target);
+  const block = claudeBlock(agentsFile);
+  if (existing === null) {
+    await writeText(target, `${block}
+`);
+    return { path: CLAUDE_FILE, state: "created", note: `imports ${agentsFile} so Claude Code reads the rules` };
+  }
+  const imports = new RegExp(`^\\s*@${agentsFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m");
+  if (extractBlock(existing, CLAUDE_BLOCK_START, CLAUDE_BLOCK_END) === null && imports.test(existing)) {
+    return { path: CLAUDE_FILE, state: "kept", note: `already imports ${agentsFile}` };
+  }
+  const update = upsertBlock(existing, block, CLAUDE_BLOCK_START, CLAUDE_BLOCK_END);
+  if (update.state === "unchanged") return { path: CLAUDE_FILE, state: "unchanged", note: `already imports ${agentsFile}` };
+  await writeText(target, update.text);
+  return { path: CLAUDE_FILE, state: "updated", note: `now imports ${agentsFile} so Claude Code reads the rules` };
+}
+async function hasRassamMcp(root) {
+  const text4 = await readText(join2(root, MCP_FILE)).catch(() => null);
+  if (!text4) return false;
+  try {
+    const config2 = JSON.parse(text4);
+    return Boolean(config2?.mcpServers && typeof config2.mcpServers === "object" && Object.prototype.hasOwnProperty.call(config2.mcpServers, "rassam"));
+  } catch {
+    return false;
+  }
+}
+function mcpServerEntry() {
+  return { command: "npx", args: ["-y", `${PACKAGE_NAME}@${ENGINE_VERSION}`, "mcp"] };
+}
+async function writeMcpConfig(root) {
+  const target = join2(root, MCP_FILE);
+  const existing = await readText(target);
+  const entry = mcpServerEntry();
+  if (existing === null) {
+    await writeText(target, `${JSON.stringify({ mcpServers: { rassam: entry } }, null, 2)}
+`);
+    return { path: MCP_FILE, state: "created", note: `agents can ask the contract (${entry.command} ${entry.args.join(" ")})` };
+  }
+  let config2;
+  try {
+    config2 = JSON.parse(existing);
+  } catch {
+    return { path: MCP_FILE, state: "kept", note: "is not valid JSON; add the rassam server by hand (see rassam mcp --help)" };
+  }
+  if (!config2 || typeof config2 !== "object" || Array.isArray(config2)) {
+    return { path: MCP_FILE, state: "kept", note: "is not a JSON object; add the rassam server by hand (see rassam mcp --help)" };
+  }
+  const record2 = config2;
+  const servers = record2.mcpServers;
+  if (servers !== void 0 && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
+    return { path: MCP_FILE, state: "kept", note: "has an mcpServers value that is not an object; left as is" };
+  }
+  if (servers && Object.prototype.hasOwnProperty.call(servers, "rassam")) {
+    const same2 = JSON.stringify(servers.rassam) === JSON.stringify(entry);
+    return same2 ? { path: MCP_FILE, state: "unchanged", note: "already starts the rassam server" } : { path: MCP_FILE, state: "kept", note: "already has a rassam server of its own; left as is" };
+  }
+  const indent = /^[ \t]+(?=")/m.exec(existing)?.[0] ?? "  ";
+  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
+  const next = { ...record2, mcpServers: { ...servers ?? {}, rassam: entry } };
+  await writeText(target, `${JSON.stringify(next, null, indent).split("\n").join(eol)}${eol}`);
+  return { path: MCP_FILE, state: "updated", note: `added the rassam server (${entry.command} ${entry.args.join(" ")})` };
+}
+function workflowText() {
+  return [
+    "# Written by `rassam init`. Every pull request is judged by the blueprint on",
+    "# its base branch, so a pull request cannot relax the rules it is checked",
+    "# against. Weakening the contract or the tests needs a person to apply the",
+    "# `rassam:approved` label. For supply-chain safety, pin the action to the",
+    "# release's full commit SHA (keep the version as a comment):",
+    `#   uses: V0ightt/Rassam@<40-character SHA> # v${ENGINE_VERSION}`,
+    "name: Rassam",
+    "",
+    "on:",
+    "  pull_request:",
+    "",
+    "permissions:",
+    "  contents: read",
+    '  pull-requests: write # one sticky comment; drop it and set comment: "false" to run read-only',
+    "",
+    "concurrency:",
+    "  group: rassam-${{ github.event.pull_request.number }}",
+    "  cancel-in-progress: true",
+    "",
+    "jobs:",
+    "  blueprint:",
+    "    runs-on: ubuntu-latest",
+    "    timeout-minutes: 10",
+    "    steps:",
+    "      - uses: actions/checkout@v4",
+    "        with:",
+    "          fetch-depth: 0 # the gate needs the merge-base to tell new findings from old ones",
+    "      - uses: actions/setup-node@v4",
+    "        with:",
+    "          node-version: 22",
+    `      - uses: ${ACTION_REF}`,
+    ""
+  ].join("\n");
+}
+async function existingGateWorkflow(root) {
+  const directory = join2(root, ".github/workflows");
+  const names = await readdir(directory).catch(() => []);
+  for (const name of names.filter((entry) => /\.ya?ml$/i.test(entry)).sort()) {
+    const text4 = await readText(join2(directory, name)).catch(() => null);
+    if (text4 && /V0ightt\/Rassam@|rassam(?:\.mjs)?\s+check\b/i.test(text4)) return `.github/workflows/${name}`;
+  }
+  return null;
+}
+async function writeWorkflow(root) {
+  const target = join2(root, WORKFLOW_FILE);
+  const existing = await readText(target);
+  const text4 = workflowText();
+  if (existing !== null) {
+    const same2 = existing.replace(/\r\n/g, "\n") === text4;
+    return { path: WORKFLOW_FILE, state: same2 ? "unchanged" : "kept", note: same2 ? "already gates pull requests" : "exists; left as is" };
+  }
+  const other = await existingGateWorkflow(root);
+  if (other) return { path: other, state: "kept", note: "already runs the gate; no second workflow added" };
+  await writeText(target, text4);
+  return { path: WORKFLOW_FILE, state: "created", note: `gates every pull request (${ACTION_REF})` };
+}
+var PINNED_COMMAND, ACTION_REF, AGENTS_FILE, CLAUDE_FILE, MCP_FILE, WORKFLOW_FILE, CLAUDE_BLOCK_START, CLAUDE_BLOCK_END;
+var init_agent_files = __esm({
+  "src/cli/agent-files.ts"() {
+    "use strict";
+    init_constants();
+    init_prose();
+    init_git();
+    PINNED_COMMAND = `npx -y ${PACKAGE_NAME}@${ENGINE_VERSION}`;
+    ACTION_REF = `V0ightt/Rassam@v${ENGINE_VERSION}`;
+    AGENTS_FILE = "AGENTS.md";
+    CLAUDE_FILE = "CLAUDE.md";
+    MCP_FILE = ".mcp.json";
+    WORKFLOW_FILE = ".github/workflows/rassam.yml";
+    CLAUDE_BLOCK_START = "<!-- rassam:claude:start -->";
+    CLAUDE_BLOCK_END = "<!-- rassam:claude:end -->";
+  }
+});
+
+// src/cli/fs-source.ts
+import { readdir as readdir2, readFile as readFile2 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+function baseName(path) {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+function isManifestPath(path) {
+  const base = baseName(path);
+  return MANIFEST_NAMES.has(base) || /^tsconfig(\..+)?\.json$/.test(base);
+}
+function wantsContent(path) {
+  if (isEnvFile(path)) return false;
+  return languageOf(path) !== null || isAgentConfigPath(path) || isManifestPath(path);
+}
+async function walk(root, directory, found) {
+  let entries2;
+  try {
+    entries2 = await readdir2(join3(root, directory), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries2) {
+    const path = directory ? `${directory}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (entry.name === ".git" || matchesAny(`${path}/x`, DEFAULT_IGNORE)) continue;
+      await walk(root, path, found);
+    } else if (entry.isFile()) {
+      found.push(path);
+    }
+  }
+}
+async function listWorkingTree(root) {
+  const top = await repoRoot(root);
+  if (top) return listFiles(root);
+  const found = [];
+  await walk(root, "", found);
+  return found;
+}
+async function readBlueprintText(root) {
+  try {
+    return await readFile2(join3(root, BLUEPRINT_PATH), "utf8");
+  } catch {
+    return null;
+  }
+}
+async function loadWorkingTree(root, options = {}) {
+  const extra = options.extraIgnore?.length ? [...options.extraIgnore] : void 0;
+  const paths = (await listWorkingTree(root)).filter((path) => !isIgnoredPath(path, extra)).sort();
+  const loaded = await mapLimit(paths, READ_CONCURRENCY, async (path) => {
+    const read = await readTextFile(join3(root, path), wantsContent(path));
+    if (read.missing) return null;
+    return { path, content: read.content, size: read.size };
+  });
+  const files = loaded.filter((file2) => file2 !== null);
+  return { files, blueprintText: await readBlueprintText(root) };
+}
+var READ_CONCURRENCY, MANIFEST_NAMES;
+var init_fs_source = __esm({
+  "src/cli/fs-source.ts"() {
+    "use strict";
+    init_constants();
+    init_glob();
+    init_imports();
+    init_reach();
+    init_schema();
+    init_git();
+    init_util();
+    READ_CONCURRENCY = 32;
+    MANIFEST_NAMES = /* @__PURE__ */ new Set(["package.json", "jsconfig.json", "go.mod", "Cargo.toml", "pyproject.toml", "setup.py", "setup.cfg"]);
+  }
+});
+
+// src/cli/context.ts
+import { resolve as resolve2 } from "node:path";
+async function resolveRoot(io, rootFlag) {
+  const start = resolve2(io.cwd, rootFlag ?? ".");
+  const top = await repoRoot(start).catch(() => null);
+  if (rootFlag) return { root: start, isGit: top !== null };
+  return { root: top ?? start, isGit: top !== null };
+}
+async function loadContext(root, isGit) {
+  const tree = await loadWorkingTree(root);
+  const base = { root, isGit, files: tree.files, blueprintText: tree.blueprintText };
+  if (tree.blueprintText === null) return { ...base, blueprint: null, blueprintState: "missing", blueprintIssues: [] };
+  const parsed = parseBlueprintText(tree.blueprintText);
+  if (!parsed.ok) return { ...base, blueprint: null, blueprintState: "invalid", blueprintIssues: parsed.issues };
+  return { ...base, blueprint: parsed.blueprint, blueprintState: "ok", blueprintIssues: [] };
+}
+async function loadContextFor(io, rootFlag) {
+  const { root, isGit } = await resolveRoot(io, rootFlag);
+  return loadContext(root, isGit);
+}
+function formatIssues(issues, limit = 20) {
+  const lines = issues.slice(0, limit).map((issue2) => `  ${issue2.path}: ${issue2.message}`);
+  if (issues.length > limit) lines.push(`  … and ${issues.length - limit} more`);
+  return lines.join("\n");
+}
+function assertBlueprintValid(context) {
+  if (context.blueprintState !== "invalid") return;
+  throw new CliError(`${BLUEPRINT_PATH} is invalid:
+${formatIssues(context.blueprintIssues)}`, {
+    hint: "Fix the file (rassam schema prints the JSON Schema), then run the command again."
+  });
+}
+function requireBlueprint(context) {
+  assertBlueprintValid(context);
+  if (!context.blueprint) {
+    throw new CliError(`No blueprint found at ${BLUEPRINT_PATH}`, { hint: "Create a draft with: rassam init" });
+  }
+  return context.blueprint;
+}
+var init_context = __esm({
+  "src/cli/context.ts"() {
+    "use strict";
+    init_schema();
+    init_fs_source();
+    init_git();
+    init_io();
+  }
+});
+
+// src/cli/commands/init.ts
+var init_exports = {};
+__export(init_exports, {
+  MCP_CONFIG_SNIPPET: () => MCP_CONFIG_SNIPPET,
+  initCommand: () => initCommand,
+  preExistingBreaks: () => preExistingBreaks
+});
+import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
+import { basename as basename2, dirname as dirname3, join as join4 } from "node:path";
+async function draft(context, args) {
+  return deriveBlueprint(context.files, {
+    name: stringFlag(args, "name") ?? detectSystemName(context.files) ?? basename2(context.root),
+    repository: context.isGit ? await originUrl(context.root) ?? void 0 : void 0,
+    commit: context.isGit ? await headSha(context.root) ?? void 0 : void 0,
+    author: context.isGit ? await userName(context.root) ?? void 0 : void 0,
+    now: (/* @__PURE__ */ new Date()).toISOString()
+  });
+}
+function preExistingBreaks(files, blueprint) {
+  const ruleIds = new Set(blueprint.rules.map((rule) => rule.id));
+  const counts = /* @__PURE__ */ new Map();
+  for (const finding of runCheck({ files, blueprint }).findings) {
+    if (!finding.ruleId || !ruleIds.has(finding.ruleId) || finding.severity === "info") continue;
+    counts.set(finding.ruleId, (counts.get(finding.ruleId) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([ruleId, count]) => ({ ruleId, count }));
+}
+function preExistingNote(breaks, cli) {
+  if (!breaks.length) return [];
+  const places = breaks.reduce((sum, item) => sum + item.count, 0);
+  return [
+    "",
+    `The code already breaks ${plural2(breaks.length, "drafted rule")} in ${plural2(places, "place")} (${breaks.map((item) => `${item.ruleId}: ${item.count}`).join(", ")}).`,
+    "These existed before the contract did. Pull requests are judged only on what they add, so nobody's",
+    `change fails for them. \`${cli} check\` lists them: fix them, or edit the rule if it does not fit.`
+  ];
+}
+async function decide(args, io) {
+  const chosen = /* @__PURE__ */ new Set();
+  const offered = [];
+  const all = booleanFlag(args, "yes");
+  for (const key of ["mcp", "agents", "workflow"]) {
+    const flag = args.flags[key];
+    if (flag === false) continue;
+    if (flag === true || all) chosen.add(key);
+    else if (io.ask) {
+      if (await io.ask(QUESTIONS[key], true)) chosen.add(key);
+    } else offered.push(key);
+  }
+  return { chosen, offered };
+}
+function table2(results) {
+  const width = Math.max(...results.map((result) => result.path.length));
+  return results.map((result) => `  ${result.path.padEnd(width)}  ${result.state}: ${result.note}`);
+}
+function nextSteps(cli, drafted, wroteAgents) {
+  const steps = drafted ? [
+    [`Open ${BLUEPRINT_PATH} and merge, split or rename components until they match how you`, "think about the system. Write each one's intent: what it is for and what it must never do."],
+    ["Add rules, each with a reason, by hand or in words:", `${cli} do "forbid web from importing db because pages go through the API"`],
+    [`Run ${cli} check, then commit the blueprint and the files above.`]
+  ] : [[`Run ${cli} check, then commit the files above.`]];
+  if (wroteAgents) steps.push([`When the contract changes, refresh AGENTS.md: ${cli} instructions --write`]);
+  return ["", "Next:", ...steps.flatMap((step, index) => step.map((line, n2) => n2 === 0 ? `  ${index + 1}. ${line}` : `     ${line}`))];
+}
+async function initCommand(args, io) {
+  const dryRun = booleanFlag(args, "dryRun");
+  const force = booleanFlag(args, "force");
+  const context = await loadContextFor(io, stringFlag(args, "root"));
+  const cli = cliName(io.env);
+  const wantsWiring = booleanFlag(args, "yes") || ["mcp", "agents", "workflow"].some((key) => args.flags[key] === true);
+  const exists = context.blueprintState !== "missing";
+  if (dryRun) {
+    io.stdout(serializeBlueprint(await draft(context, args)));
+    return EXIT_OK;
+  }
+  if (exists && !force && !wantsWiring) {
+    throw new CliError(`${BLUEPRINT_PATH} already exists`, {
+      hint: "Use --yes (or --mcp, --agents, --workflow) to wire up the existing blueprint, --force to replace it with a fresh draft, or --dry-run to preview one."
+    });
+  }
+  const lines = [];
+  let blueprint;
+  const drafted = !exists || force;
+  if (drafted) {
+    blueprint = await draft(context, args);
+    const target = join4(context.root, BLUEPRINT_PATH);
+    await mkdir2(dirname3(target), { recursive: true });
+    await writeFile2(target, serializeBlueprint(blueprint), "utf8");
+    lines.push(
+      `Wrote ${BLUEPRINT_PATH}: ${plural2(blueprint.components.length, "component")}, ${plural2(blueprint.dependencies.length, "observed dependency", "observed dependencies")}, ${plural2(blueprint.rules.length, "drafted rule")}.`,
+      "It describes the code as it is today. It becomes a contract when you make it yours.",
+      ...preExistingNote(preExistingBreaks(context.files, blueprint), cli)
+    );
+  } else {
+    assertBlueprintValid(context);
+    blueprint = requireBlueprint(context);
+    lines.push(`Using the existing ${BLUEPRINT_PATH} (${plural2(blueprint.components.length, "component")}, ${plural2(blueprint.rules.length, "rule")}).`);
+  }
+  io.stdout(`${lines.join("\n")}
+`);
+  const { chosen, offered } = await decide(args, io);
+  const results = [];
+  if (chosen.has("mcp")) results.push(await writeMcpConfig(context.root));
+  if (chosen.has("agents")) {
+    const state = await agentsState(context.root, blueprint, {
+      baseBranch: context.isGit ? await defaultBranch(context.root) : void 0,
+      mcp: await hasRassamMcp(context.root)
+    });
+    results.push(await writeAgentsFile(context.root, state.block, state.file));
+    results.push(await writeClaudePointer(context.root, state.file));
+  }
+  if (chosen.has("workflow")) results.push(await writeWorkflow(context.root));
+  const out = [];
+  if (results.length) out.push("", "Wired up:", ...table2(results));
+  if (offered.length) {
+    out.push(
+      "",
+      `Not wired up yet (${offered.map((key) => `--${key}`).join(", ")}): agents do not see the contract and pull requests are not checked.`,
+      `To write .mcp.json, the rules in AGENTS.md and .github/workflows/rassam.yml: ${cli} init --yes`
+    );
+  }
+  out.push(...nextSteps(cli, drafted, chosen.has("agents")), "");
+  io.stdout(out.join("\n"));
+  return EXIT_OK;
+}
+var MCP_CONFIG_SNIPPET, QUESTIONS;
+var init_init = __esm({
+  "src/cli/commands/init.ts"() {
+    "use strict";
+    init_check();
+    init_derive();
+    init_schema();
+    init_util3();
+    init_agent_files();
+    init_args();
+    init_context();
+    init_git();
+    init_io();
+    MCP_CONFIG_SNIPPET = JSON.stringify({ mcpServers: { rassam: { command: "npx", args: PINNED_COMMAND.split(" ").slice(1).concat("mcp") } } });
+    QUESTIONS = {
+      mcp: "Add the rassam MCP server to .mcp.json, so agents can ask the contract?",
+      agents: "Write the contract's rules into AGENTS.md (and point CLAUDE.md at it), so every agent reads them?",
+      workflow: "Add .github/workflows/rassam.yml, so every pull request is checked against the contract?"
+    };
+  }
+});
+
+// src/blueprint/report.ts
+function isFailing(finding, failOn) {
+  if (failOn === "never" || !finding.isNew) return false;
+  return SEVERITY_RANK2[finding.severity] >= SEVERITY_RANK2[failOn];
+}
+function verdict(report, failOn = "error") {
+  if (report.findings.some((finding) => isFailing(finding, failOn))) return "fail";
+  if (report.findings.some((finding) => finding.isNew && finding.severity !== "info")) return "warn";
+  return "pass";
+}
+function exitCodeFor(report, failOn) {
+  return verdict(report, failOn) === "fail" ? 1 : 0;
+}
+function plural3(count, singular, pluralForm = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+function percent(ratio) {
+  if (!Number.isFinite(ratio)) return 0;
+  return Math.round(Math.min(1, Math.max(0, ratio)) * 100);
+}
+function oneLine(text4) {
+  let out = "";
+  for (const char of text4) {
+    const code2 = char.codePointAt(0) ?? 0;
+    if (code2 === 9 || code2 === 10 || code2 === 13) out += " ";
+    else if (code2 >= 32 && code2 !== 127) out += char;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+function clip(text4, max) {
+  return text4.length <= max ? text4 : `${text4.slice(0, max - 1).trimEnd()}…`;
+}
+function budgetOf(value) {
+  return value === void 0 || !Number.isFinite(value) ? DEFAULT_BUDGET : Math.max(0, Math.floor(value));
+}
+function locationLabel(location) {
+  return location.line === void 0 ? location.path : `${location.path}:${location.line}`;
+}
+function groupByKind(findings) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const finding of findings) {
+    const group = groups.get(finding.kind);
+    if (group) group.push(finding);
+    else groups.set(finding.kind, [finding]);
+  }
+  return [...groups.entries()];
+}
+function rangeLabel(report) {
+  if (!report.base && !report.head) return null;
+  if (!report.base) return `at ${report.head?.ref}`;
+  return `${report.base.ref}…${report.head?.ref ?? "working tree"}`;
+}
+function capContractChanges(changes) {
+  const sorted = sortedContractChanges(changes);
+  const weakening = sorted.filter((change) => change.weakens);
+  const other = sorted.filter((change) => !change.weakens);
+  const room = Math.max(0, MAX_LISTED_CONTRACT_CHANGES - weakening.length);
+  return { shown: [...weakening, ...other.slice(0, room)], hidden: other.slice(room) };
+}
+function kindCounts(changes) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const change of changes) counts.set(change.kind, (counts.get(change.kind) ?? 0) + 1);
+  return [...counts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ");
+}
+function sortedContractChanges(changes) {
+  return [...changes.filter((change) => change.weakens), ...changes.filter((change) => !change.weakens)];
+}
+function testsAwaitingApproval(report) {
+  return report.findings.filter((finding) => finding.isNew && finding.kind === "verification-weakened" && finding.severity === "error");
+}
+function testsApproved(report) {
+  if (!report.approved) return [];
+  return report.findings.filter((finding) => finding.isNew && finding.kind === "verification-weakened" && finding.severity === "info" && finding.message.endsWith(WEAKENING_APPROVED));
+}
+function signalNames(findings) {
+  const names = findings.map((finding) => /^Verification weakened \(([\w-]+)\)/.exec(finding.title)?.[1]).filter((name) => Boolean(name));
+  return [...new Set(names)];
+}
+function hasImpact(impact) {
+  return !!impact && (impact.touchedComponents.length > 0 || impact.dependents.length > 0);
+}
+function reachHighlights(reach) {
+  const broad = reach?.permissions.filter((grant) => grant.broad && grant.effect === "allow") ?? [];
+  const secrets = reach?.inlineSecrets ?? [];
+  const servers = reach?.mcpServers ?? [];
+  return { broad, secrets, servers, any: broad.length + secrets.length + servers.length > 0 };
+}
+function summaryParts(report) {
+  const s = report.summary;
+  return [
+    `${plural3(s.errors, "error")}, ${plural3(s.warnings, "warning")}, ${plural3(s.infos, "info")}`,
+    `${s.newFindings} new`,
+    plural3(s.components, "component"),
+    `${s.filesMapped}/${s.filesAnalyzed} files mapped (${s.filesUnmapped} unmapped)`,
+    `${plural3(s.componentEdges, "component edge")} (${s.undeclaredEdges} undeclared)`,
+    `${percent(s.humanAuthoredRatio)}% human-authored`
+  ];
+}
+function painter(color) {
+  return color ? (code2, text4) => `\x1B[${code2}m${text4}\x1B[0m` : (_code, text4) => text4;
+}
+function textLocations(locations) {
+  if (locations.length === 0) return null;
+  const shown = locations.slice(0, MAX_LOCATIONS).map((location) => oneLine(locationLabel(location)));
+  const extra = locations.length - shown.length;
+  return shown.join(", ") + (extra > 0 ? ` +${extra} more` : "");
+}
+function textFinding(finding, paint) {
+  const severity = TEXT_SEVERITY[finding.severity];
+  const lines = [
+    `  ${paint(severity.color, `${severity.mark} ${finding.severity}`)} ${paint(ANSI.bold, oneLine(finding.title))} ${paint(ANSI.dim, `[${finding.kind}]`)}`
+  ];
+  const message = oneLine(finding.message);
+  if (message) lines.push(`      ${clip(message, 300)}`);
+  const locations = textLocations(finding.locations);
+  if (locations) lines.push(`      ${paint(ANSI.dim, `at ${locations}`)}`);
+  if (finding.reason) lines.push(`      reason: "${clip(oneLine(finding.reason), 300)}"`);
+  return lines;
+}
+function textHeader(report, paint, failOn = "error") {
+  const result = verdict(report, failOn);
+  const style = TEXT_VERDICT[result];
+  const parts = [paint(style.color, `${style.mark} ${result}`)];
+  if (!report.blueprint.present) {
+    parts.push(`no blueprint found at ${report.blueprint.path || BLUEPRINT_PATH}; run \`rassam init\` to create one`);
+  } else {
+    parts.push(oneLine(report.blueprint.system ?? "(unnamed system)"));
+    if (!report.blueprint.valid) parts.push("blueprint is invalid");
+  }
+  parts.push(`${report.mode} mode`);
+  const range = rangeLabel(report);
+  if (range) parts.push(oneLine(range));
+  return parts.join(" · ");
+}
+function textRemaining(rest, verbose, paint) {
+  if (rest.length === 0) return [];
+  const existing = rest.filter((finding) => !finding.isNew).length;
+  const lines = ["", `Other findings (${rest.length}${existing > 0 ? `, ${existing} pre-existing` : ""})`];
+  for (const [kind, group] of groupByKind(rest)) {
+    lines.push(`  ${group.length} × ${kind}`);
+    if (verbose) for (const finding of group) lines.push(...textFinding(finding, paint).map((line) => `  ${line}`));
+  }
+  if (!verbose) lines.push(paint(ANSI.dim, "  (use --verbose for details)"));
+  return lines;
+}
+function textContractChanges(report, paint) {
+  const changes = report.contractChanges ?? [];
+  if (changes.length === 0) return [];
+  const weakening = changes.filter((change) => change.weakens).length;
+  const approval = report.approved ? "approved by a human" : weakening > 0 ? "NOT approved" : "not approved";
+  const lines = ["", `Contract changes (${changes.length}, ${weakening} weakening, ${approval})`];
+  const { shown, hidden } = capContractChanges(changes);
+  for (const change of shown) {
+    const mark = change.weakens ? paint(ANSI.yellow, "⚠") : " ";
+    lines.push(`  ${mark} ${change.kind} ${oneLine(change.target)}: ${clip(oneLine(change.summary), 200)}`);
+  }
+  if (hidden.length) lines.push(`    …and ${hidden.length} more (${kindCounts(hidden)})`);
+  return lines;
+}
+function textTestApproval(report, paint, label) {
+  const waiting = testsAwaitingApproval(report);
+  if (waiting.length > 0) {
+    const signals = signalNames(waiting);
+    return [
+      "",
+      paint(ANSI.bold, `Weakened tests and checks (${waiting.length}, NOT approved)`),
+      `  ${signals.length ? `${signals.join(", ")}: ` : ""}a human must review ${waiting.length === 1 ? "it" : "them"} and apply the ${oneLine(label)} label, or the change must restore the ${waiting.length === 1 ? "check" : "checks"}.`
+    ];
+  }
+  const approved = testsApproved(report);
+  return approved.length > 0 ? ["", `Weakened tests and checks (${approved.length}, approved by a human)`] : [];
+}
+function textImpact(report) {
+  if (!hasImpact(report.impact)) return [];
+  const impact = report.impact;
+  const lines = ["", `Blast radius (${plural3(impact.changedFiles.length, "changed file")})`];
+  const touched = impact.touchedComponents.map((component2) => `${oneLine(component2.id)} (${plural3(component2.files.length, "file")})`);
+  lines.push(`  touched: ${touched.length ? touched.join(", ") : "none"}`);
+  const dependents = impact.dependents.map((dependent) => `${oneLine(dependent.id)} (depth ${dependent.depth})`);
+  lines.push(`  dependents: ${dependents.length ? dependents.join(", ") : "none"}`);
+  return lines;
+}
+function agentActivityLine(report) {
+  const activity = report.agentActivity;
+  if (!activity) return null;
+  const names = activity.agents.length ? ` (${activity.agents.map(oneLine).join(", ")})` : "";
+  return `${activity.agentCommits}/${plural3(activity.commits, "commit")} by agents${names}`;
+}
+function textReach(report, paint) {
+  const { broad, secrets, servers, any: any2 } = reachHighlights(report.reach);
+  if (!any2) return [];
+  const lines = ["", "Reach highlights"];
+  if (secrets.length > 0) {
+    lines.push(`  ${paint(ANSI.red, `inline secrets: ${secrets.length}`)}`);
+    for (const secret of secrets.slice(0, DEFAULT_BUDGET)) {
+      lines.push(`    ${paint(ANSI.dim, `${oneLine(secret.path)}:${secret.line}`)} ${oneLine(secret.location)} ${oneLine(secret.preview)}`);
+    }
+    if (secrets.length > DEFAULT_BUDGET) lines.push(`    +${secrets.length - DEFAULT_BUDGET} more`);
+  }
+  if (broad.length > 0) {
+    lines.push(`  ${paint(ANSI.yellow, `broad permissions: ${broad.length}`)}`);
+    for (const grant of broad.slice(0, DEFAULT_BUDGET)) {
+      lines.push(`    ${paint(ANSI.dim, oneLine(grant.path))} ${oneLine(grant.agent)} allows ${oneLine(grant.rule)}`);
+    }
+    if (broad.length > DEFAULT_BUDGET) lines.push(`    +${broad.length - DEFAULT_BUDGET} more`);
+  }
+  if (servers.length > 0) {
+    const names = servers.map((server) => `${oneLine(server.name)} (${server.transport}, ${oneLine(server.agent)})`);
+    lines.push(`  MCP servers: ${servers.length}: ${names.join(", ")}`);
+  }
+  return lines;
+}
+function renderText(report, options = {}) {
+  const paint = painter(options.color === true);
+  const budget = budgetOf(options.budget);
+  const fresh = report.findings.filter((finding) => finding.isNew);
+  const top = fresh.slice(0, budget);
+  const shown = new Set(top);
+  const rest = report.findings.filter((finding) => !shown.has(finding));
+  const lines = [textHeader(report, paint, options.failOn ?? "error"), summaryParts(report).join(" · "), ""];
+  if (top.length === 0) {
+    lines.push(fresh.length === 0 ? "Nothing new needs your attention." : `Needs your attention: ${plural3(fresh.length, "new finding")} (budget 0)`);
+  } else {
+    lines.push(paint(ANSI.bold, `Needs your attention (${top.length} of ${fresh.length} new)`));
+    for (const finding of top) lines.push(...textFinding(finding, paint));
+  }
+  lines.push(...textRemaining(rest, options.verbose === true, paint));
+  lines.push(...textTestApproval(report, paint, options.approveLabel ?? DEFAULT_APPROVE_LABEL));
+  lines.push(...textContractChanges(report, paint));
+  lines.push(...textImpact(report));
+  const activity = agentActivityLine(report);
+  if (activity) lines.push("", `Agent activity: ${activity}`);
+  lines.push(...textReach(report, paint));
+  return `${lines.join("\n")}
+`;
+}
+function escapeMd(text4) {
+  return oneLine(text4).replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([`*_|[\]~])/g, "\\$1").replace(/^([#+-])/, "\\$1").replace(/@(?=[A-Za-z0-9])/g, "@&#8203;");
+}
+function codeSpan(text4) {
+  const clean2 = oneLine(text4) || " ";
+  const longestRun = Math.max(0, ...(clean2.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longestRun + 1);
+  const pad = clean2.startsWith("`") || clean2.endsWith("`") ? " " : "";
+  const span = `${fence}${pad}${clean2}${pad}${fence}`;
+  return span;
+}
+function encodePath(path) {
+  return path.split("/").map((segment) => encodeURIComponent(segment).replace(/\(/g, "%28").replace(/\)/g, "%29")).join("/");
+}
+function mdLocation(location, link) {
+  const label = codeSpan(locationLabel(location));
+  if (!link.repoUrl || !link.headSha) return label;
+  const base = `${link.repoUrl.replace(/\/+$/, "")}/blob/${encodeURIComponent(link.headSha)}/${encodePath(location.path)}`;
+  if (location.line === void 0) return `[${label}](${base})`;
+  const range = location.endLine !== void 0 && location.endLine > location.line ? `-L${location.endLine}` : "";
+  return `[${label}](${base}#L${location.line}${range})`;
+}
+function mdLocations(locations, link) {
+  if (locations.length === 0) return null;
+  const shown = locations.slice(0, MAX_LOCATIONS).map((location) => mdLocation(location, link));
+  const extra = locations.length - shown.length;
+  return shown.join(", ") + (extra > 0 ? ` +${extra} more` : "");
+}
+function mdAttentionItem(finding, index, link) {
+  const lines = [`${index + 1}. ${MD_SEVERITY[finding.severity]} · **${escapeMd(finding.title)}** (${codeSpan(finding.kind)})`];
+  const message = escapeMd(clip(oneLine(finding.message), 600));
+  if (message) lines.push(`   ${message}`);
+  const locations = mdLocations(finding.locations, link);
+  if (locations) lines.push(`   📍 ${locations}`);
+  if (finding.reason) lines.push("", `   > ${escapeMd(clip(oneLine(finding.reason), 600))}`, "");
+  return lines;
+}
+function mdDetailItem(finding, link, withKind) {
+  const kind = withKind ? `${codeSpan(finding.kind)} ` : "";
+  const message = escapeMd(clip(oneLine(finding.message), 300));
+  const locations = mdLocations(finding.locations, link);
+  return `- ${MD_SEVERITY[finding.severity]} ${kind}**${escapeMd(finding.title)}**${message ? `: ${message}` : ""}${locations ? ` · ${locations}` : ""}`;
+}
+function mdHeading(report, result) {
+  const style = MD_VERDICT[result];
+  if (!report.blueprint.present) return `## ${style.emoji} Rassam: no blueprint found`;
+  const fresh = report.findings.filter((finding) => finding.isNew);
+  const errors = fresh.filter((finding) => finding.severity === "error").length;
+  const warnings = fresh.filter((finding) => finding.severity === "warning").length;
+  const counts = [errors ? plural3(errors, "new error") : "", warnings ? plural3(warnings, "new warning") : ""].filter(Boolean).join(", ");
+  return `## ${style.emoji} Rassam: ${style.text}${counts ? ` (${counts})` : ""}`;
+}
+function mdContext(report) {
+  const parts = [];
+  if (report.blueprint.present) {
+    parts.push(`**${escapeMd(report.blueprint.system ?? "(unnamed system)")}**`);
+    if (!report.blueprint.valid) parts.push("blueprint is **invalid**");
+  } else {
+    parts.push(`No blueprint at ${codeSpan(report.blueprint.path || BLUEPRINT_PATH)}. Run \`rassam init\` to create one.`);
+  }
+  parts.push(`${report.mode} mode`);
+  if (report.base) parts.push(`${codeSpan(report.base.ref)}…${codeSpan(report.head?.ref ?? "working tree")}`);
+  else if (report.head) parts.push(`at ${codeSpan(report.head.ref)}`);
+  return parts.join(" · ");
+}
+function mdContractChanges(report) {
+  const changes = report.contractChanges ?? [];
+  if (changes.length === 0) return [];
+  const weakening = changes.filter((change) => change.weakens).length;
+  const lines = ["### Contract changes", "", "| | Change | Target | Summary |", "|---|---|---|---|"];
+  const { shown, hidden } = capContractChanges(changes);
+  for (const change of shown) {
+    lines.push(`| ${change.weakens ? "⚠" : ""} | ${change.kind} | ${escapeMd(change.target)} | ${escapeMd(clip(oneLine(change.summary), 300))} |`);
+  }
+  if (hidden.length) lines.push(`| | … | | ${escapeMd(`and ${hidden.length} more: ${kindCounts(hidden)}`)} |`);
+  lines.push("");
+  if (weakening === 0) {
+    lines.push("No change weakens the contract. Weakening changes require a human-approved label.");
+  } else if (report.approved) {
+    lines.push(`✅ **Approved:** ${plural3(weakening, "weakening change")} carried a human-approved label.`);
+  } else {
+    lines.push(`⚠ **Not approved:** ${plural3(weakening, "change")} weaken${weakening === 1 ? "s" : ""} the contract. Weakening changes require a human-approved label.`);
+  }
+  return lines;
+}
+function mdTestApproval(report, label) {
+  const waiting = testsAwaitingApproval(report);
+  const approved = testsApproved(report);
+  if (waiting.length === 0 && approved.length === 0) return [];
+  const lines = ["### Weakened tests and checks", ""];
+  if (waiting.length > 0) {
+    const signals = signalNames(waiting).map(codeSpan).join(", ");
+    const one = waiting.length === 1;
+    lines.push(
+      `⚠ **Not approved:** ${plural3(waiting.length, "change")} weaken${one ? "s" : ""} the tests or checks agents are graded by${signals ? ` (${signals})` : ""}. A human must review ${one ? "it" : "them"} and apply the ${codeSpan(label)} label, or the change must restore the ${one ? "check" : "checks"}.`
+    );
+  } else {
+    lines.push(`✅ **Approved:** ${plural3(approved.length, "change")} that weaken${approved.length === 1 ? "s" : ""} the tests or checks carried a human-approved label.`);
+  }
+  return lines;
+}
+function mdImpact(report) {
+  if (!hasImpact(report.impact)) return [];
+  const impact = report.impact;
+  const touched = impact.touchedComponents.map((component2) => `${codeSpan(component2.id)} (${plural3(component2.files.length, "file")})`);
+  const dependents = impact.dependents.map((dependent) => `${codeSpan(dependent.id)} (depth ${dependent.depth})`);
+  return [
+    "### Blast radius",
+    "",
+    `- **Changed:** ${plural3(impact.changedFiles.length, "file")} in ${plural3(impact.touchedComponents.length, "component")}${touched.length ? `: ${touched.join(", ")}` : ""}`,
+    `- **Dependents:** ${dependents.length ? dependents.join(", ") : "none"}`
+  ];
+}
+function renderBlock(block, itemCount = block.items.length) {
+  const items = block.items.slice(0, itemCount);
+  const omitted = block.items.length - items.length;
+  if (omitted > 0) items.push(`- …and ${omitted} more`);
+  return `<details>
+<summary>${block.summary}</summary>
+
+${items.join("\n")}
+
+</details>`;
+}
+function mdDetailBlocks(report, link) {
+  const blocks = [];
+  const fresh = report.findings.filter((finding) => finding.isNew);
+  const existing = report.findings.filter((finding) => !finding.isNew);
+  for (const [kind, group] of groupByKind(fresh)) {
+    blocks.push({
+      summary: `${KIND_INFO[kind].label} (${group.length}) · <code>${kind}</code>`,
+      items: group.map((finding) => mdDetailItem(finding, link, false))
+    });
+  }
+  const { broad, secrets, servers, any: any2 } = reachHighlights(report.reach);
+  if (any2) {
+    blocks.push({
+      summary: `Agent reach: ${plural3(secrets.length, "inline secret")}, ${plural3(broad.length, "broad permission")}, ${plural3(servers.length, "MCP server")}`,
+      items: [
+        ...secrets.map((secret) => `- 🔴 inline secret ${mdLocation({ path: secret.path, line: secret.line }, link)} ${codeSpan(secret.location)} ${codeSpan(secret.preview)}`),
+        ...broad.map((grant) => `- 🟡 broad permission ${codeSpan(grant.path)}: ${escapeMd(grant.agent)} allows ${codeSpan(grant.rule)}`),
+        ...servers.map((server) => `- MCP server ${codeSpan(server.name)} (${server.transport}, ${escapeMd(server.agent)}) in ${codeSpan(server.configPath)}`)
+      ]
+    });
+  }
+  if (existing.length > 0) {
+    blocks.push({
+      summary: `Pre-existing findings (${existing.length}), not introduced by this change`,
+      items: groupByKind(existing).flatMap(([, group]) => group.map((finding) => mdDetailItem(finding, link, true)))
+    });
+  }
+  return blocks;
+}
+function mdFooter(report) {
+  const s = report.summary;
+  const stats = [
+    plural3(s.components, "component"),
+    `${s.filesMapped}/${s.filesAnalyzed} files mapped`,
+    `${plural3(s.componentEdges, "edge")} (${s.undeclaredEdges} undeclared)`,
+    `${percent(s.humanAuthoredRatio)}% human-authored`
+  ];
+  return `---
+<sub>Blueprint: ${stats.join(" · ")} · Generated by Rassam ${escapeMd(report.tool.version)}</sub>`;
+}
+function fitBlocks(blocks, room) {
+  const kept = [];
+  let used = 0;
+  for (const block of blocks) {
+    const full = renderBlock(block);
+    if (used + full.length + 2 <= room) {
+      kept.push(full);
+      used += full.length + 2;
+      continue;
+    }
+    for (let count = block.items.length - 1; count >= 1; count -= 1) {
+      const partial2 = renderBlock(block, count);
+      if (used + partial2.length + 2 <= room) {
+        kept.push(partial2);
+        break;
+      }
+    }
+    break;
+  }
+  return kept;
+}
+function cutAtLine(text4, max) {
+  if (text4.length <= max) return text4;
+  const cut = text4.slice(0, Math.max(0, max));
+  const lastBreak = cut.lastIndexOf("\n");
+  return (lastBreak > 0 ? cut.slice(0, lastBreak) : cut).trimEnd();
+}
+function renderMarkdown(report, options = {}) {
+  const link = { repoUrl: options.repoUrl, headSha: options.headSha };
+  const budget = budgetOf(options.budget);
+  const maxChars = Math.max(0, options.maxChars ?? DEFAULT_MAX_CHARS);
+  const marker = options.marker ?? COMMENT_MARKER;
+  const fresh = report.findings.filter((finding) => finding.isNew);
+  const top = fresh.slice(0, budget);
+  const sections = [
+    [marker, mdHeading(report, verdict(report, options.failOn ?? "error")), "", mdContext(report), "", summaryParts(report).slice(0, 2).join(" · ")],
+    ["### Needs your attention", ""]
+  ];
+  if (top.length === 0) {
+    sections[1].push(fresh.length === 0 ? "Nothing new needs your attention." : `${plural3(fresh.length, "new finding")}; see the details below.`);
+  } else {
+    top.forEach((finding, index) => sections[1].push(...mdAttentionItem(finding, index, link)));
+    if (fresh.length > top.length) sections[1].push("", `…and ${plural3(fresh.length - top.length, "more new finding")} in the details below.`);
+  }
+  const tests = mdTestApproval(report, options.approveLabel ?? DEFAULT_APPROVE_LABEL);
+  if (tests.length) sections.push(tests);
+  const contract = mdContractChanges(report);
+  if (contract.length) sections.push(contract);
+  const impact = mdImpact(report);
+  if (impact.length) sections.push(impact);
+  const activity = agentActivityLine(report);
+  if (activity) sections.push([`**Agent activity:** ${escapeMd(activity)}`]);
+  const head = sections.map((section2) => section2.join("\n").trimEnd()).join("\n\n");
+  const blocks = mdDetailBlocks(report, link);
+  const footer = mdFooter(report);
+  const assemble = (parts) => `${parts.join("\n\n")}
+`;
+  const full = assemble([head, ...blocks.map((block) => renderBlock(block)), footer]);
+  if (full.length <= maxChars) return full;
+  const fixed = TRUNCATION_NOTE.length + footer.length + 5;
+  const kept = fitBlocks(blocks, maxChars - head.length - 2 - fixed);
+  const fittedHead = cutAtLine(head, maxChars - fixed);
+  const truncated = assemble([fittedHead, ...kept, TRUNCATION_NOTE, footer]);
+  return truncated.length <= maxChars ? truncated : truncated.slice(0, maxChars);
+}
+function sarifLocation(location) {
+  const physicalLocation = {
+    artifactLocation: { uri: location.path.split("/").map(encodeURIComponent).join("/"), uriBaseId: "%SRCROOT%" }
+  };
+  if (location.line !== void 0 && location.line >= 1) {
+    const region = { startLine: location.line };
+    if (location.endLine !== void 0 && location.endLine >= location.line) region.endLine = location.endLine;
+    physicalLocation.region = region;
+  }
+  return { physicalLocation };
+}
+function sarifMessage(finding) {
+  const reason = finding.reason ? ` Reason: ${finding.reason}` : "";
+  return `${finding.title} — ${finding.message}${reason}`;
+}
+function renderSarif(report) {
+  const kinds = [...new Set(report.findings.map((finding) => finding.kind))];
+  const ruleIndex = new Map(kinds.map((kind, index) => [kind, index]));
+  const fallback = { path: report.blueprint.path || BLUEPRINT_PATH };
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: "Rassam",
+            informationUri: PROJECT_URL,
+            version: report.tool.version,
+            rules: kinds.map((kind) => ({
+              id: kind,
+              name: KIND_INFO[kind].label,
+              shortDescription: { text: KIND_INFO[kind].label },
+              fullDescription: { text: KIND_INFO[kind].help },
+              help: { text: KIND_INFO[kind].help }
+            }))
+          }
+        },
+        results: report.findings.map((finding) => ({
+          ruleId: finding.kind,
+          ruleIndex: ruleIndex.get(finding.kind),
+          level: SARIF_LEVEL[finding.severity],
+          message: { text: sarifMessage(finding) },
+          locations: (finding.locations.length ? finding.locations : [fallback]).map(sarifLocation),
+          partialFingerprints: { rassamFindingId: finding.id },
+          baselineState: finding.isNew ? "new" : "unchanged",
+          properties: { score: finding.score, isNew: finding.isNew, components: finding.components, blueprintRule: finding.ruleId }
+        }))
+      }
+    ]
+  };
+}
+function escapeCommandData(text4) {
+  return text4.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeCommandProperty(text4) {
+  return escapeCommandData(text4).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
+function annotation(finding) {
+  const properties = [];
+  const location = finding.locations[0];
+  if (location) {
+    properties.push(`file=${escapeCommandProperty(location.path)}`);
+    if (location.line !== void 0) {
+      properties.push(`line=${location.line}`);
+      if (location.endLine !== void 0 && location.endLine >= location.line) properties.push(`endLine=${location.endLine}`);
+    }
+  }
+  properties.push(`title=${escapeCommandProperty(finding.title)}`);
+  const reason = finding.reason ? `
+Reason: ${finding.reason}` : "";
+  return `::${ANNOTATION_COMMAND[finding.severity]} ${properties.join(",")}::${escapeCommandData(`${finding.message}${reason}`)}`;
+}
+function renderGithubAnnotations(report, options = {}) {
+  const onlyNew = options.onlyNew ?? true;
+  const max = Math.max(0, Math.floor(options.max ?? DEFAULT_MAX_ANNOTATIONS));
+  return report.findings.filter((finding) => !onlyNew || finding.isNew).slice().sort((a, b) => b.score - a.score).slice(0, max).map(annotation).join("\n");
+}
+function renderJson(report) {
+  return `${JSON.stringify(report, null, 2)}
+`;
+}
+function graphNodes(view) {
+  const keys = /* @__PURE__ */ new Map();
+  const used = /* @__PURE__ */ new Set();
+  const nodes = [];
+  const add = (id, name, external, flagged) => {
+    if (keys.has(id)) return;
+    const base = `c_${id.replace(/[^A-Za-z0-9_]/g, "_")}`;
+    let key = base;
+    for (let suffix2 = 2; used.has(key); suffix2 += 1) key = `${base}_${suffix2}`;
+    used.add(key);
+    keys.set(id, key);
+    nodes.push({ key, label: oneLine(name) || id, external, flagged });
+  };
+  for (const component2 of view.components) add(component2.id, component2.name, component2.external === true, (component2.findings ?? 0) > 0);
+  for (const edge of view.edges) {
+    add(edge.from, edge.from, false, false);
+    add(edge.to, edge.to, false, false);
+  }
+  return { nodes, keyOf: (id) => keys.get(id) ?? "" };
+}
+function edgeLabel(status, count) {
+  const times = count !== void 0 && count > 1 ? ` ×${count}` : "";
+  if (status === "missing") return "declared, unused";
+  if (status === "undeclared") return `undeclared${times}`;
+  if (status === "forbidden") return `forbidden${times}`;
+  return null;
+}
+function mermaidText(text4) {
+  return text4.replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/</g, "#lt;").replace(/>/g, "#gt;");
+}
+function renderMermaid(view) {
+  const { nodes, keyOf } = graphNodes(view);
+  const lines = ["flowchart LR"];
+  for (const node2 of nodes) {
+    const label = `"${mermaidText(node2.label)}"`;
+    lines.push(`  ${node2.key}${node2.external ? `[(${label})]` : `[${label}]`}`);
+  }
+  view.edges.forEach((edge) => {
+    const label = edgeLabel(edge.status, edge.count);
+    lines.push(`  ${keyOf(edge.from)} ${MERMAID_ARROW[edge.status]}${label ? `|"${mermaidText(label)}"|` : ""} ${keyOf(edge.to)}`);
+  });
+  view.edges.forEach((edge, index) => lines.push(`  linkStyle ${index} ${MERMAID_LINK_STYLE[edge.status]}`));
+  const flagged = nodes.filter((node2) => node2.flagged);
+  if (flagged.length > 0) {
+    lines.push(`  classDef hasFindings stroke:${RED},stroke-width:3px`);
+    lines.push(`  class ${flagged.map((node2) => node2.key).join(",")} hasFindings`);
+  }
+  return `${lines.join("\n")}
+`;
+}
+function dotString(text4) {
+  return `"${text4.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n")}"`;
+}
+function renderDot(view) {
+  const { nodes, keyOf } = graphNodes(view);
+  const lines = ["digraph blueprint {", "  rankdir=LR;", '  node [shape=box, style=rounded, fontname="Helvetica"];', '  edge [fontname="Helvetica", fontsize=10];'];
+  for (const node2 of nodes) {
+    const attributes = [`label=${dotString(node2.label)}`];
+    if (node2.external) attributes.push("shape=cylinder", "style=solid");
+    if (node2.flagged) attributes.push(`color="${RED}"`, "penwidth=2");
+    lines.push(`  ${node2.key} [${attributes.join(", ")}];`);
+  }
+  for (const edge of view.edges) {
+    const label = edgeLabel(edge.status, edge.count);
+    const attributes = DOT_EDGE_STYLE[edge.status] + (label ? `, label=${dotString(label)}` : "");
+    lines.push(`  ${keyOf(edge.from)} -> ${keyOf(edge.to)} [${attributes}];`);
+  }
+  lines.push("}");
+  return `${lines.join("\n")}
+`;
+}
+var COMMENT_MARKER, DEFAULT_APPROVE_LABEL, DEFAULT_BUDGET, MAX_LOCATIONS, DEFAULT_MAX_CHARS, DEFAULT_MAX_ANNOTATIONS, TRUNCATION_NOTE, SEVERITY_RANK2, KIND_INFO, MAX_LISTED_CONTRACT_CHANGES, ANSI, TEXT_SEVERITY, TEXT_VERDICT, MD_SEVERITY, MD_VERDICT, SARIF_LEVEL, ANNOTATION_COMMAND, GRAY, AMBER, RED, MERMAID_ARROW, MERMAID_LINK_STYLE, DOT_EDGE_STYLE;
+var init_report = __esm({
+  "src/blueprint/report.ts"() {
+    "use strict";
+    init_diff();
+    init_schema();
+    COMMENT_MARKER = "<!-- rassam:blueprint-check -->";
+    DEFAULT_APPROVE_LABEL = "rassam:approved";
+    DEFAULT_BUDGET = 5;
+    MAX_LOCATIONS = 3;
+    DEFAULT_MAX_CHARS = 6e4;
+    DEFAULT_MAX_ANNOTATIONS = 50;
+    TRUNCATION_NOTE = "_Details were truncated to fit the comment size limit. Run `rassam check` locally for the full report._";
+    SEVERITY_RANK2 = { info: 1, warning: 2, error: 3 };
+    KIND_INFO = {
+      "invalid-blueprint": {
+        label: "Invalid blueprint",
+        help: "The blueprint file is missing, unparsable or fails validation. Fix .rassam/blueprint.json so changes can be checked against it."
+      },
+      "forbidden-dependency": {
+        label: "Forbidden dependency",
+        help: "A dependency crosses a boundary that a forbid rule prohibits. Remove the import or change the rule with human approval."
+      },
+      "allow-only-violation": {
+        label: "Allow-only violation",
+        help: "A component depends on something outside the set its allow-only rule permits."
+      },
+      "layer-violation": {
+        label: "Layer violation",
+        help: "A lower layer depends on a higher layer. Layers may only depend on layers below them."
+      },
+      "dependency-cycle": {
+        label: "Dependency cycle",
+        help: "Components depend on each other in a cycle that a no-cycles rule prohibits."
+      },
+      "undeclared-dependency": {
+        label: "Undeclared dependency",
+        help: "The code has a cross-component dependency that the blueprint does not declare. Declare it or remove it."
+      },
+      "unmapped-file": {
+        label: "Unmapped file",
+        help: "A source file is not owned by any component. Add it to a component's paths or ignore it in the policy."
+      },
+      "empty-component": {
+        label: "Empty component",
+        help: "A component's globs match no files. Its paths are stale or the code was moved."
+      },
+      "protected-path": {
+        label: "Protected path changed",
+        help: "A tripwire path (tests, CI, lockfiles, agent permissions, the blueprint itself) changed and needs human review."
+      },
+      "verification-weakened": {
+        label: "Verification weakened",
+        help: "The change weakens checks: skipped or deleted tests, removed assertions, loosened CI. Strong signals fail the change until a human applies the approval label."
+      },
+      "contract-weakened": {
+        label: "Contract weakened",
+        help: "The blueprint was changed in a way that loosens the contract agents are judged by. Requires human approval."
+      },
+      "contract-changed": {
+        label: "Contract changed",
+        help: "The blueprint changed. Review that the new contract reflects human intent."
+      },
+      "secret-access": {
+        label: "Secret access",
+        help: "A secret or environment variable is read by code that a secret-access rule does not allow."
+      },
+      "inline-secret": {
+        label: "Inline secret",
+        help: "A credential appears inline in an agent or tool configuration file. Move it to a secret store and rotate it."
+      },
+      "agent-permission-change": {
+        label: "Agent permission change",
+        help: "Agent permissions, MCP servers or agent instructions changed, altering what coding agents can reach."
+      },
+      "assurance-drift": {
+        label: "Assurance drift",
+        help: "A component's declared assurance level no longer matches the evidence in the repository."
+      },
+      "stale-verification": {
+        label: "Stale verification",
+        help: "A human sign-off predates changes to the code it covers and should be renewed."
+      },
+      "invariant-at-risk": {
+        label: "Invariant at risk",
+        help: "The change touches code or tests that an invariant depends on."
+      },
+      "invariant-failed": {
+        label: "Invariant failed",
+        help: "An invariant's check failed."
+      }
+    };
+    MAX_LISTED_CONTRACT_CHANGES = 12;
+    ANSI = { red: "31", yellow: "33", cyan: "36", green: "32", dim: "2", bold: "1" };
+    TEXT_SEVERITY = {
+      error: { mark: "✖", color: ANSI.red },
+      warning: { mark: "▲", color: ANSI.yellow },
+      info: { mark: "●", color: ANSI.cyan }
+    };
+    TEXT_VERDICT = {
+      pass: { mark: "✔", color: ANSI.green },
+      warn: { mark: "▲", color: ANSI.yellow },
+      fail: { mark: "✖", color: ANSI.red }
+    };
+    MD_SEVERITY = { error: "🔴 error", warning: "🟡 warning", info: "🔵 info" };
+    MD_VERDICT = {
+      pass: { emoji: "✅", text: "Blueprint check passed" },
+      warn: { emoji: "⚠️", text: "Blueprint check passed with warnings" },
+      fail: { emoji: "❌", text: "Blueprint check failed" }
+    };
+    SARIF_LEVEL = { error: "error", warning: "warning", info: "note" };
+    ANNOTATION_COMMAND = { error: "error", warning: "warning", info: "notice" };
+    GRAY = "#9ca3af";
+    AMBER = "#d97706";
+    RED = "#dc2626";
+    MERMAID_ARROW = { declared: "-->", undeclared: "-.->", forbidden: "==>", missing: "-.->" };
+    MERMAID_LINK_STYLE = {
+      declared: `stroke:${GRAY},stroke-width:1.5px`,
+      undeclared: `stroke:${AMBER},stroke-width:2px,stroke-dasharray:6 4`,
+      forbidden: `stroke:${RED},stroke-width:4px`,
+      missing: `stroke:${GRAY},stroke-width:1.5px,stroke-dasharray:2 4`
+    };
+    DOT_EDGE_STYLE = {
+      declared: `color="${GRAY}"`,
+      undeclared: `color="${AMBER}", fontcolor="${AMBER}", style=dashed`,
+      forbidden: `color="${RED}", fontcolor="${RED}", penwidth=3`,
+      missing: `color="${GRAY}", fontcolor="${GRAY}", style=dotted`
+    };
   }
 });
 
@@ -28376,10 +29501,10 @@ function runShellCommand(command, options) {
     child2.stderr.on("data", collect);
     child2.on("error", (error62) => finish(false, `
 [rassam] could not start: ${error62.message}`));
-    child2.on("close", (code, signal) => {
+    child2.on("close", (code2, signal) => {
       if (timedOut) return;
-      finish(code === 0, code === 0 ? "" : `
-[rassam] exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
+      finish(code2 === 0, code2 === 0 ? "" : `
+[rassam] exited with ${signal ? `signal ${signal}` : `code ${code2}`}`);
     });
   });
 }
@@ -28512,7 +29637,7 @@ var init_gate = __esm({
 });
 
 // src/cli/github.ts
-import { appendFile, readFile as readFile2 } from "node:fs/promises";
+import { appendFile, readFile as readFile3 } from "node:fs/promises";
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
 }
@@ -28522,7 +29647,7 @@ function asString(value) {
 async function readEvent(path) {
   if (!path) return {};
   try {
-    return asObject(JSON.parse(await readFile2(path, "utf8"))) ?? {};
+    return asObject(JSON.parse(await readFile3(path, "utf8"))) ?? {};
   } catch {
     return {};
   }
@@ -28652,8 +29777,8 @@ var check_exports = {};
 __export(check_exports, {
   checkCommand: () => checkCommand
 });
-import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname3, resolve as resolve3 } from "node:path";
+import { mkdir as mkdir3, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname4, resolve as resolve3 } from "node:path";
 function asText(value) {
   return ensureTrailingNewline(typeof value === "string" ? value : JSON.stringify(value, null, 2));
 }
@@ -28664,8 +29789,8 @@ function colorEnabled(args, io) {
 }
 async function writeOutput(io, file2, text4) {
   const target = resolve3(io.cwd, file2);
-  await mkdir2(dirname3(target), { recursive: true });
-  await writeFile2(target, text4, "utf8");
+  await mkdir3(dirname4(target), { recursive: true });
+  await writeFile3(target, text4, "utf8");
 }
 async function githubBaseRef(context, github, io) {
   if (!github.isPullRequest || !github.baseRef) return void 0;
@@ -28681,8 +29806,8 @@ async function githubBaseRef(context, github, io) {
   return remoteRef;
 }
 function markdown(report, options) {
-  const { budget, failOn, github } = options;
-  return renderMarkdown(report, { budget, failOn, marker: COMMENT_MARKER, repoUrl: github?.repoHtmlUrl, headSha: report.head?.sha ?? github?.headSha });
+  const { budget, failOn, github, approveLabel } = options;
+  return renderMarkdown(report, { budget, failOn, approveLabel, marker: COMMENT_MARKER, repoUrl: github?.repoHtmlUrl, headSha: report.head?.sha ?? github?.headSha });
 }
 function render(report, format, options) {
   switch (format) {
@@ -28693,7 +29818,7 @@ function render(report, format, options) {
     case "markdown":
       return asText(markdown(report, options));
     default:
-      return asText(renderText(report, { color: options.color, budget: options.budget, verbose: options.verbose, failOn: options.failOn }));
+      return asText(renderText(report, { color: options.color, budget: options.budget, verbose: options.verbose, failOn: options.failOn, approveLabel: options.approveLabel }));
   }
 }
 async function publishToGithub(report, github, args, io, options, annotationsToStderr) {
@@ -28750,13 +29875,25 @@ async function checkCommand(args, io) {
 `)
   });
   const { report } = gate;
-  const options = { color: colorEnabled(args, io), budget, verbose: booleanFlag(args, "verbose"), failOn, github };
+  const options = { color: colorEnabled(args, io), approveLabel: label, budget, verbose: booleanFlag(args, "verbose"), failOn, github };
   const rendered = render(report, format, options);
   if (output2) await writeOutput(io, output2, rendered);
   else io.stdout(rendered);
   const sarifOutput = stringFlag(args, "sarifOutput");
   if (sarifOutput) await writeOutput(io, sarifOutput, asText(renderSarif(report)));
   if (github) await publishToGithub(report, github, args, io, options, !output2 && (format === "json" || format === "sarif"));
+  if (context.blueprint) {
+    const agents = await agentsState(context.root, context.blueprint, {
+      baseBranch: context.isGit ? await defaultBranch(context.root) : void 0,
+      mcp: await hasRassamMcp(context.root)
+    }).catch(() => null);
+    if (agents?.status === "stale") {
+      const message = `${agents.file} states an older version of the contract. Refresh it with: ${cliName(io.env)} instructions --write`;
+      io.stderr(github ? `::notice title=Rassam::${message}
+` : `rassam: ${message}
+`);
+    }
+  }
   if (context.blueprintState === "missing" && gate.mode === "full") {
     io.stderr(`rassam: no blueprint at ${BLUEPRINT_PATH}; nothing constrains this repository yet. Create a draft with: rassam init
 `);
@@ -28775,6 +29912,7 @@ var init_check2 = __esm({
     init_report();
     init_schema();
     init_args();
+    init_agent_files();
     init_context();
     init_gate();
     init_git();
@@ -29054,30 +30192,55 @@ function createWorkspace(files, blueprint, options = {}) {
     const violations = evaluateRules(model, compiled);
     const forbiddenPairs = /* @__PURE__ */ new Set();
     const findingCounts = /* @__PURE__ */ new Map();
+    const worst = /* @__PURE__ */ new Map();
+    const cycles = /* @__PURE__ */ new Map();
     for (const violation of violations) {
-      if (violation.components.length >= 2) forbiddenPairs.add(`${violation.components[0]}\0${violation.components[1]}`);
-      for (const id of violation.components) findingCounts.set(id, (findingCounts.get(id) ?? 0) + 1);
+      if (violation.kind === "dependency-cycle") {
+        const entry = compiled.find((candidate) => candidate.rule.id === violation.ruleId);
+        const includeTypeOnly = entry && "includeTypeOnly" in entry ? entry.includeTypeOnly : blueprint.policy.includeTypeOnly;
+        const path = cyclePath(violation.components, componentGraph.edges.filter((edge) => includeTypeOnly || !edge.typeOnly));
+        const key = path.join("\0");
+        const known = cycles.get(key);
+        if (!known) cycles.set(key, { ...violation.ruleId ? { ruleId: violation.ruleId } : {}, severity: violation.severity, path });
+        else if (SEVERITY_RANK3[violation.severity] > SEVERITY_RANK3[known.severity]) known.severity = violation.severity;
+        continue;
+      }
+      if (EDGE_VIOLATIONS.has(violation.kind) && violation.components.length === 2) forbiddenPairs.add(`${violation.components[0]}\0${violation.components[1]}`);
+      for (const id of new Set(violation.components)) {
+        findingCounts.set(id, (findingCounts.get(id) ?? 0) + 1);
+        const current = worst.get(id);
+        if (!current || SEVERITY_RANK3[violation.severity] > SEVERITY_RANK3[current]) worst.set(id, violation.severity);
+      }
+    }
+    const cycleEdges = /* @__PURE__ */ new Set();
+    for (const cycle of cycles.values()) {
+      for (let index = 0; index + 1 < cycle.path.length; index += 1) cycleEdges.add(`${cycle.path[index]}\0${cycle.path[index + 1]}`);
     }
     const edges = componentGraph.edges.map((edge) => {
       const key = `${edge.from}\0${edge.to}`;
       const open3 = declared.has(key) || Boolean(componentById.get(edge.to)?.public) || componentById.get(edge.from)?.kind === "test";
       const status = forbiddenPairs.has(key) ? "forbidden" : open3 ? "declared" : "undeclared";
-      return { from: edge.from, to: edge.to, status, count: edge.count };
+      return { from: edge.from, to: edge.to, status, count: edge.count, ...cycleEdges.has(key) ? { cycle: true } : {} };
     });
     const observed = new Set(componentGraph.edges.map((edge) => `${edge.from}\0${edge.to}`));
     for (const dependency of blueprint.dependencies) {
       if (!observed.has(`${dependency.from}\0${dependency.to}`)) edges.push({ from: dependency.from, to: dependency.to, status: "missing" });
     }
     return {
-      components: blueprint.components.map((component2) => ({
-        id: component2.id,
-        name: component2.name,
-        kind: component2.kind,
-        external: Boolean(component2.external),
-        findings: findingCounts.get(component2.id) ?? 0,
-        files: membership.componentFiles.get(component2.id)?.length ?? 0
-      })),
-      edges
+      components: blueprint.components.map((component2) => {
+        const severity = worst.get(component2.id);
+        return {
+          id: component2.id,
+          name: component2.name,
+          kind: component2.kind,
+          external: Boolean(component2.external),
+          findings: findingCounts.get(component2.id) ?? 0,
+          ...severity ? { severity } : {},
+          files: membership.componentFiles.get(component2.id)?.length ?? 0
+        };
+      }),
+      edges,
+      ...cycles.size ? { cycles: [...cycles.values()] } : {}
     };
   };
   return {
@@ -29095,7 +30258,7 @@ function createWorkspace(files, blueprint, options = {}) {
     check: (extra = {}) => runCheck({ files, blueprint, fileGraph: options.fileGraph, reach: options.reach, ...extra })
   };
 }
-var RESOLVE_EXTENSIONS;
+var SEVERITY_RANK3, EDGE_VIOLATIONS, RESOLVE_EXTENSIONS;
 var init_workspace = __esm({
   "src/blueprint/workspace.ts"() {
     "use strict";
@@ -29111,6 +30274,8 @@ var init_workspace = __esm({
     init_schema();
     init_stats();
     init_util3();
+    SEVERITY_RANK3 = { info: 0, warning: 1, error: 2 };
+    EDGE_VIOLATIONS = /* @__PURE__ */ new Set(["forbidden-dependency", "allow-only-violation", "layer-violation"]);
     RESOLVE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".go", ".rs", ".java", ".kt"];
   }
 });
@@ -29167,7 +30332,7 @@ function repoPathArg(context, io, value) {
 function bullets(heading, items) {
   return items.length ? [`${heading}:`, ...items.map((item) => `  - ${item}`), ""] : [];
 }
-function ruleLine(rule) {
+function ruleLine2(rule) {
   const reason = rule.reason ? `
       why: ${rule.reason.replace(/\s+/g, " ").trim()}` : "";
   return `[${rule.severity}] ${rule.id} (${rule.kind}${rule.human ? ", human-authored" : ""}): ${rule.summary}${reason}`;
@@ -29190,7 +30355,7 @@ function renderExplanation(explanation) {
     lines.push("Component: none (no component claims this path)", "");
   }
   if (explanation.protected) lines.push(...bullets("Protected: changes here need human review", explanation.protectedReasons));
-  lines.push(...bullets("Rules that constrain changes here", explanation.constraints.map(ruleLine)));
+  lines.push(...bullets("Rules that constrain changes here", explanation.constraints.map(ruleLine2)));
   if (explanation.allowedComponents) lines.push(...bullets("May depend only on", explanation.allowedComponents.length ? explanation.allowedComponents : ["(nothing outside its own component)"]));
   lines.push(...bullets("Must not depend on components", explanation.forbiddenComponents));
   lines.push(...bullets("Must not depend on packages", explanation.forbiddenPackages));
@@ -29322,8 +30487,8 @@ var verify_exports = {};
 __export(verify_exports, {
   verifyCommand: () => verifyCommand
 });
-import { writeFile as writeFile3 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { writeFile as writeFile4 } from "node:fs/promises";
+import { join as join5 } from "node:path";
 async function verifyCommand(args, io) {
   const context = await loadContextFor(io, stringFlag(args, "root"));
   const blueprint = requireBlueprint(context);
@@ -29338,7 +30503,7 @@ async function verifyCommand(args, io) {
   } catch (error62) {
     throw new CliError(errorMessage(error62), { hint: "Component, rule and invariant ids are listed in .rassam/blueprint.json; dependencies are addressed as from->to." });
   }
-  await writeFile3(join4(context.root, BLUEPRINT_PATH), serializeBlueprint(stamped.blueprint), "utf8");
+  await writeFile4(join5(context.root, BLUEPRINT_PATH), serializeBlueprint(stamped.blueprint), "utf8");
   io.stdout(
     [
       `Signed ${stamped.kind} ${args.positionals[0]}${stamped.target !== args.positionals[0] ? ` (${stamped.target})` : ""}`,
@@ -29389,9 +30554,9 @@ function syncBlueprint(existing, files, options = {}) {
     const unmapped = model.membership.unmapped.filter((path) => model.fileGraph.facts.has(path));
     if (unmapped.length) {
       const unmappedSet = new Set(unmapped);
-      const draft = deriveBlueprint(files.filter((file2) => unmappedSet.has(file2.path)), { now: provenance.at });
+      const draft2 = deriveBlueprint(files.filter((file2) => unmappedSet.has(file2.path)), { now: provenance.at });
       const used = new Set(next.components.map((component2) => component2.id));
-      for (const proposed of draft.components) {
+      for (const proposed of draft2.components) {
         const candidate = { ...proposed, id: uniqueId2(proposed.id, used), provenance };
         const trial = { ...next, components: [...next.components, candidate] };
         const assigned = assignComponents(model.fileGraph.files, trial).fileToComponent;
@@ -29443,8 +30608,8 @@ var sync_exports = {};
 __export(sync_exports, {
   syncCommand: () => syncCommand
 });
-import { writeFile as writeFile4 } from "node:fs/promises";
-import { join as join5 } from "node:path";
+import { writeFile as writeFile5 } from "node:fs/promises";
+import { join as join6 } from "node:path";
 async function syncCommand(args, io) {
   const context = await loadContextFor(io, stringFlag(args, "root"));
   const blueprint = requireBlueprint(context);
@@ -29481,7 +30646,7 @@ async function syncCommand(args, io) {
 `);
   }
   if (write && (result.addedComponents.length || result.addedDependencies.length)) {
-    await writeFile4(join5(context.root, BLUEPRINT_PATH), serializeBlueprint(result.blueprint), "utf8");
+    await writeFile5(join6(context.root, BLUEPRINT_PATH), serializeBlueprint(result.blueprint), "utf8");
   }
   return EXIT_OK;
 }
@@ -29941,9 +31106,9 @@ var init_status = __esm({
 function escapeXml(value) {
   let out = "";
   for (const char of value) {
-    const code = char.codePointAt(0);
-    if (code === 9 || code === 10 || code === 13) out += " ";
-    else if (code < 32 || code >= 127 && code <= 159 || code >= 55296 && code <= 57343 || code === 65534 || code === 65535) continue;
+    const code2 = char.codePointAt(0);
+    if (code2 === 9 || code2 === 10 || code2 === 13) out += " ";
+    else if (code2 < 32 || code2 >= 127 && code2 <= 159 || code2 >= 55296 && code2 <= 57343 || code2 === 65534 || code2 === 65535) continue;
     else if (char === "&") out += "&amp;";
     else if (char === "<") out += "&lt;";
     else if (char === ">") out += "&gt;";
@@ -29954,17 +31119,17 @@ function escapeXml(value) {
   return out;
 }
 function charEm(char) {
-  const code = char.codePointAt(0);
-  if (code >= 126976) return 1.2;
-  if (code >= 11904) return 1.02;
+  const code2 = char.codePointAt(0);
+  if (code2 >= 126976) return 1.2;
+  if (code2 >= 11904) return 1.02;
   if (char === "…" || char === "—") return 1;
   if (NARROW.has(char)) return 0.32;
   if (SLIM.has(char)) return 0.4;
   if (WIDE.has(char)) return 0.95;
-  if (code >= 65 && code <= 90) return 0.74;
+  if (code2 >= 65 && code2 <= 90) return 0.74;
   if (char === "w") return 0.76;
-  if (code >= 48 && code <= 57) return 0.58;
-  if (code < 128) return 0.57;
+  if (code2 >= 48 && code2 <= 57) return 0.58;
+  if (code2 < 128) return 0.57;
   return 0.64;
 }
 function estimateTextWidth(text4, fontSize, fontWeight = 400) {
@@ -29973,9 +31138,9 @@ function estimateTextWidth(text4, fontSize, fontWeight = 400) {
   return em * fontSize * (fontWeight >= 600 ? 1.07 : 1);
 }
 function truncateText(text4, maxWidth, fontSize, fontWeight = 400) {
-  const clean = text4.replace(/\s+/g, " ").trim();
-  if (estimateTextWidth(clean, fontSize, fontWeight) <= maxWidth) return clean;
-  const chars = Array.from(clean);
+  const clean2 = text4.replace(/\s+/g, " ").trim();
+  if (estimateTextWidth(clean2, fontSize, fontWeight) <= maxWidth) return clean2;
+  const chars = Array.from(clean2);
   for (let length = chars.length - 1; length > 0; length -= 1) {
     const candidate = `${chars.slice(0, length).join("").trimEnd()}…`;
     if (estimateTextWidth(candidate, fontSize, fontWeight) <= maxWidth) return candidate;
@@ -30032,6 +31197,9 @@ function edgeStroke(status, palette) {
       return { color: palette.edge, label: palette.muted, attrs: ' stroke-width="1.6" stroke-dasharray="0.1 4.5" stroke-linecap="round"' };
   }
 }
+function cycleStroke(palette) {
+  return { color: palette.warn, label: palette.warnText, attrs: ' stroke-width="1.8" stroke-dasharray="9 3 2 3"' };
+}
 function routePath(points, horizontal) {
   let d = `M${n(points[0].x)} ${n(points[0].y)}`;
   for (let index = 1; index < points.length; index += 1) {
@@ -30063,8 +31231,9 @@ function renderCard(card, box, palette) {
     const label = card.findings > 99 ? "99+" : String(card.findings);
     const width = Math.max(20, Math.ceil(estimateTextWidth(label, 10.5, 700) + 12));
     const x = CARD_WIDTH - CARD_PAD - width;
+    const tone = badgeTone(card.severity);
     parts.push(
-      `<rect data-badge="violations" x="${n(x)}" y="11" width="${width}" height="18" rx="9" fill="${palette.error}"/>` + text(x + width / 2, 23.8, label, { size: 10.5, weight: 700, fill: palette.onError, anchor: "middle" })
+      (tone === "error" ? `<rect data-badge="violations" data-severity="error" x="${n(x)}" y="11" width="${width}" height="18" rx="9" fill="${palette.error}"/>` : `<rect data-badge="violations" data-severity="${tone}" x="${n(x + 0.5)}" y="11.5" width="${width - 1}" height="17" rx="8.5" fill="${tone === "warning" ? palette.warn : palette.muted}" fill-opacity="0.14" stroke="${tone === "warning" ? palette.warn : palette.muted}"/>`) + text(x + width / 2, 23.8, label, { size: 10.5, weight: 700, fill: tone === "error" ? palette.onError : tone === "warning" ? palette.warnText : palette.muted, anchor: "middle" })
     );
     nameRoom -= width + 8;
   }
@@ -30165,7 +31334,7 @@ function renderSystemDiagram(input2, options = {}) {
   const sharedComponents = /* @__PURE__ */ new Set();
   if (calm) {
     const changedEdges = /* @__PURE__ */ new Set([...(diff?.edges.statusChanged ?? []).map(edgeKey2), ...addedEdges]);
-    const keep = (edge) => edge.status !== "declared" || changedEdges.has(edgeKey2(edge));
+    const keep = (edge) => edge.status !== "declared" || Boolean(edge.cycle) || changedEdges.has(edgeKey2(edge));
     const pinned = /* @__PURE__ */ new Set();
     for (const edge of viewEdges.values()) {
       if (!keep(edge)) continue;
@@ -30239,6 +31408,7 @@ function renderSystemDiagram(input2, options = {}) {
       kind: component2.kind ?? "",
       external: Boolean(component2.external),
       findings: Math.max(0, Math.floor(component2.findings ?? 0) || 0),
+      severity: component2.severity ?? null,
       files: typeof files === "number" && Number.isFinite(files) && files >= 0 ? Math.floor(files) : null,
       state,
       mark: declared?.verified ? "verified" : source === "derived" || source === "agent" ? source : null,
@@ -30246,20 +31416,20 @@ function renderSystemDiagram(input2, options = {}) {
       change: addedComponents.has(component2.id) ? "added" : null
     });
   }
-  const removedCards = (diff?.components.removed ?? []).filter((id, index, all) => !cards.has(id) && all.indexOf(id) === index).map((id) => ({ id, name: id, kind: "", external: false, findings: 0, files: null, state: null, mark: null, shared: false, change: "removed" }));
+  const removedCards = (diff?.components.removed ?? []).filter((id, index, all) => !cards.has(id) && all.indexOf(id) === index).map((id) => ({ id, name: id, kind: "", external: false, findings: 0, severity: null, files: null, state: null, mark: null, shared: false, change: "removed" }));
   const live = [...cards.values()];
   const hasFooter = live.some((card) => card.state !== null || card.mark !== null);
   const cardHeight = hasFooter ? 76 : 56;
   const drawn = /* @__PURE__ */ new Map();
   for (const edge of viewEdges.values()) {
     if (!cards.has(edge.from) || !cards.has(edge.to)) continue;
-    drawn.set(edgeKey2(edge), { from: edge.from, to: edge.to, status: edge.status, change: addedEdges.has(edgeKey2(edge)) ? "added" : null });
+    drawn.set(edgeKey2(edge), { from: edge.from, to: edge.to, status: edge.status, cycle: Boolean(edge.cycle), change: addedEdges.has(edgeKey2(edge)) ? "added" : null });
   }
   const ghostEdges = [];
   const removedIds = new Set(removedCards.map((card) => card.id));
   for (const edge of diff?.edges.removed ?? []) {
     if (edge.from === edge.to || drawn.has(edgeKey2(edge))) continue;
-    const entry = { from: edge.from, to: edge.to, status: edge.status, change: "removed" };
+    const entry = { from: edge.from, to: edge.to, status: edge.status, cycle: false, change: "removed" };
     if ((cards.has(edge.from) || removedIds.has(edge.from)) && (cards.has(edge.to) || removedIds.has(edge.to))) ghostEdges.push(entry);
   }
   const { layout, direction } = chooseLayout(
@@ -30277,6 +31447,10 @@ function renderSystemDiagram(input2, options = {}) {
   const showStatus = monitored > 0 || Boolean(input2.status);
   const overallLabel = overall === "unknown" && monitored > 0 ? "No data" : OVERALL_LABEL[overall];
   const componentsWithFindings = live.filter((card) => card.findings > 0).length;
+  const viewNames = new Map(input2.view.components.map((component2) => [component2.id, component2.name || component2.id]));
+  const cycles = (input2.view.cycles ?? []).filter((cycle) => cycle.path.length > 1);
+  const cyclePaths = cycles.map((cycle) => cycle.path.map((id) => viewNames.get(id) ?? id).join(" → "));
+  const cycleLead = cycles.length === 1 ? "Dependency cycle:" : `${cycles.length} dependency cycles:`;
   const pills = [];
   if (showStatus) {
     const state = OVERALL_STATE[overall];
@@ -30284,9 +31458,9 @@ function renderSystemDiagram(input2, options = {}) {
     pills.push(pill(overallLabel, { line, text: stateTextColor(state, palette) }, (cx, cy) => stateShape(state, cx, cy, palette).replace(/ data-state="[a-z]+"/, "")));
   }
   if (input2.findings) {
-    const clean = input2.findings.errors + input2.findings.warnings <= 0;
-    const tone = clean ? { line: palette.ok, text: palette.okText } : input2.findings.errors > 0 ? { line: palette.error, text: palette.errorText } : { line: palette.warn, text: palette.warnText };
-    pills.push(pill(violationText(input2.findings), tone, clean ? (cx, cy) => checkMark(cx - 5, cy + 0.6, palette.ok) : null));
+    const clean2 = input2.findings.errors + input2.findings.warnings <= 0;
+    const tone = clean2 ? { line: palette.ok, text: palette.okText } : input2.findings.errors > 0 ? { line: palette.error, text: palette.errorText } : { line: palette.warn, text: palette.warnText };
+    pills.push(pill(violationText(input2.findings), tone, clean2 ? (cx, cy) => checkMark(cx - 5, cy + 0.6, palette.ok) : null));
   }
   const pillsWidth = pills.reduce((sum, item) => sum + item.width, 0) + Math.max(0, pills.length - 1) * 8;
   const meta3 = [input2.commit ? input2.commit.trim().slice(0, 7) : "", input2.generatedAt ? formatTime(input2.generatedAt) : ""].filter(Boolean).join(" · ");
@@ -30309,6 +31483,15 @@ function renderSystemDiagram(input2, options = {}) {
       const metaWidth = metaText ? estimateTextWidth(metaText, 11) + 16 : 0;
       if (input2.subtitle) body.push(text(OUTER, cursor + 13, truncateText(input2.subtitle, contentWidth - metaWidth, 13), { size: 13, fill: palette.muted }));
       if (metaText) body.push(text(width - OUTER, cursor + 13, metaText, { size: 11, fill: palette.muted, anchor: "end" }));
+      cursor += 22;
+    }
+    if (cycles.length) {
+      const lead = escapeXml(cycleLead);
+      const summary = truncateText(cyclePaths.join("; "), contentWidth - estimateTextWidth(`${cycleLead} `, 12, 600), 12);
+      const tone = cycles.some((cycle) => cycle.severity === "error") ? palette.errorText : palette.warnText;
+      body.push(
+        `<text x="${OUTER}" y="${n(cursor + 13)}" font-size="12" fill="${palette.text}" data-cycle="summary"><tspan font-weight="600" fill="${tone}">${lead}</tspan> ${escapeXml(summary)}</text>`
+      );
       cursor += 22;
     }
     if (diff) {
@@ -30388,10 +31571,11 @@ function renderSystemDiagram(input2, options = {}) {
     routes.push({ edge, points, vertical: stacked });
   }
   routes.sort(
-    (a, b) => Number(b.edge.change === "removed") - Number(a.edge.change === "removed") || EDGE_RANK[a.edge.status] - EDGE_RANK[b.edge.status] || (edgeKey2(a.edge) < edgeKey2(b.edge) ? -1 : edgeKey2(a.edge) > edgeKey2(b.edge) ? 1 : 0)
+    (a, b) => Number(b.edge.change === "removed") - Number(a.edge.change === "removed") || edgeRank(a.edge) - edgeRank(b.edge) || (edgeKey2(a.edge) < edgeKey2(b.edge) ? -1 : edgeKey2(a.edge) > edgeKey2(b.edge) ? 1 : 0)
   );
   const usedEdgeStatuses = /* @__PURE__ */ new Set();
   const usedMarkers = /* @__PURE__ */ new Set();
+  let anyCycleEdge = false;
   const edgeSvg = [];
   const labelSvg = [];
   const labelBoxes = [];
@@ -30401,18 +31585,20 @@ function renderSystemDiagram(input2, options = {}) {
   for (const route of routes) {
     const { edge } = route;
     const removed = edge.change === "removed";
-    const style = removed ? { color: palette.error, label: palette.errorText, attrs: ' stroke-width="1.5" stroke-dasharray="4 4" opacity="0.55"' } : edgeStroke(edge.status, palette);
-    const marker = removed ? "removed" : edge.status;
+    const asCycle = !removed && drawsAsCycle(edge);
+    const style = removed ? { color: palette.error, label: palette.errorText, attrs: ' stroke-width="1.5" stroke-dasharray="4 4" opacity="0.55"' } : asCycle ? cycleStroke(palette) : edgeStroke(edge.status, palette);
+    const marker = removed ? "removed" : asCycle ? "cycle" : edge.status;
     usedMarkers.add(marker);
     if (removed) anyRemoved = true;
+    else if (asCycle) anyCycleEdge = true;
     else usedEdgeStatuses.add(edge.status);
     if (edge.change === "added") anyAdded = true;
     const d = routePath(route.points, !route.vertical);
     if (edge.change === "added") edgeSvg.push(`<path d="${d}" fill="none" stroke="${palette.ok}" stroke-width="7" stroke-opacity="0.28" stroke-linecap="round"/>`);
     edgeSvg.push(
-      `<path data-edge="${removed ? "removed" : edge.status}" d="${d}" fill="none" stroke="${style.color}"${style.attrs} marker-end="url(#${uid}-arrow-${marker})"/>`
+      `<path data-edge="${removed ? "removed" : edge.status}"${edge.cycle && !removed ? ' data-cycle="true"' : ""} d="${d}" fill="none" stroke="${style.color}"${style.attrs} marker-end="url(#${uid}-arrow-${marker})"/>`
     );
-    const label = removed ? "removed" : [edge.change === "added" ? "+ new" : "", EDGE_LABEL[edge.status]].filter(Boolean).join(" · ");
+    const label = removed ? "removed" : [edge.change === "added" ? "+ new" : "", EDGE_LABEL[edge.status], edge.cycle ? "cycle" : ""].filter(Boolean).join(" · ");
     if (!label) continue;
     const labelWidth = Math.ceil(estimateTextWidth(label, 10, 600) + 14);
     const gaps = [];
@@ -30452,6 +31638,10 @@ function renderSystemDiagram(input2, options = {}) {
       const style = edgeStroke(status, palette);
       entries2.push({ key: status, label: EDGE_LEGEND[status], icon: (x, y) => `<path d="M${n(x)} ${n(y)}H${n(x + 24)}" fill="none" stroke="${style.color}"${style.attrs}/>` });
     }
+    if (anyCycleEdge || cycles.length) {
+      const style = cycleStroke(palette);
+      entries2.push({ key: "cycle", label: "Dependency cycle", icon: (x, y) => `<path d="M${n(x)} ${n(y)}H${n(x + 24)}" fill="none" stroke="${style.color}"${style.attrs}/>` });
+    }
     for (const state of ["up", "degraded", "down", "unknown"]) {
       if (!statusCounts[state]) continue;
       entries2.push({ key: state, label: STATE_LABEL[state], icon: (x, y) => stateShape(state, x + 12, y, palette).replace(/ data-state="[a-z]+"/, "") });
@@ -30459,7 +31649,12 @@ function renderSystemDiagram(input2, options = {}) {
     const box = (stroke, extra) => (x, y) => `<rect x="${n(x + 2)}" y="${n(y - 6)}" width="20" height="12" rx="3.5" fill="${palette.card}" stroke="${stroke}"${extra}/>`;
     if (live.some((card) => card.external)) entries2.push({ key: "external", label: "External system", icon: box(palette.muted, ' stroke-dasharray="3 2.5"') });
     if (live.some((card) => card.mark === "verified")) entries2.push({ key: "verified", label: "Verified by a human", icon: (x, y) => checkMark(x + 7, y + 0.4, palette.ok) });
-    if (componentsWithFindings) entries2.push({ key: "violations", label: "Violations", icon: (x, y) => `<rect x="${n(x + 3)}" y="${n(y - 6.5)}" width="18" height="13" rx="6.5" fill="${palette.error}"/>` });
+    if (live.some((card) => card.findings > 0 && badgeTone(card.severity) === "error")) {
+      entries2.push({ key: "violations", label: "Violations", icon: (x, y) => `<rect x="${n(x + 3)}" y="${n(y - 6.5)}" width="18" height="13" rx="6.5" fill="${palette.error}"/>` });
+    }
+    if (live.some((card) => card.findings > 0 && badgeTone(card.severity) !== "error")) {
+      entries2.push({ key: "warnings", label: "Warnings", icon: (x, y) => `<rect x="${n(x + 3.5)}" y="${n(y - 6)}" width="17" height="12" rx="6" fill="${palette.warn}" fill-opacity="0.14" stroke="${palette.warn}"/>` });
+    }
     if (anyAdded) entries2.push({ key: "added", label: "Added", icon: box(palette.ok, ' stroke-width="1.8"') });
     if (anyRemoved) entries2.push({ key: "removed", label: "Removed", icon: box(palette.error, ' stroke-dasharray="3 2.5" opacity="0.7"') });
     if (entries2.length) {
@@ -30486,12 +31681,17 @@ function renderSystemDiagram(input2, options = {}) {
   }
   const height = Math.ceil(cursor + OUTER);
   const edgeCounts = { declared: 0, undeclared: 0, forbidden: 0, missing: 0 };
-  for (const edge of drawn.values()) if (edge.change !== "removed") edgeCounts[edge.status] += 1;
+  let onCycle = 0;
+  for (const edge of drawn.values()) {
+    if (edge.change === "removed") continue;
+    edgeCounts[edge.status] += 1;
+    if (edge.cycle) onCycle += 1;
+  }
   const liveEdges = edgeCounts.declared + edgeCounts.undeclared + edgeCounts.forbidden + edgeCounts.missing;
   const externals = live.filter((card) => card.external).length;
   const sentences = [];
   sentences.push(
-    `${plural2(live.length, "component")}${externals ? ` (${externals} external)` : ""} and ${plural2(liveEdges, "dependency", "dependencies")}` + (liveEdges ? ` (${[`${edgeCounts.declared} declared`, edgeCounts.undeclared ? `${edgeCounts.undeclared} undeclared` : "", edgeCounts.forbidden ? `${edgeCounts.forbidden} forbidden` : "", edgeCounts.missing ? `${edgeCounts.missing} declared but not observed` : ""].filter(Boolean).join(", ")})` : "")
+    `${plural2(live.length, "component")}${externals ? ` (${externals} external)` : ""} and ${plural2(liveEdges, "dependency", "dependencies")}` + (liveEdges ? ` (${[`${edgeCounts.declared} declared`, edgeCounts.undeclared ? `${edgeCounts.undeclared} undeclared` : "", edgeCounts.forbidden ? `${edgeCounts.forbidden} forbidden` : "", edgeCounts.missing ? `${edgeCounts.missing} declared but not observed` : "", onCycle ? `${onCycle} on a dependency cycle` : ""].filter(Boolean).join(", ")})` : "")
   );
   if (showStatus) {
     sentences.push(
@@ -30500,18 +31700,19 @@ function renderSystemDiagram(input2, options = {}) {
   }
   if (input2.findings) sentences.push(`Violations: ${violationText(input2.findings).replace(" · ", ", ")}`);
   else if (componentsWithFindings) sentences.push(`${plural2(componentsWithFindings, "component")} with violations`);
+  if (cycles.length) sentences.push(`${cycleLead} ${cyclePaths.join("; ")}`);
   if (diff) sentences.push(`Changed: ${diff.summary}`);
   if (footnote) sentences.push(footnote);
   const listed = live.slice(0, 40).map((card) => {
-    const notes = [card.state ? STATE_LABEL[card.state].toLowerCase() : "", card.findings ? plural2(card.findings, "violation") : "", card.change === "added" ? "new" : ""].filter(Boolean);
+    const notes = [card.state ? STATE_LABEL[card.state].toLowerCase() : "", card.findings ? plural2(card.findings, badgeTone(card.severity) === "error" ? "violation" : card.severity === "info" ? "note" : "warning") : "", card.change === "added" ? "new" : ""].filter(Boolean);
     return notes.length ? `${card.name} (${notes.join(", ")})` : card.name;
   });
   if (listed.length) sentences.push(`Components: ${listed.join(", ")}${live.length > listed.length ? `, and ${live.length - listed.length} more` : ""}`);
   if (removedCards.length) sentences.push(`Removed: ${removedCards.map((card) => card.name).join(", ")}`);
   if (input2.commit) sentences.push(`Commit ${input2.commit.trim().slice(0, 7)}`);
   const description = `${sentences.join(". ")}.`;
-  const markerColor = (marker) => marker === "removed" ? palette.error : edgeStroke(marker, palette).color;
-  const defs = ["declared", "missing", "undeclared", "forbidden", "removed"].filter((marker) => usedMarkers.has(marker)).map(
+  const markerColor = (marker) => marker === "removed" ? palette.error : marker === "cycle" ? cycleStroke(palette).color : edgeStroke(marker, palette).color;
+  const defs = ["declared", "missing", "cycle", "undeclared", "forbidden", "removed"].filter((marker) => usedMarkers.has(marker)).map(
     (marker) => `<marker id="${uid}-arrow-${marker}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="${marker === "forbidden" ? 10 : 8.5}" markerHeight="${marker === "forbidden" ? 10 : 8.5}" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1.2L9 5L1 8.8Z" fill="${markerColor(marker)}"/></marker>`
   ).join("");
   const cap = typeof options.maxWidth === "number" && Number.isFinite(options.maxWidth) && options.maxWidth > 0 ? options.maxWidth : Infinity;
@@ -30533,7 +31734,7 @@ function renderStatusBadge(input2, options = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="20" viewBox="0 0 ${width} 20" role="img" aria-labelledby="${uid}-title" font-family="${FONT_FAMILY}"><title id="${uid}-title">${escapeXml(name)}</title><clipPath id="${uid}-clip"><rect width="${width}" height="20" rx="4"/></clipPath><g clip-path="url(#${uid}-clip)">` + (labelWidth ? `<rect width="${labelWidth}" height="20" fill="${BADGE_LABEL[theme]}"/>` : "") + `<rect x="${labelWidth}" width="${messageWidth}" height="20" fill="${tone}"/></g>` + (labelWidth ? text(labelWidth / 2, 14, label, { size, weight: 600, fill: "#ffffff", anchor: "middle" }) : "") + text(labelWidth + messageWidth / 2, 14, message, { size, weight: 600, fill: "#ffffff", anchor: "middle" }) + `</svg>
 `;
 }
-var DIAGRAM_PALETTES, FONT_FAMILY, NARROW, SLIM, WIDE, STATE_LABEL, PILL_HEIGHT, EDGE_LABEL, EDGE_RANK, EDGE_LEGEND, intersects, CARD_WIDTH, CARD_PAD, OVERALL_LABEL, OVERALL_STATE, OUTER, MIN_CONTENT_WIDTH, BADGE_TONES, BADGE_LABEL;
+var DIAGRAM_PALETTES, FONT_FAMILY, NARROW, SLIM, WIDE, STATE_LABEL, PILL_HEIGHT, EDGE_LABEL, EDGE_RANK, EDGE_LEGEND, drawsAsCycle, edgeRank, intersects, CARD_WIDTH, CARD_PAD, badgeTone, OVERALL_LABEL, OVERALL_STATE, OUTER, MIN_CONTENT_WIDTH, BADGE_TONES, BADGE_LABEL;
 var init_diagram = __esm({
   "src/blueprint/diagram.ts"() {
     "use strict";
@@ -30586,9 +31787,12 @@ var init_diagram = __esm({
       forbidden: "Forbidden dependency",
       missing: "Declared, not observed"
     };
+    drawsAsCycle = (edge) => Boolean(edge.cycle) && edge.status === "declared";
+    edgeRank = (edge) => drawsAsCycle(edge) ? 1.5 : EDGE_RANK[edge.status];
     intersects = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
     CARD_WIDTH = 216;
     CARD_PAD = 14;
+    badgeTone = (severity) => severity ?? "error";
     OVERALL_LABEL = { operational: "Operational", degraded: "Degraded", outage: "Outage", unknown: "Not monitored" };
     OVERALL_STATE = { operational: "up", degraded: "degraded", outage: "down", unknown: "unknown" };
     OUTER = 28;
@@ -30670,8 +31874,8 @@ var init_arch_diff = __esm({
 });
 
 // src/cli/live.ts
-import { readFile as readFile3 } from "node:fs/promises";
-import { join as join6 } from "node:path";
+import { readFile as readFile4 } from "node:fs/promises";
+import { join as join7 } from "node:path";
 async function compareArchitecture(context, base, head) {
   const snapshot = await loadBaseSnapshot(context, base);
   if (!snapshot.blueprint) return { sha: snapshot.sha, baseBlueprint: snapshot.blueprintState, diff: null };
@@ -30681,7 +31885,7 @@ async function compareArchitecture(context, base, head) {
 async function readStatusFile(root, absolutePath) {
   let text4;
   try {
-    text4 = await readFile3(absolutePath ?? join6(root, STATUS_PATH), "utf8");
+    text4 = await readFile4(absolutePath ?? join7(root, STATUS_PATH), "utf8");
   } catch (error62) {
     if (error62.code === "ENOENT") return { state: "missing" };
     return { state: "invalid", message: errorMessage(error62) };
@@ -30771,7 +31975,7 @@ function renderReadmeBlock(input2) {
     `  <img alt="Blueprint check" src="${src("badge-blueprint.svg")}">`,
     `  <img alt="System status" src="${src("badge-system.svg")}">`,
     "</p>",
-    `<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of ${escapeHtml(captionTime(input2.generatedAt))}</sub></p>`,
+    `<p align="center"><sub>Updated on every push by <a href="${PROJECT_URL}">Rassam</a> · status as of ${escapeHtml(captionTime(input2.generatedAt))}</sub></p>`,
     "",
     "<details>",
     `<summary>Components (${blueprint.components.length})</summary>`,
@@ -30800,6 +32004,7 @@ var README_START, README_END, STATE_LABEL2;
 var init_readme = __esm({
   "src/cli/readme.ts"() {
     "use strict";
+    init_schema();
     README_START = "<!-- rassam:system:start -->";
     README_END = "<!-- rassam:system:end -->";
     STATE_LABEL2 = { up: "Up", degraded: "Degraded", down: "Down", unknown: "No data" };
@@ -30812,8 +32017,8 @@ __export(render_exports, {
   LIVE_BRANCH: () => LIVE_BRANCH,
   renderCommand: () => renderCommand
 });
-import { mkdir as mkdir3, readFile as readFile4, writeFile as writeFile5 } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve5 } from "node:path";
+import { mkdir as mkdir4, readFile as readFile5, writeFile as writeFile6 } from "node:fs/promises";
+import { dirname as dirname5, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve5 } from "node:path";
 function blueprintBadge(outcome, summary) {
   if (outcome === "fail") return { message: "failing", tone: "error" };
   if (summary.warnings > 0) return { message: plural2(summary.warnings, "warning"), tone: "warn" };
@@ -30836,10 +32041,10 @@ function withoutGeneratedAt(text4) {
   return text4.replace(/"generatedAt": "[^"]*"/, '"generatedAt": ""');
 }
 async function writeIfChanged(path, content, same2 = (a, b) => a === b) {
-  const existing = await readFile4(path, "utf8").catch(() => null);
+  const existing = await readFile5(path, "utf8").catch(() => null);
   if (existing !== null && same2(existing, content)) return false;
-  await mkdir3(dirname4(path), { recursive: true });
-  await writeFile5(path, content, "utf8");
+  await mkdir4(dirname5(path), { recursive: true });
+  await writeFile6(path, content, "utf8");
   return true;
 }
 function posix(path) {
@@ -30848,7 +32053,7 @@ function posix(path) {
 function imageBaseFor(flag, location, readmeFile, outDir) {
   if (flag?.trim()) return flag.trim().replace(/\/+$/, "") || ".";
   if (location?.host === "github.com") return `https://raw.githubusercontent.com/${location.owner}/${location.repo}/${LIVE_BRANCH}`;
-  const rel2 = posix(relative2(dirname4(readmeFile), outDir));
+  const rel2 = posix(relative2(dirname5(readmeFile), outDir));
   return rel2 && !isAbsolute2(rel2) ? rel2 : ".";
 }
 function altText(blueprint) {
@@ -30939,7 +32144,7 @@ async function renderCommand(args, io) {
     const shownDir = posix(relative2(io.cwd, outDir)) || ".";
     const lines = [];
     for (const [name, content, same2] of files) {
-      const written = await writeIfChanged(join7(outDir, name), content, same2);
+      const written = await writeIfChanged(join8(outDir, name), content, same2);
       lines.push(`  ${written ? "wrote    " : "unchanged"}  ${shownDir}/${name}`);
     }
     const blueprintState = blueprintBadge(outcome, report.summary).message;
@@ -30955,7 +32160,7 @@ async function renderCommand(args, io) {
   if (readmeFlag !== void 0 && readmeFlag !== false) {
     const readmeFile = resolve5(context.root, typeof readmeFlag === "string" ? resolve5(io.cwd, readmeFlag) : "README.md");
     const shown = posix(relative2(io.cwd, readmeFile)) || "README.md";
-    const text4 = await readFile4(readmeFile, "utf8").catch(() => null);
+    const text4 = await readFile5(readmeFile, "utf8").catch(() => null);
     if (text4 === null) throw new CliError(`${shown} does not exist`, { hint: "Pass the file to update: rassam render --readme <file>" });
     const location = await repoLocation(context.root, context.isGit, io.env);
     const block = renderReadmeBlock({
@@ -30981,7 +32186,7 @@ async function renderCommand(args, io) {
     } else if (update.state === "unchanged") say(`  unchanged  ${shown}
 `);
     else {
-      await writeFile5(readmeFile, update.text, "utf8");
+      await writeFile6(readmeFile, update.text, "utf8");
       say(`  updated    ${shown}
 `);
     }
@@ -31034,8 +32239,8 @@ async function timedFetch(options, url2, init, timeoutMs) {
 }
 function failureCode(error62) {
   const cause = asObject2(asObject2(error62)?.cause);
-  const code = asString2(cause?.code) || asString2(asObject2(error62)?.code);
-  return /^[A-Z][A-Z0-9_]{2,40}$/.test(code) ? code : "";
+  const code2 = asString2(cause?.code) || asString2(asObject2(error62)?.code);
+  return /^[A-Z][A-Z0-9_]{2,40}$/.test(code2) ? code2 : "";
 }
 async function probeHealth(health, options) {
   const safe = safeHealthUrl(health.url);
@@ -31046,8 +32251,8 @@ async function probeHealth(health, options) {
   const result = await timedFetch(options, safe.url.href, { method: health.method ?? "GET", redirect: "follow", headers: { "User-Agent": "rassam-status", Accept: "*/*" } }, timeoutMs);
   const latencyMs = Math.max(0, Math.round(clock() - started));
   if (!result.response) {
-    const code = failureCode(result.error);
-    const detail = result.timedOut ? `no answer within ${timeoutMs} ms` : `request failed${code ? ` (${code})` : ""}`;
+    const code2 = failureCode(result.error);
+    const detail = result.timedOut ? `no answer within ${timeoutMs} ms` : `request failed${code2 ? ` (${code2})` : ""}`;
     return { state: "down", source: "health-check", detail, latencyMs, url: safe.shown };
   }
   const { status } = result.response;
@@ -31111,12 +32316,12 @@ function createDefaultBranch(options) {
     return cached2;
   };
 }
-async function probeWorkflow(file2, options, defaultBranch) {
+async function probeWorkflow(file2, options, defaultBranch2) {
   const { github } = options;
   if (!github) return withoutGithub("workflow", options);
   const name = file2.trim().split(/[\\/]/).pop() ?? "";
   if (!/^[\w.-]+\.ya?ml$/i.test(name)) return { state: "unknown", source: "workflow", detail: "not checked: workflow.file must be a .yml or .yaml file name" };
-  const branch = await defaultBranch();
+  const branch = await defaultBranch2();
   const query = `per_page=1&exclude_pull_requests=true${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`;
   const runs = await githubGet(options, github, `/repos/${github.repository}/actions/workflows/${encodeURIComponent(name)}/runs?${query}`);
   if (!runs.ok) return { state: "unknown", source: "workflow", detail: `${name}: ${runs.reason}` };
@@ -31143,13 +32348,13 @@ function combineSignals(signals, checkedAt) {
 }
 async function probeSystem(blueprint, options) {
   const monitored = blueprint.components.filter((component2) => component2.runtime);
-  const defaultBranch = createDefaultBranch(options);
+  const defaultBranch2 = createDefaultBranch(options);
   const results = await mapLimit(monitored, PROBE_CONCURRENCY, async (component2) => {
     const runtime = component2.runtime;
     const signals = [];
     if (runtime.health) signals.push(await probeHealth(runtime.health, options));
     if (runtime.deployment) signals.push(await probeDeployment(runtime.deployment.environment, options));
-    if (runtime.workflow) signals.push(await probeWorkflow(runtime.workflow.file, options, defaultBranch));
+    if (runtime.workflow) signals.push(await probeWorkflow(runtime.workflow.file, options, defaultBranch2));
     const checkedAt = options.now().toISOString().replace(/\.\d{3}Z$/, "Z");
     if (!signals.length) return [component2.id, { state: "unknown", source: "manual", detail: "runtime declares no health URL, deployment or workflow", checkedAt }];
     return [component2.id, combineSignals(signals, checkedAt)];
@@ -31186,8 +32391,8 @@ __export(status_exports, {
   renderStatusText: () => renderStatusText,
   statusCommand: () => statusCommand
 });
-import { appendFile as appendFile2, mkdir as mkdir4, writeFile as writeFile6 } from "node:fs/promises";
-import { dirname as dirname5, join as join8 } from "node:path";
+import { appendFile as appendFile2, mkdir as mkdir5, writeFile as writeFile7 } from "node:fs/promises";
+import { dirname as dirname6, join as join9 } from "node:path";
 function overallLine(summary) {
   if (!summary.monitored) return "Overall: not monitored (no component declares runtime)";
   const label = summary.overall === "unknown" ? "no data" : summary.overall;
@@ -31257,9 +32462,9 @@ async function statusCommand(args, io) {
   if (json2) io.stdout(serializeSystemStatus(status));
   else io.stdout(renderStatusText(status, blueprint));
   if (booleanFlag(args, "write")) {
-    const file2 = join8(context.root, STATUS_PATH);
-    await mkdir4(dirname5(file2), { recursive: true });
-    await writeFile6(file2, serializeSystemStatus(status), "utf8");
+    const file2 = join9(context.root, STATUS_PATH);
+    await mkdir5(dirname6(file2), { recursive: true });
+    await writeFile7(file2, serializeSystemStatus(status), "utf8");
     (json2 ? io.stderr : io.stdout)(`Wrote ${STATUS_PATH}
 `);
   }
@@ -31838,7 +33043,7 @@ function updateRule(context, edit) {
       case "severity": {
         const previous = old ?? DEFAULT_SEVERITY[rule.kind];
         changes.push(`severity ${previous} → ${String(value)}`);
-        if (SEVERITY_RANK3[String(value)] < SEVERITY_RANK3[previous]) weakens = true;
+        if (SEVERITY_RANK4[String(value)] < SEVERITY_RANK4[previous]) weakens = true;
         break;
       }
       case "reason":
@@ -31964,7 +33169,7 @@ function setPolicy(context, edit) {
   for (const key of ["undeclaredDependencies", "unmappedFiles"]) {
     const value = edit[key];
     if (value === void 0 || value === policy[key]) continue;
-    if (SEVERITY_RANK3[value] < SEVERITY_RANK3[policy[key]]) weakens = true;
+    if (SEVERITY_RANK4[value] < SEVERITY_RANK4[policy[key]]) weakens = true;
     changes.push(`${key === "undeclaredDependencies" ? "undeclared dependencies" : "unmapped files"} ${policy[key]} → ${value}`);
     policy[key] = value;
   }
@@ -31974,6 +33179,11 @@ function setPolicy(context, edit) {
     if (!value) weakens = true;
     changes.push(key === "includeTypeOnly" ? `type-only imports ${value ? "counted" : "ignored"}` : `verification heuristics ${value ? "on" : "off"}`);
     policy[key] = value;
+  }
+  if (edit.verificationWeakening !== void 0 && edit.verificationWeakening !== policy.verificationWeakening) {
+    if (edit.verificationWeakening === "warn") weakens = true;
+    changes.push(edit.verificationWeakening === "warn" ? "weakened tests only warn" : "weakened tests need a human's approval");
+    policy.verificationWeakening = edit.verificationWeakening;
   }
   const added = [...new Set(edit.ignoreAdd ?? [])].filter((glob) => !policy.ignore.includes(glob));
   if (added.length) {
@@ -32084,7 +33294,7 @@ function applyBlueprintEdits(blueprint, edits, options = {}) {
     ...options.provenance ?? { source: "human" },
     ...options.now !== void 0 && options.provenance?.at === void 0 ? { at: options.now } : {}
   };
-  let draft = start.blueprint;
+  let draft2 = start.blueprint;
   const applied = [];
   edits.forEach((raw, index) => {
     const opName = typeof raw?.op === "string" ? raw.op : "";
@@ -32100,21 +33310,21 @@ function applyBlueprintEdits(blueprint, edits, options = {}) {
     const edit = parsed.data;
     let outcome;
     try {
-      outcome = applyOne({ blueprint: draft, provenance: { ...provenance }, now: options.now }, edit);
+      outcome = applyOne({ blueprint: draft2, provenance: { ...provenance }, now: options.now }, edit);
     } catch (error62) {
       if (error62 instanceof EditFailure) throw new BlueprintEditError(index, edit.op, error62.message, { suggestions: error62.suggestions });
       throw error62;
     }
-    const checked = parseBlueprint(draft);
+    const checked = parseBlueprint(draft2);
     if (!checked.ok) {
       throw new BlueprintEditError(index, edit.op, `Edit ${index + 1} (${edit.op}) would make the blueprint invalid: ${issueText(checked.issues)}`, {
         issues: checked.issues
       });
     }
-    draft = checked.blueprint;
+    draft2 = checked.blueprint;
     applied.push({ index, op: edit.op, ...outcome, targets: [...new Set(outcome.targets)] });
   });
-  return { blueprint: draft, applied };
+  return { blueprint: draft2, applied };
 }
 function describeEdits(applied) {
   if (!applied.length) return "No changes.";
@@ -32125,7 +33335,7 @@ function describeEdits(applied) {
   );
   return lines.join("\n");
 }
-var globSchema2, globListSchema, tagListSchema, ownerListSchema, nameSchema, reasonSchema, longTextSchema, componentIdListSchema, secretListSchema, componentPatchSchema, rulePatchSchema, healthSchema, blueprintEditSchema, BlueprintEditError, KIND_WORDS, EditFailure, SEVERITY_RANK3, DEFAULT_SEVERITY, RULE_FIELDS;
+var globSchema2, globListSchema, tagListSchema, ownerListSchema, nameSchema, reasonSchema, longTextSchema, componentIdListSchema, secretListSchema, componentPatchSchema, rulePatchSchema, healthSchema, blueprintEditSchema, BlueprintEditError, KIND_WORDS, EditFailure, SEVERITY_RANK4, DEFAULT_SEVERITY, RULE_FIELDS;
 var init_edits = __esm({
   "src/blueprint/edits.ts"() {
     "use strict";
@@ -32275,6 +33485,7 @@ var init_edits = __esm({
         unmappedFiles: external_exports.enum(["off", "info", "warning"]).optional(),
         includeTypeOnly: external_exports.boolean().optional(),
         verificationHeuristics: external_exports.boolean().optional(),
+        verificationWeakening: external_exports.enum(["require-approval", "warn"]).optional(),
         ignoreAdd: external_exports.array(globSchema2).max(500).optional(),
         ignoreRemove: external_exports.array(globSchema2).max(500).optional()
       }),
@@ -32308,7 +33519,7 @@ var init_edits = __esm({
         this.suggestions = suggestions;
       }
     };
-    SEVERITY_RANK3 = { off: 0, info: 1, warning: 2, error: 3 };
+    SEVERITY_RANK4 = { off: 0, info: 1, warning: 2, error: 3 };
     DEFAULT_SEVERITY = {
       forbid: "error",
       "allow-only": "error",
@@ -32453,7 +33664,7 @@ function suffix(command) {
   const because = /^(.*?)(?:,|\s+-+|\s+—)?\s+(?:because|since)\s+(.+)$/i.exec(result.body);
   if (because) {
     result.body = because[1].trim();
-    result.reason = sentence(because[2]);
+    result.reason = sentence2(because[2]);
   }
   const typeOnly = /^(.*?)(?:,|\s)\s*\(?(?:except|but|excluding|ignoring|not\s+counting)\s+(?:for\s+)?type(?:-only|\s+only)?\s+imports?(?:\s+are\s+(?:fine|ok|okay|allowed))?\)?$/i.exec(result.body);
   if (typeOnly) {
@@ -32467,7 +33678,7 @@ function suffix(command) {
   }
   return result;
 }
-function sentence(text4) {
+function sentence2(text4) {
   const trimmed = unquote(text4).trim();
   return trimmed ? trimmed[0].toUpperCase() + trimmed.slice(1) : trimmed;
 }
@@ -32693,7 +33904,7 @@ var init_intent = __esm({
         statement = tested[1].trim();
         tests = splitList(tested[2]).map(toGlob);
       }
-      statement = sentence(statement.replace(/[.\s]+$/, ""));
+      statement = sentence2(statement.replace(/[.\s]+$/, ""));
       if (!statement) return null;
       return [{ op: "add_invariant", statement, ...run ? { run } : {}, ...tests?.length ? { tests } : {} }];
     };
@@ -32702,9 +33913,9 @@ var init_intent = __esm({
       if (!match) return null;
       const body = match[1].trim();
       const because = /^(.*?)(?:,)?\s+because\s+(.+)$/i.exec(body);
-      const decision = sentence((because ? because[1] : body).replace(/[.\s]+$/, ""));
+      const decision = sentence2((because ? because[1] : body).replace(/[.\s]+$/, ""));
       if (!decision) return null;
-      return [{ op: "add_decision", title: decision.slice(0, 300), decision, ...because ? { context: sentence(because[2]) } : {} }];
+      return [{ op: "add_decision", title: decision.slice(0, 300), decision, ...because ? { context: sentence2(because[2]) } : {} }];
     };
     layersHandler = (command, context) => {
       const parts = suffix(command);
@@ -33022,9 +34233,9 @@ var init_intent = __esm({
       match = /^(turn\s+off|disable|silence|mute|switch\s+off|stop|turn\s+on|enable|switch\s+on)\s+(?:the\s+)?(?:reporting\s+|warnings?\s+(?:for|about)\s+|checks?\s+(?:for|on)\s+)?(undeclared|unmapped|verification)\b.*$/i.exec(command);
       if (match) {
         const on = /on|enable/i.test(match[1]) && !/off/i.test(match[1]);
-        const subject = match[2].toLowerCase();
-        if (subject === "verification") return [{ op: "set_policy", verificationHeuristics: on }];
-        if (subject === "undeclared") return [{ op: "set_policy", undeclaredDependencies: on ? "warning" : "off" }];
+        const subject2 = match[2].toLowerCase();
+        if (subject2 === "verification") return [{ op: "set_policy", verificationHeuristics: on }];
+        if (subject2 === "undeclared") return [{ op: "set_policy", undeclaredDependencies: on ? "warning" : "off" }];
         return [{ op: "set_policy", unmappedFiles: on ? "warning" : "off" }];
       }
       match = /^(ignore|skip|exclude|don't\s+count|do\s+not\s+count|count|include)\s+type(?:-only|\s+only)?\s+imports?$/i.exec(command);
@@ -33090,8 +34301,8 @@ var do_exports = {};
 __export(do_exports, {
   doCommand: () => doCommand
 });
-import { writeFile as writeFile7 } from "node:fs/promises";
-import { join as join9 } from "node:path";
+import { writeFile as writeFile8 } from "node:fs/promises";
+import { join as join10 } from "node:path";
 function apply(blueprint, edits, provenance, now) {
   try {
     return applyBlueprintEdits(blueprint, edits, { provenance, now });
@@ -33158,7 +34369,7 @@ async function doCommand(args, io) {
     (refused ? io.stderr : io.stdout)(lines.join("\n"));
   }
   if (refused) return EXIT_USAGE;
-  if (saved) await writeFile7(join9(context.root, BLUEPRINT_PATH), serializeBlueprint(outcome.blueprint), "utf8");
+  if (saved) await writeFile8(join10(context.root, BLUEPRINT_PATH), serializeBlueprint(outcome.blueprint), "utf8");
   return EXIT_OK;
 }
 var MAX_EXAMPLES;
@@ -33183,8 +34394,8 @@ __export(proposals_exports, {
   listEntries: () => listEntries,
   proposalsCommand: () => proposalsCommand
 });
-import { readdir as readdir2, readFile as readFile5 } from "node:fs/promises";
-import { join as join10 } from "node:path";
+import { readdir as readdir3, readFile as readFile6 } from "node:fs/promises";
+import { join as join11 } from "node:path";
 import { resolve as resolve6 } from "node:path";
 function text2(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -33193,7 +34404,7 @@ async function readEntry(root, directory, name, type) {
   const file2 = `${directory}/${name}`;
   const blank = { type, file: file2, title: name, author: null, date: null, status: null };
   try {
-    const data = JSON.parse(await readFile5(join10(root, file2), "utf8"));
+    const data = JSON.parse(await readFile6(join11(root, file2), "utf8"));
     if (typeof data !== "object" || data === null || Array.isArray(data)) return { ...blank, problem: "not a JSON object" };
     const record2 = data;
     return {
@@ -33215,7 +34426,7 @@ async function listEntries(root) {
     [BLUEPRINT_ESCALATIONS_DIR, "escalation"]
   ];
   for (const [directory, type] of sources) {
-    const names = await readdir2(join10(root, directory)).catch(() => []);
+    const names = await readdir3(join11(root, directory)).catch(() => []);
     for (const name of names.filter((entry) => entry.endsWith(".json")).sort()) {
       entries2.push(await readEntry(root, directory, name, type));
     }
@@ -33265,6 +34476,63 @@ var init_proposals = __esm({
   }
 });
 
+// src/cli/commands/instructions.ts
+var instructions_exports = {};
+__export(instructions_exports, {
+  instructionsCommand: () => instructionsCommand
+});
+function instructionFile(args) {
+  const given = stringFlag(args, "file");
+  if (given === void 0) return void 0;
+  const file2 = given.replace(/\\/g, "/");
+  if (!file2 || file2.startsWith("/") || /^[A-Za-z]:/.test(file2) || file2.split("/").includes("..")) {
+    throw new CliError(`--file must be a path inside the repository, got "${file2}"`);
+  }
+  return file2;
+}
+async function instructionsCommand(args, io) {
+  const context = await loadContextFor(io, stringFlag(args, "root"));
+  const blueprint = requireBlueprint(context);
+  const explicitFile = instructionFile(args);
+  const state = await agentsState(context.root, blueprint, {
+    file: explicitFile,
+    command: stringFlag(args, "command"),
+    baseBranch: context.isGit ? await defaultBranch(context.root) : void 0,
+    mcp: !booleanFlag(args, "noMcp") && await hasRassamMcp(context.root)
+  });
+  if (booleanFlag(args, "check")) {
+    if (state.status === "current") {
+      io.stdout(`${state.file} states the current contract.
+`);
+      return EXIT_OK;
+    }
+    const fix = `${cliName(io.env)} instructions --write${explicitFile ? ` --file ${explicitFile}` : ""}`;
+    io.stderr(
+      state.status === "missing" ? `rassam: ${state.file} has no contract block. Write it with: ${fix}
+` : `rassam: the contract changed since ${state.file} was written. Refresh it with: ${fix}
+`
+    );
+    return EXIT_FAILED;
+  }
+  if (booleanFlag(args, "write")) {
+    const result = await writeAgentsFile(context.root, state.block, state.file);
+    io.stdout(`${result.path}: ${result.note}.
+`);
+    return EXIT_OK;
+  }
+  io.stdout(ensureTrailingNewline(state.block));
+  return EXIT_OK;
+}
+var init_instructions = __esm({
+  "src/cli/commands/instructions.ts"() {
+    "use strict";
+    init_args();
+    init_agent_files();
+    init_context();
+    init_io();
+  }
+});
+
 // src/cli/commands/schema.ts
 var schema_exports = {};
 __export(schema_exports, {
@@ -33291,8 +34559,8 @@ function isObject2(value) {
 function isId(value) {
   return typeof value === "string" || typeof value === "number" && Number.isFinite(value);
 }
-function errorResponse(id, code, message, data) {
-  return { jsonrpc: "2.0", id, error: data === void 0 ? { code, message } : { code, message, data } };
+function errorResponse(id, code2, message, data) {
+  return { jsonrpc: "2.0", id, error: data === void 0 ? { code: code2, message } : { code: code2, message, data } };
 }
 function typeMatches(type, value) {
   switch (type) {
@@ -33566,9 +34834,9 @@ var init_protocol = __esm({
       }
     };
     RpcError = class extends Error {
-      constructor(code, message, data) {
+      constructor(code2, message, data) {
         super(message);
-        this.code = code;
+        this.code = code2;
         this.data = data;
       }
     };
@@ -33576,8 +34844,8 @@ var init_protocol = __esm({
 });
 
 // src/cli/mcp/tools.ts
-import { mkdir as mkdir5, stat as stat2, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join11 } from "node:path";
+import { mkdir as mkdir6, stat as stat2, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join12 } from "node:path";
 function objectSchema(properties, required2 = []) {
   return { type: "object", properties, required: required2, additionalProperties: false };
 }
@@ -33611,7 +34879,7 @@ function createTools(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   let cache2 = null;
   async function cacheKey(isGit) {
-    const info = await stat2(join11(deps.root, BLUEPRINT_PATH)).catch(() => null);
+    const info = await stat2(join12(deps.root, BLUEPRINT_PATH)).catch(() => null);
     const head = isGit ? await headSha(deps.root).catch(() => null) : null;
     return `${info ? `${info.mtimeMs}:${info.size}` : "none"}|${head ?? "nohead"}`;
   }
@@ -33655,11 +34923,11 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
   async function writeNote(directory, title, fallback, record2) {
     const stamp = fileTimestamp(now());
     const slug = slugify(title, fallback);
-    await mkdir5(join11(deps.root, directory), { recursive: true });
+    await mkdir6(join12(deps.root, directory), { recursive: true });
     for (let attempt = 1; attempt <= 50; attempt++) {
       const file2 = `${directory}/${stamp}-${slug}${attempt === 1 ? "" : `-${attempt}`}.json`;
       try {
-        await writeFile8(join11(deps.root, file2), `${JSON.stringify(record2, null, 2)}
+        await writeFile9(join12(deps.root, file2), `${JSON.stringify(record2, null, 2)}
 `, { encoding: "utf8", flag: "wx" });
         return file2;
       } catch (error62) {
@@ -33808,7 +35076,7 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
       };
     }
     const cut = (items) => items.slice(0, MAX_DIFF_ENTRIES);
-    const more = [diff.components.added, diff.components.removed, diff.edges.added, diff.edges.removed, diff.edges.statusChanged].reduce((sum, items) => sum + Math.max(0, items.length - MAX_DIFF_ENTRIES), 0);
+    const more2 = [diff.components.added, diff.components.removed, diff.edges.added, diff.edges.removed, diff.edges.statusChanged].reduce((sum, items) => sum + Math.max(0, items.length - MAX_DIFF_ENTRIES), 0);
     return {
       structured: asJson({
         base: { ref: base, sha: comparison.sha },
@@ -33817,7 +35085,7 @@ ${formatIssues(snap.context.blueprintIssues, 10)}`);
         summary: diff.changed ? `Since ${base}: ${diff.summary}.` : `No architecture changes since ${base}.`,
         components: { added: cut(diff.components.added), removed: cut(diff.components.removed) },
         edges: { added: cut(diff.edges.added), removed: cut(diff.edges.removed), statusChanged: cut(diff.edges.statusChanged) },
-        moreEntries: more || void 0,
+        moreEntries: more2 || void 0,
         note: "Uncommitted and untracked files are included. An edge that became undeclared or forbidden is a violation: run check_changes for the findings."
       })
     };
@@ -34064,6 +35332,7 @@ var LOADERS = {
   status: async () => (await Promise.resolve().then(() => (init_status2(), status_exports))).statusCommand,
   do: async () => (await Promise.resolve().then(() => (init_do(), do_exports))).doCommand,
   proposals: async () => (await Promise.resolve().then(() => (init_proposals(), proposals_exports))).proposalsCommand,
+  instructions: async () => (await Promise.resolve().then(() => (init_instructions(), instructions_exports))).instructionsCommand,
   schema: async () => (await Promise.resolve().then(() => (init_schema2(), schema_exports))).schemaCommand,
   mcp: async () => (await Promise.resolve().then(() => (init_mcp(), mcp_exports))).mcpCommand
 };
@@ -34124,9 +35393,9 @@ async function main(argv, io) {
 }
 
 // src/cli/index.ts
-function exit(code) {
-  process.exitCode = code;
-  process.stdout.write("", () => process.exit(code));
+function exit(code2) {
+  process.exitCode = code2;
+  process.stdout.write("", () => process.exit(code2));
 }
 process.stdout.on("error", (error62) => {
   if (error62.code === "EPIPE") process.exit(process.exitCode ?? 0);

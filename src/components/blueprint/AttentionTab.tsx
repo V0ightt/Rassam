@@ -12,6 +12,7 @@ import {
   declareDependency,
   forbidDependency,
   forbidRuleId,
+  preExistingCount,
   reportVerdict,
   splitAttention,
   type Verdict,
@@ -46,6 +47,7 @@ interface AttentionTabProps {
 export default function AttentionTab({ session, ui, onNavigateToSource, onShowOnCanvas, onPropose, hideSummary = false }: AttentionTabProps) {
   const { report, workspace, blueprint } = session;
   const verdict = reportVerdict(report);
+  const inherited = preExistingCount(report);
   const attention = useMemo(() => splitAttention(report), [report]);
   const authorship = useMemo(() => workspace?.overview().authorship ?? null, [workspace]);
   const ratio = authorship?.ratio ?? report?.summary.humanAuthoredRatio ?? 0;
@@ -103,7 +105,7 @@ export default function AttentionTab({ session, ui, onNavigateToSource, onShowOn
                 <VerdictIcon size={13} aria-hidden="true" /> {VERDICT_LABEL[verdict]}
               </span>
               <span className="text-xs text-slate-300">
-                {plural(report.summary.errors, 'error')} · {plural(report.summary.warnings, 'warning')} · {report.summary.infos} info
+                {plural(report.summary.errors, 'error')} · {plural(report.summary.warnings, 'warning')} · {report.summary.infos} info{inherited > 0 ? ` · ${inherited} existed before the contract` : ''}
               </span>
             </div>
             <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-400">

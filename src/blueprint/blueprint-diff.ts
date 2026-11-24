@@ -249,6 +249,20 @@ function diffPolicy(base: Blueprint, head: Blueprint): BlueprintChange[] {
     ),
   );
 
+  const before = base.policy.verificationWeakening;
+  const after = head.policy.verificationWeakening;
+  if (before !== after) {
+    const loosened = after === "warn";
+    changes.push({
+      kind: loosened ? "policy-weakened" : "policy-changed",
+      target: "policy.verificationWeakening",
+      summary: loosened
+        ? `Policy verificationWeakening lowered from "${before}" to "${after}": skipped, deleted or gutted tests no longer need a human approval`
+        : `Policy verificationWeakening raised from "${before}" to "${after}": skipped, deleted or gutted tests need a human approval`,
+      weakens: loosened,
+    });
+  }
+
   const ignore = setDiff(base.policy.ignore, head.policy.ignore);
   if (hasDiff(ignore)) {
     const weakens = ignore.added.length > 0;

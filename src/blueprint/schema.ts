@@ -14,7 +14,10 @@ export const BLUEPRINT_PATH = ".rassam/blueprint.json";
 export const BLUEPRINT_LAYOUT_PATH = ".rassam/layout.json";
 export const BLUEPRINT_PROPOSALS_DIR = ".rassam/proposals";
 export const BLUEPRINT_ESCALATIONS_DIR = ".rassam/escalations";
-export const BLUEPRINT_SCHEMA_URL = "https://rassam.dev/schema/blueprint-0.1.json";
+/** Where the project lives. Used wherever a report or generated file links back to Rassam. */
+export const PROJECT_URL = "https://github.com/V0ightt/Rassam";
+/** A URL that resolves, so editors can fetch the schema for completion and validation. */
+export const BLUEPRINT_SCHEMA_URL = "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json";
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
 export const blueprintIdSchema = z
@@ -290,6 +293,15 @@ export const policySchema = z
       .default({ defaults: true }),
     /** Heuristics that flag weakened verification (skipped tests, deleted assertions, ...). */
     verificationHeuristics: z.boolean().default(true),
+    /**
+     * What the strong verification-weakening signals do (skipped, focused,
+     * deleted or trivialized tests, removed assertions, lowered or removed
+     * coverage thresholds, a forced zero exit). "require-approval": errors
+     * until a human approves the change with the approval label, the same
+     * mechanism as contract weakening. "warn": warnings, except a forced zero
+     * exit, which stays an error. Weak signals are warnings either way.
+     */
+    verificationWeakening: z.enum(["require-approval", "warn"]).default("require-approval"),
     /** Globs excluded from analysis entirely (generated code, fixtures, vendored code). */
     ignore: z.array(globSchema).max(500).default([]),
   })
@@ -479,7 +491,7 @@ export function blueprintJsonSchema(): Record<string, unknown> {
   return {
     $id: BLUEPRINT_SCHEMA_URL,
     title: "Rassam Blueprint",
-    description: "A human-owned architecture contract for agent-built software. See https://rassam.dev",
+    description: `A human-owned architecture contract for agent-built software. See ${PROJECT_URL}`,
     ...schema,
   };
 }

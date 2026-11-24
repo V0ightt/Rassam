@@ -140,6 +140,26 @@ describe("diffBlueprints: policy", () => {
     expect(on).toMatchObject({ kind: "policy-changed", target: `policy.${field}`, weakens: false });
   });
 
+  it("flags verificationWeakening lowered to warn, explicitly or from the default", () => {
+    const warn = withPolicy({ verificationWeakening: "warn" });
+    const explicit = withPolicy({ verificationWeakening: "require-approval" });
+    const lowered = {
+      kind: "policy-weakened",
+      target: "policy.verificationWeakening",
+      summary: 'Policy verificationWeakening lowered from "require-approval" to "warn": skipped, deleted or gutted tests no longer need a human approval',
+      weakens: true,
+    };
+    expect(only(diffBlueprints(explicit, warn))).toEqual(lowered);
+    // The base omits the field: its default, require-approval, is what the change is judged by.
+    expect(only(diffBlueprints(base, warn))).toEqual(lowered);
+    expect(only(diffBlueprints(warn, explicit))).toMatchObject({ kind: "policy-changed", target: "policy.verificationWeakening", weakens: false });
+    // Writing the default out, or dropping it again, changes nothing.
+    expect(diffBlueprints(base, explicit)).toEqual([]);
+    expect(diffBlueprints(explicit, base)).toEqual([]);
+    // Dropping an explicit "warn" restores the default: a tightening, not a weakening.
+    expect(only(diffBlueprints(warn, base))).toMatchObject({ kind: "policy-changed", weakens: false });
+  });
+
   it("flags removed tripwire paths; added ones are a plain change", () => {
     const two = withPolicy({ tripwires: { defaults: true, paths: ["infra/**", "migrations/**"] } });
     const one = withPolicy({ tripwires: { defaults: true, paths: ["infra/**"] } });
@@ -171,6 +191,7 @@ describe("diffBlueprints: policy", () => {
       includeTypeOnly: false,
       tripwires: { defaults: false },
       verificationHeuristics: false,
+      verificationWeakening: "warn",
       ignore: ["**/*.gen.ts"],
     });
     const changes = diffBlueprints(base, head);
@@ -180,6 +201,7 @@ describe("diffBlueprints: policy", () => {
       "policy.includeTypeOnly",
       "policy.tripwires.defaults",
       "policy.verificationHeuristics",
+      "policy.verificationWeakening",
       "policy.ignore",
     ]);
     expect(changes.every((change) => change.kind === "policy-weakened" && change.weakens)).toBe(true);

@@ -70,8 +70,10 @@ describe("rassam CLI end to end", () => {
     const { code, io } = await run(root, ["init", "--name", "Shop"]);
     expect(code).toBe(0);
     expect(io.text()).toContain("Wrote .rassam/blueprint.json");
-    expect(io.text()).toContain('{"mcpServers":{"rassam":{"command":"npx","args":["rassam","mcp"]}}}');
-    expect(io.text()).toContain("action/dist/rassam.mjs");
+    // Not a terminal and no flags: nothing but the blueprint is written, and the offer says how.
+    expect(io.text()).toContain("Not wired up yet (--mcp, --agents, --workflow)");
+    expect(io.text()).toContain("rassam init --yes");
+    for (const path of [".mcp.json", "AGENTS.md", "CLAUDE.md", ".github/workflows/rassam.yml"]) expect(existsSync(join(root, path))).toBe(false);
     const draft = JSON.parse(await readFile(join(root, ".rassam/blueprint.json"), "utf8")) as Json;
     expect(draft.system.name).toBe("Shop");
     expect(draft.components.length).toBeGreaterThan(0);
@@ -83,6 +85,7 @@ describe("rassam CLI end to end", () => {
     const refused = await run(root, ["init"]);
     expect(refused.code).toBe(2);
     expect(refused.io.errText()).toContain("already exists");
+    expect(refused.io.errText()).toContain("--yes");
     expect((await run(root, ["init", "--force"])).code).toBe(0);
   });
 
@@ -476,4 +479,77 @@ describe("rassam CLI end to end", () => {
     expect(messages[3].result.resultType).toBe("complete");
     expect(Buffer.concat(err).toString("utf8")).toContain("[rassam mcp] serving");
   }, 30_000);
+});
+
+describe("rassam init wires up agents and CI", () => {
+  let root: string;
+
+  beforeAll(async () => {
+    root = await makeTempDir("rassam-wire-");
+    await seed(root);
+    await write(root, "scripts/seed.ts", 'import { fixture } from "../tests/fixture";\nexport const seeded = fixture();\n');
+    await write(root, "tests/fixture.ts", "export const fixture = () => 1;\n");
+    await write(root, "tests/page.test.ts", 'import { page } from "../src/ui/page";\nexport const rendered = page();\n');
+    await commitAll(root, "initial");
+  });
+
+  afterAll(async () => {
+    await removeDir(root);
+  });
+
+  it("asks before each file in a terminal and writes only what was accepted", async () => {
+    const asked: string[] = [];
+    const ask = async (question: string) => {
+      asked.push(question);
+      return !question.includes("workflow");
+    };
+    const { code, io } = await run(root, ["init"], { ask });
+    expect(code).toBe(0);
+    expect(asked).toHaveLength(3);
+    expect(io.text()).toContain("Wired up:");
+    expect(existsSync(join(root, ".mcp.json"))).toBe(true);
+    expect(existsSync(join(root, "AGENTS.md"))).toBe(true);
+    expect(await readFile(join(root, "CLAUDE.md"), "utf8")).toContain("@AGENTS.md");
+    expect(existsSync(join(root, ".github/workflows/rassam.yml"))).toBe(false);
+  });
+
+  it("says that violations of the drafted rules existed before the contract did", async () => {
+    const { io } = await run(root, ["init", "--force", "--no-mcp", "--no-agents", "--no-workflow"]);
+    expect(io.text()).toMatch(/The code already breaks 1 drafted rule in 1 place \(tests-are-leaves: 1\)/);
+    expect(io.text()).toContain("These existed before the contract did.");
+    expect(io.text()).not.toContain("Not wired up yet");
+  });
+
+  it("wires an existing blueprint with --yes, idempotently", async () => {
+    const first = await run(root, ["init", "--yes"]);
+    expect(first.code).toBe(0);
+    expect(first.io.text()).toContain("Using the existing .rassam/blueprint.json");
+    expect(first.io.text()).toMatch(/\.github\/workflows\/rassam\.yml\s+created/);
+    const agents = await readFile(join(root, "AGENTS.md"), "utf8");
+    expect(agents).toContain("## Architecture contract");
+    expect(agents).toContain("`report_conflict`");
+
+    const second = await run(root, ["init", "--yes"]);
+    expect(second.io.text()).not.toMatch(/\s(created|updated):/);
+    expect(await readFile(join(root, "AGENTS.md"), "utf8")).toBe(agents);
+  });
+
+  it("instructions --check fails when the contract changed, and --write refreshes AGENTS.md", async () => {
+    expect((await run(root, ["instructions", "--check"])).code).toBe(0);
+    const blueprint = JSON.parse(await readFile(join(root, ".rassam/blueprint.json"), "utf8")) as Json;
+    blueprint.rules.push({ id: "ui-no-db", kind: "forbid", from: blueprint.components[0].id, to: "package:pg", reason: "Pages never query the database." });
+    await write(root, ".rassam/blueprint.json", `${JSON.stringify(blueprint, null, 2)}\n`);
+
+    const stale = await run(root, ["instructions", "--check"]);
+    expect(stale.code).toBe(1);
+    expect(stale.io.errText()).toContain("instructions --write");
+    const check = await run(root, ["check"]);
+    expect(check.io.errText()).toContain("AGENTS.md states an older version of the contract");
+
+    const printed = await run(root, ["instructions"]);
+    expect(printed.io.text()).toContain("Pages never query the database.");
+    expect((await run(root, ["instructions", "--write"])).io.text()).toContain("AGENTS.md: refreshed");
+    expect((await run(root, ["instructions", "--check"])).code).toBe(0);
+    expect(await readFile(join(root, "AGENTS.md"), "utf8")).toContain("the `pg` package. Pages never query the database.");
+  });
 });
