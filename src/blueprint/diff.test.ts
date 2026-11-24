@@ -485,6 +485,9 @@ describe("detectVerificationWeakening", () => {
       "describe('suite', { todo: true }, () => {",
       "  t.todo('not yet');",
       "test.fixme('works', async ({ page }) => {});",
+      // The option does not have to be the first property.
+      "test('works', { timeout: 500, skip: true }, () => {});",
+      "it('works', { concurrency: 1, todo: 'later' }, async () => {",
     ];
 
     it("does not flag a placeholder without a body, or options that leave the test running", () => {
@@ -497,7 +500,59 @@ describe("detectVerificationWeakening", () => {
                 "test.todo('later');",
                 "test('works', { skip: false }, () => {});",
                 "test('works', { timeout: 500 }, () => {});",
+                "test('works', { timeout: 500, skip: false }, () => {});",
                 "test('reads { todo: true } from the config', () => {});",
+                // An object literal inside the test body is data, not test options.
+                "test('pages', (t) => { run({ skip: true }); });",
+                "test('pages', t => { run({ skip: true }); });",
+              ],
+            }),
+          ],
+          "test-skipped",
+        ),
+      ).toEqual([]);
+    });
+
+    it("flags a skip or todo option on its own line of a multi-line test call", () => {
+      const signals = signalsOf(
+        [
+          change("src/a.test.ts", {
+            added: [
+              "test('works', {",
+              "  timeout: 500,",
+              "  skip: true,",
+              "}, () => {",
+              "  const query = {",
+              "    skip: true,",
+              "  };",
+              "describe('suite', {",
+              "  todo: 'owner to decide',",
+              "}, () => {",
+            ],
+          }),
+        ],
+        "test-skipped",
+      );
+      expect(signals.map((entry) => entry.line)).toEqual([12, 18]);
+    });
+
+    it("leaves skip and todo properties alone outside a test call's options", () => {
+      expect(
+        signalsOf(
+          [
+            change("src/a.test.ts", {
+              added: [
+                "const page = await notes.findMany({",
+                "  skip: 10,",
+                "  take: 5,",
+                "});",
+                "expect(page).toEqual({",
+                "  todo: 'buy milk',",
+                "});",
+                "test('works', {",
+                "  timeout: 500,",
+                "  skip: false,",
+                "}, () => {});",
               ],
             }),
           ],

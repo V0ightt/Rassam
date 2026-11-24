@@ -25027,9 +25027,12 @@ function detectDeletedTest(change) {
 }
 function detectTestLineSignals(change) {
   const signals = [];
+  let optionsLine = -1;
   for (const { line, text: text4 } of change.added) {
     const code = codeOnly(change.path, text4);
-    if (SKIP_PATTERNS.some((pattern2) => pattern2.test(code))) {
+    const insideOptions = line === optionsLine;
+    optionsLine = insideOptions && !code.includes("}") || TEST_OPTIONS_OPEN.test(code) ? line + 1 : -1;
+    if (SKIP_PATTERNS.some((pattern2) => pattern2.test(code)) || insideOptions && SKIP_OPTION_LINE.test(code)) {
       signals.push({
         path: change.path,
         line,
@@ -25346,7 +25349,7 @@ function detectVerificationWeakening(changes) {
     (left, right) => compareText(left.path, right.path) || (left.line ?? 0) - (right.line ?? 0) || compareText(left.signal, right.signal) || compareText(left.message, right.message)
   );
 }
-var SIMPLE_ESCAPES, PREFIX, HUNK_HEADER, SNAPSHOT_PATTERNS, CI_PATTERNS, HOOK_PATTERNS, RUNNER_CONFIG_PATTERNS, COVERAGE_CONFIG_PATTERNS, SHELL_EXTENSIONS, DOC_EXTENSIONS, CODE_EXTENSIONS, STRING_LITERAL, SKIP_PATTERNS, FOCUS_PATTERNS, ASSERTION_PATTERN, LITERAL, TRIVIAL_PATTERNS, EXIT_PATTERNS, SHELL_EXIT_PATTERN, SUPPRESSION_PATTERNS, CI_WEAKENING_PATTERNS, COMMAND_CLASSES, COMMAND_KEYS, THRESHOLD_PATTERN, SCRIPT_PATTERN, NAMED_TEST_PATTERNS, COMMENTED_LINE, PR_TRIGGER, TEST_EXCLUSION_PATTERNS, TEST_DETECTION_PATTERNS;
+var SIMPLE_ESCAPES, PREFIX, HUNK_HEADER, SNAPSHOT_PATTERNS, CI_PATTERNS, HOOK_PATTERNS, RUNNER_CONFIG_PATTERNS, COVERAGE_CONFIG_PATTERNS, SHELL_EXTENSIONS, DOC_EXTENSIONS, CODE_EXTENSIONS, STRING_LITERAL, SKIP_PATTERNS, TEST_OPTIONS_OPEN, SKIP_OPTION_LINE, FOCUS_PATTERNS, ASSERTION_PATTERN, LITERAL, TRIVIAL_PATTERNS, EXIT_PATTERNS, SHELL_EXIT_PATTERN, SUPPRESSION_PATTERNS, CI_WEAKENING_PATTERNS, COMMAND_CLASSES, COMMAND_KEYS, THRESHOLD_PATTERN, SCRIPT_PATTERN, NAMED_TEST_PATTERNS, COMMENTED_LINE, PR_TRIGGER, TEST_EXCLUSION_PATTERNS, TEST_DETECTION_PATTERNS;
 var init_diff = __esm({
   "src/blueprint/diff.ts"() {
     "use strict";
@@ -25423,9 +25426,11 @@ var init_diff = __esm({
       /\.skip\s*\(/,
       /\b(?:it|test|describe|context|suite)\.skip\b/,
       /\.skipIf\s*\(/,
-      // node:test options: test('name', { skip: true }, fn) or { todo: 'reason' }.
+      // node:test options, wherever they sit in the object: test('name', { skip: true }, fn)
+      // or { timeout: 500, todo: 'reason' }. The span before the object may not cross a
+      // closing parenthesis or an arrow, so object literals inside a test body are left alone.
       // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
-      /\b(?:it|test|describe|suite)\s*\([^)]*\{\s*(?:skip|todo)\s*:(?!\s*false\b)/,
+      /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*\b(?:skip|todo)\s*:(?!\s*false\b)/,
       /\b(?:t|ctx)\.todo\s*\(/,
       /\b(?:it|test|describe)\.fixme\b/,
       /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
@@ -25436,6 +25441,8 @@ var init_diff = __esm({
       /@Ignore\b/,
       /#\[ignore\b/
     ];
+    TEST_OPTIONS_OPEN = /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*$/;
+    SKIP_OPTION_LINE = /^\s*(?:skip|todo)\s*:(?!\s*false\b)/;
     FOCUS_PATTERNS = [/\.only\s*\(/, /\b(?:fit|fdescribe|fcontext)\s*\(/];
     ASSERTION_PATTERN = /\bexpect\s*\(|\bassert\w*|\bshould\.|\.should\b|\.to(?:Be|Equal|StrictEqual|Have|Match|Throw|Contain)\w*\s*\(|\brequire\.[A-Z]\w*\s*\(|\bt\.(?:Error|Fatal)f?\s*\(/;
     LITERAL = String.raw`(?:true|false|null|undefined|-?\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;

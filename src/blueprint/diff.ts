@@ -526,9 +526,11 @@ const SKIP_PATTERNS: readonly RegExp[] = [
   /\.skip\s*\(/,
   /\b(?:it|test|describe|context|suite)\.skip\b/,
   /\.skipIf\s*\(/,
-  // node:test options: test('name', { skip: true }, fn) or { todo: 'reason' }.
+  // node:test options, wherever they sit in the object: test('name', { skip: true }, fn)
+  // or { timeout: 500, todo: 'reason' }. The span before the object may not cross a
+  // closing parenthesis or an arrow, so object literals inside a test body are left alone.
   // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
-  /\b(?:it|test|describe|suite)\s*\([^)]*\{\s*(?:skip|todo)\s*:(?!\s*false\b)/,
+  /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*\b(?:skip|todo)\s*:(?!\s*false\b)/,
   /\b(?:t|ctx)\.todo\s*\(/,
   /\b(?:it|test|describe)\.fixme\b/,
   /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
@@ -539,6 +541,11 @@ const SKIP_PATTERNS: readonly RegExp[] = [
   /@Ignore\b/,
   /#\[ignore\b/,
 ];
+
+/** A test call whose options object is still open at the end of the line: `test('name', {`. */
+const TEST_OPTIONS_OPEN = /\b(?:it|test|describe|suite)\s*\((?:(?!=>)[^)])*\{[^}]*$/;
+/** A `skip:` or `todo:` property on a line of its own. Only meaningful inside such an options object. */
+const SKIP_OPTION_LINE = /^\s*(?:skip|todo)\s*:(?!\s*false\b)/;
 
 const FOCUS_PATTERNS: readonly RegExp[] = [/\.only\s*\(/, /\b(?:fit|fdescribe|fcontext)\s*\(/];
 
@@ -663,9 +670,19 @@ function detectDeletedTest(change: ChangedFile): WeakeningSignal[] {
 
 function detectTestLineSignals(change: ChangedFile): WeakeningSignal[] {
   const signals: WeakeningSignal[] = [];
+  // The next added line that would still be inside a test call's options object
+  // opened on an earlier added line:
+  //   test('name', {
+  //     timeout: 500,
+  //     skip: true,
+  //   }, fn)
+  // Outside such an object a `skip:` property is ordinary data (pagination, fixtures).
+  let optionsLine = -1;
   for (const { line, text } of change.added) {
     const code = codeOnly(change.path, text);
-    if (SKIP_PATTERNS.some((pattern) => pattern.test(code))) {
+    const insideOptions = line === optionsLine;
+    optionsLine = (insideOptions && !code.includes("}")) || TEST_OPTIONS_OPEN.test(code) ? line + 1 : -1;
+    if (SKIP_PATTERNS.some((pattern) => pattern.test(code)) || (insideOptions && SKIP_OPTION_LINE.test(code))) {
       signals.push({
         path: change.path,
         line,
