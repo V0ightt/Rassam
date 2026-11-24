@@ -266,7 +266,7 @@ describe("rassam render", () => {
     expect(text).toContain('src="https://raw.githubusercontent.com/acme/shop/rassam-live/system-light.svg">');
     expect(text).toContain("rassam-live/badge-blueprint.svg");
     expect(text).toContain("rassam-live/badge-system.svg");
-    expect(text).toContain("Updated on every push by");
+    expect(text).toContain('Updated on every push by <a href="https://github.com/V0ightt/Rassam">Rassam</a>');
     expect(text).toContain("status as of 2026-11-21 10:15 UTC");
     expect(text).toContain("<summary>Components (4)</summary>");
     expect(text).toContain("| UI | frontend | No data | Renders pages. |");

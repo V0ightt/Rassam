@@ -2,7 +2,7 @@
 // audit budget: every renderer leads with a short, ranked "needs your
 // attention" list backed by file:line evidence and collapses the rest.
 
-import { BLUEPRINT_PATH } from "./schema";
+import { BLUEPRINT_PATH, PROJECT_URL } from "./schema";
 import type { Severity } from "./schema";
 import type { BlueprintChange, CheckReport, Finding, FindingKind, FindingLocation, ImpactReport, ReachReport } from "./types";
 
@@ -658,7 +658,7 @@ export function renderSarif(report: CheckReport): Record<string, unknown> {
         tool: {
           driver: {
             name: "Rassam",
-            informationUri: "https://rassam.dev",
+            informationUri: PROJECT_URL,
             version: report.tool.version,
             rules: kinds.map((kind) => ({
               id: kind,

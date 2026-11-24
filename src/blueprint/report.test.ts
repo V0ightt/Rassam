@@ -425,7 +425,7 @@ describe("renderSarif", () => {
     expect(sarif.$schema).toBe("https://json.schemastore.org/sarif-2.1.0.json");
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs).toHaveLength(1);
-    expect(run.tool.driver).toMatchObject({ name: "Rassam", informationUri: "https://rassam.dev", version: "0.4.0" });
+    expect(run.tool.driver).toMatchObject({ name: "Rassam", informationUri: "https://github.com/V0ightt/Rassam", version: "0.4.0" });
   });
 
   it("emits one rule per kind present", () => {

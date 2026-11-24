@@ -27,7 +27,7 @@ All paths are relative to the repository root.
 
 | Key | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `$schema` | no | — | Schema URL for editors: `https://rassam.dev/schema/blueprint-0.1.json` |
+| `$schema` | no | — | Schema URL for editors: `https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json` |
 | `version` | yes | — | Must be the string `"0.1"` |
 | `system` | yes | — | Name and description of the system |
 | `policy` | no | all defaults | How the gate treats things the rules do not mention |
@@ -45,7 +45,7 @@ A small web shop: a React front end, an HTTP API, a domain layer, a data-access 
 
 ```json
 {
-  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
+  "$schema": "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json",
   "version": "0.1",
   "system": {
     "name": "Corner Shop",
@@ -1030,7 +1030,7 @@ Limits to be aware of:
 ## 15. JSON Schema
 
 - In the repository: `schema/blueprint-0.1.schema.json` (JSON Schema draft 2020-12), generated from `src/blueprint/schema.ts` by `npm run blueprint:schema`. Do not edit it by hand.
-- Published identifier (`$id`), for the `$schema` key of a blueprint: `https://rassam.dev/schema/blueprint-0.1.json`.
+- Published identifier (`$id`), for the `$schema` key of a blueprint: `https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json`.
 - From the CLI: `rassam schema`.
 
 The schema describes the file as authored: fields with defaults are optional. It cannot express the referential checks in [4.8](#48-validation-beyond-the-json-schema), so a file that validates against the schema can still be rejected by `rassam check`.

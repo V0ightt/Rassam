@@ -1,11 +1,10 @@
 <div align="center">
-  <a href="https://rassam.dev"><img src="./public/logo.png" alt="Rassam" width="96" height="96" /></a>
+  <img src="./public/logo.png" alt="Rassam" width="96" height="96" />
   <h1>Rassam</h1>
   <p><b>Is your project still on track?</b><br/>
   One place where you and your coding agents check before changing anything.</p>
 
   [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/fFtMjNQTFJ)
-  [![Website](https://img.shields.io/badge/rassam.dev-visit-9c95fe?style=flat-square)](https://rassam.dev)
   ![AGPL v3](https://img.shields.io/badge/license-AGPL%20v3-blue?style=flat-square)
 </div>
 
@@ -57,7 +56,7 @@ This picture is not a screenshot. A GitHub Action redraws it every time someone 
   <img alt="Blueprint check" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-blueprint.svg">
   <img alt="System status" src="https://raw.githubusercontent.com/V0ightt/Rassam/rassam-live/badge-system.svg">
 </p>
-<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of 2026-11-22 22:58 UTC</sub></p>
+<p align="center"><sub>Updated on every push by <a href="https://github.com/V0ightt/Rassam">Rassam</a> · status as of 2026-11-24 18:23 UTC</sub></p>
 
 <details>
 <summary>Components (20)</summary>
@@ -264,6 +263,6 @@ Why we built it this way, with sources: [the research report](reports/Rassam%20p
 
 ## Say hi
 
-Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/) · `contact@rassam.dev`
+Discord `v0ight_` · [LinkedIn](https://www.linkedin.com/in/momen-saeb-b88183283/)
 
 Built with Claude. Thanks to the GitHub Student Developer Pack.

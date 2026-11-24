@@ -3,7 +3,7 @@
 // table. A README can only show static images, so everything here is plain
 // HTML and Markdown that GitHub's sanitizer keeps.
 
-import type { Blueprint } from "../blueprint/schema";
+import { PROJECT_URL, type Blueprint } from "../blueprint/schema";
 import type { SystemStatus } from "../blueprint/status";
 
 export const README_START = "<!-- rassam:system:start -->";
@@ -74,7 +74,7 @@ export function renderReadmeBlock(input: ReadmeBlockInput): string {
     `  <img alt="Blueprint check" src="${src("badge-blueprint.svg")}">`,
     `  <img alt="System status" src="${src("badge-system.svg")}">`,
     "</p>",
-    `<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of ${escapeHtml(captionTime(input.generatedAt))}</sub></p>`,
+    `<p align="center"><sub>Updated on every push by <a href="${PROJECT_URL}">Rassam</a> · status as of ${escapeHtml(captionTime(input.generatedAt))}</sub></p>`,
     "",
     "<details>",
     `<summary>Components (${blueprint.components.length})</summary>`,

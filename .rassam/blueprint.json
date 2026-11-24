@@ -1,5 +1,5 @@
 {
-  "$schema": "https://rassam.dev/schema/blueprint-0.1.json",
+  "$schema": "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json",
   "version": "0.1",
   "system": {
     "name": "Rassam",

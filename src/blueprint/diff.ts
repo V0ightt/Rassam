@@ -526,6 +526,11 @@ const SKIP_PATTERNS: readonly RegExp[] = [
   /\.skip\s*\(/,
   /\b(?:it|test|describe|context|suite)\.skip\b/,
   /\.skipIf\s*\(/,
+  // node:test options: test('name', { skip: true }, fn) or { todo: 'reason' }.
+  // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
+  /\b(?:it|test|describe|suite)\s*\([^)]*\{\s*(?:skip|todo)\s*:(?!\s*false\b)/,
+  /\b(?:t|ctx)\.todo\s*\(/,
+  /\b(?:it|test|describe)\.fixme\b/,
   /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
   /@pytest\.mark\.(?:skip|skipif|xfail)\b/,
   /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/,

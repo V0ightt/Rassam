@@ -478,9 +478,35 @@ describe("detectVerificationWeakening", () => {
       "@Ignore",
       "#[ignore]",
       "this.skip();",
+      // node:test options and context calls, and Playwright's fixme.
+      "test('free plan: a user can keep four notes', { todo: 'owner to decide' }, () => {",
+      "test('works', { skip: true }, () => {});",
+      "it('works', { skip: 'flaky on CI' }, async () => {",
+      "describe('suite', { todo: true }, () => {",
+      "  t.todo('not yet');",
+      "test.fixme('works', async ({ page }) => {});",
     ];
 
-    it.each(skips.filter((text) => !text.includes(".todo(")))("flags %s", (text) => {
+    it("does not flag a placeholder without a body, or options that leave the test running", () => {
+      expect(
+        signalsOf(
+          [
+            change("src/a.test.ts", {
+              added: [
+                "it.todo('later');",
+                "test.todo('later');",
+                "test('works', { skip: false }, () => {});",
+                "test('works', { timeout: 500 }, () => {});",
+                "test('reads { todo: true } from the config', () => {});",
+              ],
+            }),
+          ],
+          "test-skipped",
+        ),
+      ).toEqual([]);
+    });
+
+    it.each(skips.filter((text) => !/^(?:it|test)\.todo\(/.test(text)))("flags %s", (text) => {
       const signals = signalsOf([change("src/a.test.ts", { added: [text] })], "test-skipped");
       expect(signals).toHaveLength(1);
       expect(signals[0]).toMatchObject({ path: "src/a.test.ts", line: 10, severity: "warning" });

@@ -21152,11 +21152,11 @@ function blueprintJsonSchema() {
   return {
     $id: BLUEPRINT_SCHEMA_URL,
     title: "Rassam Blueprint",
-    description: "A human-owned architecture contract for agent-built software. See https://rassam.dev",
+    description: `A human-owned architecture contract for agent-built software. See ${PROJECT_URL}`,
     ...schema
   };
 }
-var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentRuntimeSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
+var BLUEPRINT_VERSION, BLUEPRINT_PATH, BLUEPRINT_PROPOSALS_DIR, BLUEPRINT_ESCALATIONS_DIR, PROJECT_URL, BLUEPRINT_SCHEMA_URL, idPattern, blueprintIdSchema, shortText, longText, globSchema, timestampSchema, severitySchema, provenanceSchema, verificationSchema, assuranceSchema, componentKindSchema, componentRuntimeSchema, componentSchema, dependencyKindSchema, dependencySchema, selectorSchema, ruleBase, forbidRuleSchema, allowOnlyRuleSchema, layersRuleSchema, noCyclesRuleSchema, protectRuleSchema, secretAccessRuleSchema, ruleSchema, invariantSchema, decisionSchema, policySchema, blueprintSchema, RESERVED_SELECTOR_PREFIXES, TOP_LEVEL_ORDER;
 var init_schema = __esm({
   "src/blueprint/schema.ts"() {
     "use strict";
@@ -21165,7 +21165,8 @@ var init_schema = __esm({
     BLUEPRINT_PATH = ".rassam/blueprint.json";
     BLUEPRINT_PROPOSALS_DIR = ".rassam/proposals";
     BLUEPRINT_ESCALATIONS_DIR = ".rassam/escalations";
-    BLUEPRINT_SCHEMA_URL = "https://rassam.dev/schema/blueprint-0.1.json";
+    PROJECT_URL = "https://github.com/V0ightt/Rassam";
+    BLUEPRINT_SCHEMA_URL = "https://raw.githubusercontent.com/V0ightt/Rassam/main/schema/blueprint-0.1.schema.json";
     idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
     blueprintIdSchema = external_exports.string().regex(idPattern, "IDs use letters, digits, '.', '_', ':' or '-' and start with a letter or digit (max 80 chars)");
     shortText = external_exports.string().trim().min(1).max(200);
@@ -25422,6 +25423,11 @@ var init_diff = __esm({
       /\.skip\s*\(/,
       /\b(?:it|test|describe|context|suite)\.skip\b/,
       /\.skipIf\s*\(/,
+      // node:test options: test('name', { skip: true }, fn) or { todo: 'reason' }.
+      // A bare `it.todo('later')` placeholder has no body to lose and is not flagged.
+      /\b(?:it|test|describe|suite)\s*\([^)]*\{\s*(?:skip|todo)\s*:(?!\s*false\b)/,
+      /\b(?:t|ctx)\.todo\s*\(/,
+      /\b(?:it|test|describe)\.fixme\b/,
       /\b(?:xit|xdescribe|xtest|xcontext|xspecify)\s*\(/,
       /@pytest\.mark\.(?:skip|skipif|xfail)\b/,
       /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/,
@@ -26335,7 +26341,7 @@ function renderSarif(report) {
         tool: {
           driver: {
             name: "Rassam",
-            informationUri: "https://rassam.dev",
+            informationUri: PROJECT_URL,
             version: report.tool.version,
             rules: kinds.map((kind) => ({
               id: kind,
@@ -30771,7 +30777,7 @@ function renderReadmeBlock(input2) {
     `  <img alt="Blueprint check" src="${src("badge-blueprint.svg")}">`,
     `  <img alt="System status" src="${src("badge-system.svg")}">`,
     "</p>",
-    `<p align="center"><sub>Updated on every push by <a href="https://rassam.dev">Rassam</a> · status as of ${escapeHtml(captionTime(input2.generatedAt))}</sub></p>`,
+    `<p align="center"><sub>Updated on every push by <a href="${PROJECT_URL}">Rassam</a> · status as of ${escapeHtml(captionTime(input2.generatedAt))}</sub></p>`,
     "",
     "<details>",
     `<summary>Components (${blueprint.components.length})</summary>`,
@@ -30800,6 +30806,7 @@ var README_START, README_END, STATE_LABEL2;
 var init_readme = __esm({
   "src/cli/readme.ts"() {
     "use strict";
+    init_schema();
     README_START = "<!-- rassam:system:start -->";
     README_END = "<!-- rassam:system:end -->";
     STATE_LABEL2 = { up: "Up", degraded: "Degraded", down: "Down", unknown: "No data" };
