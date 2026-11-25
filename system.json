@@ -1,0 +1,504 @@
+{
+  "schemaVersion": 1,
+  "system": "Rassam",
+  "commit": "df304d1b86540dfd2a72798d67ae1c8589fe2d59",
+  "generatedAt": "2026-11-25T21:01:46Z",
+  "verdict": "pass",
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "infos": 0,
+    "newFindings": 0,
+    "components": 20,
+    "filesAnalyzed": 251,
+    "filesMapped": 251,
+    "filesUnmapped": 0,
+    "componentEdges": 50,
+    "undeclaredEdges": 0,
+    "humanAuthoredRatio": 0.985
+  },
+  "graph": {
+    "components": [
+      {
+        "id": "web-shell",
+        "name": "Web shell",
+        "kind": "route",
+        "external": false,
+        "findings": 0,
+        "files": 2
+      },
+      {
+        "id": "api",
+        "name": "API routes",
+        "kind": "api",
+        "external": false,
+        "findings": 0,
+        "files": 14
+      },
+      {
+        "id": "ui-primitives",
+        "name": "UI primitives",
+        "kind": "component",
+        "external": false,
+        "findings": 0,
+        "files": 14
+      },
+      {
+        "id": "studio",
+        "name": "Studio",
+        "kind": "component",
+        "external": false,
+        "findings": 0,
+        "files": 16
+      },
+      {
+        "id": "blueprint-ui",
+        "name": "Blueprint UI",
+        "kind": "component",
+        "external": false,
+        "findings": 0,
+        "files": 19
+      },
+      {
+        "id": "hooks",
+        "name": "State hooks",
+        "kind": "hook",
+        "external": false,
+        "findings": 0,
+        "files": 1
+      },
+      {
+        "id": "blueprint-client",
+        "name": "Blueprint client",
+        "kind": "service",
+        "external": false,
+        "findings": 0,
+        "files": 11
+      },
+      {
+        "id": "local-store",
+        "name": "Settings store",
+        "kind": "storage",
+        "external": false,
+        "findings": 0,
+        "files": 1
+      },
+      {
+        "id": "blueprint-intent",
+        "name": "Blueprint intent",
+        "kind": "service",
+        "external": false,
+        "findings": 0,
+        "files": 2
+      },
+      {
+        "id": "github-gateway",
+        "name": "GitHub gateway",
+        "kind": "gateway",
+        "external": false,
+        "findings": 0,
+        "files": 2
+      },
+      {
+        "id": "server-platform",
+        "name": "Server platform",
+        "kind": "middleware",
+        "external": false,
+        "findings": 0,
+        "files": 5
+      },
+      {
+        "id": "llm-providers",
+        "name": "LLM providers",
+        "kind": "service",
+        "external": false,
+        "findings": 0,
+        "files": 12
+      },
+      {
+        "id": "shared",
+        "name": "Shared library",
+        "kind": "utility",
+        "external": false,
+        "findings": 0,
+        "files": 3
+      },
+      {
+        "id": "blueprint-engine",
+        "name": "Blueprint engine",
+        "kind": "core",
+        "external": false,
+        "findings": 0,
+        "files": 33
+      },
+      {
+        "id": "cli",
+        "name": "CLI and MCP server",
+        "kind": "client",
+        "external": false,
+        "findings": 0,
+        "files": 32
+      },
+      {
+        "id": "tooling",
+        "name": "Build tooling",
+        "kind": "config",
+        "external": false,
+        "findings": 0,
+        "files": 13
+      },
+      {
+        "id": "tests",
+        "name": "Tests",
+        "kind": "test",
+        "external": false,
+        "findings": 0,
+        "files": 63
+      },
+      {
+        "id": "bench",
+        "name": "Gate benchmark",
+        "kind": "test",
+        "external": false,
+        "findings": 0,
+        "files": 13
+      },
+      {
+        "id": "github-api",
+        "name": "GitHub API",
+        "kind": "external-api",
+        "external": true,
+        "findings": 0,
+        "files": 0
+      },
+      {
+        "id": "llm-apis",
+        "name": "Model provider APIs",
+        "kind": "external-api",
+        "external": true,
+        "findings": 0,
+        "files": 0
+      }
+    ],
+    "edges": [
+      {
+        "from": "api",
+        "to": "blueprint-client",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "api",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 17
+      },
+      {
+        "from": "api",
+        "to": "blueprint-intent",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "api",
+        "to": "github-gateway",
+        "status": "declared",
+        "count": 6
+      },
+      {
+        "from": "api",
+        "to": "llm-providers",
+        "status": "declared",
+        "count": 7
+      },
+      {
+        "from": "api",
+        "to": "server-platform",
+        "status": "declared",
+        "count": 23
+      },
+      {
+        "from": "api",
+        "to": "shared",
+        "status": "declared",
+        "count": 7
+      },
+      {
+        "from": "bench",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 6
+      },
+      {
+        "from": "blueprint-client",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 25
+      },
+      {
+        "from": "blueprint-intent",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 4
+      },
+      {
+        "from": "blueprint-ui",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 14
+      },
+      {
+        "from": "blueprint-ui",
+        "to": "hooks",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "blueprint-ui",
+        "to": "shared",
+        "status": "declared",
+        "count": 6
+      },
+      {
+        "from": "blueprint-ui",
+        "to": "ui-primitives",
+        "status": "declared",
+        "count": 9
+      },
+      {
+        "from": "cli",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 82
+      },
+      {
+        "from": "github-gateway",
+        "to": "server-platform",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "github-gateway",
+        "to": "shared",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "hooks",
+        "to": "blueprint-client",
+        "status": "declared",
+        "count": 7
+      },
+      {
+        "from": "hooks",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 9
+      },
+      {
+        "from": "hooks",
+        "to": "local-store",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "llm-providers",
+        "to": "server-platform",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "local-store",
+        "to": "llm-providers",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "server-platform",
+        "to": "shared",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "studio",
+        "to": "blueprint-client",
+        "status": "declared",
+        "count": 3
+      },
+      {
+        "from": "studio",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 5
+      },
+      {
+        "from": "studio",
+        "to": "blueprint-ui",
+        "status": "declared",
+        "count": 27
+      },
+      {
+        "from": "studio",
+        "to": "hooks",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "studio",
+        "to": "ui-primitives",
+        "status": "declared",
+        "count": 37
+      },
+      {
+        "from": "tests",
+        "to": "api",
+        "status": "declared",
+        "count": 12
+      },
+      {
+        "from": "tests",
+        "to": "bench",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "tests",
+        "to": "blueprint-client",
+        "status": "declared",
+        "count": 7
+      },
+      {
+        "from": "tests",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 101
+      },
+      {
+        "from": "tests",
+        "to": "blueprint-intent",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "tests",
+        "to": "blueprint-ui",
+        "status": "declared",
+        "count": 19
+      },
+      {
+        "from": "tests",
+        "to": "cli",
+        "status": "declared",
+        "count": 35
+      },
+      {
+        "from": "tests",
+        "to": "github-gateway",
+        "status": "declared",
+        "count": 4
+      },
+      {
+        "from": "tests",
+        "to": "hooks",
+        "status": "declared",
+        "count": 2
+      },
+      {
+        "from": "tests",
+        "to": "llm-providers",
+        "status": "declared",
+        "count": 6
+      },
+      {
+        "from": "tests",
+        "to": "local-store",
+        "status": "declared",
+        "count": 4
+      },
+      {
+        "from": "tests",
+        "to": "server-platform",
+        "status": "declared",
+        "count": 14
+      },
+      {
+        "from": "tests",
+        "to": "shared",
+        "status": "declared",
+        "count": 3
+      },
+      {
+        "from": "tests",
+        "to": "studio",
+        "status": "declared",
+        "count": 13
+      },
+      {
+        "from": "tests",
+        "to": "ui-primitives",
+        "status": "declared",
+        "count": 11
+      },
+      {
+        "from": "tests",
+        "to": "web-shell",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "tooling",
+        "to": "blueprint-engine",
+        "status": "declared",
+        "count": 6
+      },
+      {
+        "from": "tooling",
+        "to": "cli",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "web-shell",
+        "to": "llm-providers",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "web-shell",
+        "to": "local-store",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "web-shell",
+        "to": "shared",
+        "status": "declared",
+        "count": 1
+      },
+      {
+        "from": "web-shell",
+        "to": "ui-primitives",
+        "status": "declared",
+        "count": 1
+      }
+    ]
+  },
+  "status": null,
+  "base": {
+    "ref": "HEAD~1",
+    "sha": "3551744cca6591ade3e7d6f463d38b8d0d203da2"
+  },
+  "diff": {
+    "components": {
+      "added": [],
+      "removed": []
+    },
+    "edges": {
+      "added": [],
+      "removed": [],
+      "statusChanged": []
+    },
+    "summary": "No architecture changes",
+    "changed": false
+  }
+}
