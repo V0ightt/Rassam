@@ -144,18 +144,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: V0ightt/Rassam@<full 40-character commit SHA> # v0.4.0
+      - uses: V0ightt/Rassam@<full 40-character commit SHA> # v0.4.1
 ```
 
 ### Pin the action
 
 A gate that runs with your repository's token should not change underneath you. In order of preference:
 
-1. **A full commit SHA, with the version as a comment**: `uses: V0ightt/Rassam@<sha> # v0.4.0`. A SHA cannot be moved. When tj-actions/changed-files was compromised in 2025, workflows pinned to a SHA were the ones that stayed safe. Find the SHA of a release with `git ls-remote https://github.com/V0ightt/Rassam refs/tags/v0.4.0` (it is also on the release page). Dependabot (`package-ecosystem: github-actions`) and Renovate update SHA pins and keep the comment in step.
-2. **A release tag**: `uses: V0ightt/Rassam@v0.4.0`. Readable, and what `init` writes. A tag can in principle be re-pointed by whoever controls this repository (GitHub's immutable releases prevent that once enabled), so organisations that require pinning usually ask for SHAs.
+1. **A full commit SHA, with the version as a comment**: `uses: V0ightt/Rassam@<sha> # v0.4.1`. A SHA cannot be moved. When tj-actions/changed-files was compromised in 2025, workflows pinned to a SHA were the ones that stayed safe. Find the SHA of a release with `git ls-remote https://github.com/V0ightt/Rassam refs/tags/v0.4.1` (it is also on the release page). Dependabot (`package-ecosystem: github-actions`) and Renovate update SHA pins and keep the comment in step.
+2. **A release tag**: `uses: V0ightt/Rassam@v0.4.1`. Readable, and what `init` writes. A tag can in principle be re-pointed by whoever controls this repository (GitHub's immutable releases prevent that once enabled), so organisations that require pinning usually ask for SHAs.
 3. **Never a branch** such as `@main`: every push to it would change the checker that judges your code.
 
-The CLI and the action come from the same release, so keep `npx @v0ightt/rassam@0.4.0` in `.mcp.json` and `V0ightt/Rassam@… # v0.4.0` in the workflow on the same version.
+The CLI and the action come from the same release, so keep `npx @v0ightt/rassam@0.4.1` in `.mcp.json` and `V0ightt/Rassam@… # v0.4.1` in the workflow on the same version.
 
 ### Permissions
 
@@ -204,7 +204,7 @@ Two channels, and you want both. `AGENTS.md` (step 1) tells every agent the rule
 ```json
 {
   "mcpServers": {
-    "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.0", "mcp"] }
+    "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.1", "mcp"] }
   }
 }
 ```
@@ -216,7 +216,7 @@ Two channels, and you want both. `AGENTS.md` (step 1) tells every agent the rule
 ```toml
 [mcp_servers.rassam]
 command = "npx"
-args = ["-y", "@v0ightt/rassam@0.4.0", "mcp"]
+args = ["-y", "@v0ightt/rassam@0.4.1", "mcp"]
 ```
 
 **VS Code**: `.vscode/mcp.json` (note the key is `servers`):
@@ -224,12 +224,12 @@ args = ["-y", "@v0ightt/rassam@0.4.0", "mcp"]
 ```json
 {
   "servers": {
-    "rassam": { "type": "stdio", "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.0", "mcp"] }
+    "rassam": { "type": "stdio", "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.1", "mcp"] }
   }
 }
 ```
 
-On native Windows some clients cannot start `npx` directly; use `"command": "cmd", "args": ["/c", "npx", "-y", "@v0ightt/rassam@0.4.0", "mcp"]` there. The server uses the repository it is started in; if your agent starts MCP servers elsewhere, add `"--root", "/path/to/your/repo"` to `args`.
+On native Windows some clients cannot start `npx` directly; use `"command": "cmd", "args": ["/c", "npx", "-y", "@v0ightt/rassam@0.4.1", "mcp"]` there. The server uses the repository it is started in; if your agent starts MCP servers elsewhere, add `"--root", "/path/to/your/repo"` to `args`.
 
 All of these files are tripwires: the pull request that adds them shows `protected-path` findings for MCP configuration and agent instructions. That is the gate working. From now on, any change to what your agents can reach or are told gets a human look.
 

@@ -92,7 +92,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - uses: V0ightt/Rassam@<full commit SHA> # v0.4.0
+      - uses: V0ightt/Rassam@<full commit SHA> # v0.4.1
 ```
 
 - **A pull request can't loosen its own rules.** It's judged by the blueprint on the *base* branch. Removing a rule, lowering a severity or moving files out of a constrained component fails until a human adds the `rassam:approved` label.
@@ -100,7 +100,7 @@ jobs:
 - **Only new problems fail.** Old mess is reported quietly, so you can adopt it on a legacy codebase today.
 - **It respects your attention.** One sticky comment, the top few findings first, each with file and line.
 
-Pin the action to a full commit SHA with the version as a comment (`@<sha> # v0.4.0`), or at least to a release tag (`@v0.4.0`); never to `@main`. [Why, and how to find the SHA.](docs/getting-started.md#pin-the-action)
+Pin the action to a full commit SHA with the version as a comment (`@<sha> # v0.4.1`), or at least to a release tag (`@v0.4.1`); never to `@main`. [Why, and how to find the SHA.](docs/getting-started.md#pin-the-action)
 
 We measure the gate instead of bragging: on [116 labelled cases](bench/gate/RESULTS.md), 48 of 79 attacks fail the check outright, most of the rest reach a human as a warning, and none of the 37 legitimate changes fails. The misses are written down too.
 
@@ -124,7 +124,7 @@ We measure the gate instead of bragging: on [116 labelled cases](bench/gate/RESU
 `init` wires Claude Code. For anything else, the server is one command over stdio:
 
 ```json
-{ "mcpServers": { "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.0", "mcp"] } } }
+{ "mcpServers": { "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.1", "mcp"] } } }
 ```
 
 | The agent asks | Rassam answers |

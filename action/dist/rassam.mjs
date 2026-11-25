@@ -76,7 +76,7 @@ var init_constants = __esm({
   "src/blueprint/constants.ts"() {
     "use strict";
     ENGINE_NAME = "rassam";
-    ENGINE_VERSION = "0.4.0";
+    ENGINE_VERSION = "0.4.1";
     PACKAGE_NAME = "@v0ightt/rassam";
     MAX_ANALYZED_FILE_BYTES = 512 * 1024;
     DEFAULT_IGNORE = [
