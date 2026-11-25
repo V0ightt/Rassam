@@ -1,7 +1,7 @@
 // Shared defaults for the blueprint engine.
 
 export const ENGINE_NAME = "rassam" as const;
-export const ENGINE_VERSION = "0.4.0";
+export const ENGINE_VERSION = "0.4.1";
 /**
  * The npm package that ships the CLI and MCP server (`packages/rassam/`).
  * Generated files (`.mcp.json`, workflows, agent instructions) run it with npx,

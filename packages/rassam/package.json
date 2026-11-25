@@ -1,6 +1,6 @@
 {
   "name": "@v0ightt/rassam",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "The architecture contract for agent-built software: the rassam CLI (blueprint, CI gate) and the MCP server coding agents ask before they edit.",
   "keywords": [
     "architecture",

@@ -3,7 +3,7 @@
   "name": "io.github.V0ightt/rassam",
   "title": "Rassam Blueprint",
   "description": "Architecture contract for coding agents: who owns a file, which imports are allowed, check changes.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "repository": {
     "url": "https://github.com/V0ightt/Rassam",
     "source": "github",
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@v0ightt/rassam",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

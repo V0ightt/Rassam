@@ -19,7 +19,7 @@ To give an agent the MCP server, add it to `.mcp.json` (or your agent's MCP sett
 ```json
 {
   "mcpServers": {
-    "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.0", "mcp"] }
+    "rassam": { "command": "npx", "args": ["-y", "@v0ightt/rassam@0.4.1", "mcp"] }
   }
 }
 ```
@@ -40,10 +40,10 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - uses: V0ightt/Rassam@v0.4.0
+      - uses: V0ightt/Rassam@v0.4.1
 ```
 
-For the strongest pin, use the release's full commit SHA with the version in a comment (`uses: V0ightt/Rassam@<sha> # v0.4.0`).
+For the strongest pin, use the release's full commit SHA with the version in a comment (`uses: V0ightt/Rassam@<sha> # v0.4.1`).
 
 ## Learn more
 

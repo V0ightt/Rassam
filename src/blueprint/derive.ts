@@ -99,6 +99,9 @@ const MAX_CHILDREN = 10;
 const MAX_SPLIT_DEPTH = 6;
 /** Folders that hold one concern however many subfolders they have: never split per child. */
 const NO_SPLIT = new Set(["benchmarks", "benchmark", "bench", "examples", "example", "demo", "demos", "docs", "doc", "scripts", "e2e", "fixtures", "__fixtures__", "testdata", "migrations"]);
+/** Folder names that name a layer even though they imply no particular kind (every name in KIND_BY_SEGMENT counts too). */
+const LAYER_NAMES = new Set(["web", "frontend", "backend", "storage", "data", "persistence", "infra", "infrastructure", "controllers", "handlers"]);
+const isLayerName = (name: string): boolean => Object.hasOwn(KIND_BY_SEGMENT, name) || LAYER_NAMES.has(name);
 /** `src/main/java` and friends, at the repository root or inside a module of a multi-module build. */
 const JVM_SOURCE_ROOT = /(?:^|\/)src\/main\/(?:java|kotlin|scala)$/;
 
@@ -228,6 +231,19 @@ function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxCompo
   const tree = buildTree(sourceFiles);
   const minSplit = Math.max(4, Math.round(maxFiles / 4));
 
+  // A folder that only wraps another (packages/x → packages/x/src) stands for the folder where that chain ends.
+  const unwrap = (dir: string): string => {
+    let target = dir;
+    while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+    return target;
+  };
+  // Size alone would leave a small repository as one component, with nothing to
+  // put a rule between. Where its folders name layers (src/web, src/api, src/db),
+  // each folder becomes a component however few files it holds.
+  const smallRepository = sourceFiles.length <= maxFiles;
+  const layered = (dir: string): boolean => smallRepository
+    && tree.children(dir).filter((sub) => isLayerName(paths.basename(sub).toLowerCase())).length >= 2;
+
   const jvmBases = new Map<string, string>();
   const jvmChain = new Set<string>();
   for (const dir of tree.directories()) {
@@ -244,9 +260,9 @@ function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxCompo
   }
 
   const whole = (dir: string): Cluster => ({ directory: dir, shape: "whole", merged: [], size: tree.count(dir) });
-  const split = (dir: string, cap: number): Cluster[] => {
+  const split = (dir: string, cap: number, keepSmall = false): Cluster[] => {
     const subs = tree.children(dir);
-    let own = subs.filter((sub) => subs.length === 1 || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
+    let own = subs.filter((sub) => subs.length === 1 || keepSmall || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
     if (own.length > cap) {
       const keep = new Set(
         own
@@ -266,12 +282,12 @@ function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxCompo
     return pieces;
   };
 
-  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)));
+  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)), layered(""));
   const settled = new Set<string>();
   const splittable = (cluster: Cluster): boolean => {
     if (cluster.shape !== "whole" || settled.has(cluster.directory) || !tree.children(cluster.directory).length) return false;
     if (jvmChain.has(cluster.directory)) return true;
-    return cluster.size > maxFiles
+    return (cluster.size > maxFiles || layered(unwrap(cluster.directory)))
       && segmentsOf(cluster.directory).length < MAX_SPLIT_DEPTH
       && !NO_SPLIT.has(paths.basename(cluster.directory).toLowerCase());
   };
@@ -292,11 +308,11 @@ function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxCompo
       if (!(pieces.length >= 2 || (pieces.length === 1 && pieces[0].shape === "whole"))) continue;
     } else {
       // A folder that only wraps another (packages/x → packages/x/src) is split where that chain ends, or not at all.
-      let target = next.directory;
-      while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+      const target = unwrap(next.directory);
       if (segmentsOf(target).length >= MAX_SPLIT_DEPTH || NO_SPLIT.has(paths.basename(target).toLowerCase())) continue;
-      pieces = split(target, MAX_CHILDREN);
-      if (pieces.length < 2 || pieces.filter((piece) => piece.size >= minSplit).length < 2) continue;
+      const byLayer = layered(target);
+      pieces = split(target, MAX_CHILDREN, byLayer);
+      if (pieces.length < 2 || (!byLayer && pieces.filter((piece) => piece.size >= minSplit).length < 2)) continue;
     }
     if (clusters.length - 1 + pieces.length > maxComponents) continue;
     clusters = clusters.flatMap((cluster) => (cluster === next ? pieces : [cluster]));

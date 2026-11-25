@@ -2,7 +2,14 @@
 
 All notable changes are documented here. Rassam follows Semantic Versioning once 1.0.0 is released.
 
-## Unreleased
+## 0.4.1 (2026-11-25)
+
+### Fixed
+
+- A small repository is no longer drafted as one component. When it has at most 40 source files and at least two of a folder's subfolders name layers (`web`, `api`, `db`, `domain`, `ui`, `frontend`, `backend`, `storage` and similar, as in `src/web`, `src/api`, `src/db`), `rassam init` and the Studio make each of those subfolders a component however few files it holds, so there is something to put a rule between. Larger repositories draft as before.
+- The release guide's first manual publish: `--provenance=false`, two-factor authentication without a USB key, and when to approve the waiting deployment.
+
+## 0.4.0 (2026-11-25)
 
 ### Added
 
