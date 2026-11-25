@@ -229,6 +229,12 @@ describe("deriveBlueprint: small repositories", () => {
     expect(unmapped(draft, orbit)).toEqual([]);
   });
 
+  it("counts web, frontend, backend and storage as layers", () => {
+    expect(ids(derive([code("src/web/page.ts"), code("src/api/orders.ts")]))).toEqual(["api", "web"]);
+    expect(ids(derive([code("frontend/app.ts"), code("backend/server.ts")]))).toEqual(["backend", "frontend"]);
+    expect(ids(derive([code("src/web/page.ts"), code("src/storage/db.ts")]))).toEqual(["storage", "web"]);
+  });
+
   it("leaves a small repository whole when no folder names a layer", () => {
     const files = [code("src/foo/a.ts"), code("src/bar/b.ts"), code("src/baz/c.ts")];
     expect(derive(files).components.filter((candidate) => candidate.kind !== "test")).toHaveLength(1);

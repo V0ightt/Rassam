@@ -27405,7 +27405,7 @@ function clusterFiles(sourceFiles, maxFiles, maxComponents) {
     return target;
   };
   const smallRepository = sourceFiles.length <= maxFiles;
-  const layered = (dir) => smallRepository && tree.children(dir).filter((sub) => Object.hasOwn(KIND_BY_SEGMENT, basename(sub).toLowerCase())).length >= 2;
+  const layered = (dir) => smallRepository && tree.children(dir).filter((sub) => isLayerName(basename(sub).toLowerCase())).length >= 2;
   const jvmBases = /* @__PURE__ */ new Map();
   const jvmChain = /* @__PURE__ */ new Set();
   for (const dir of tree.directories()) {
@@ -27710,7 +27710,7 @@ function deriveBlueprint(files, options = {}) {
   draft2.rules = rules;
   return draft2;
 }
-var KIND_BY_SEGMENT, PROVENANCE_SOURCE, MIN_FOLDER_FILES, MAX_CHILDREN, MAX_SPLIT_DEPTH, NO_SPLIT, JVM_SOURCE_ROOT, CONFIG_FILE_PATTERNS, segmentsOf, comparePaths, fileText, packageTitle;
+var KIND_BY_SEGMENT, PROVENANCE_SOURCE, MIN_FOLDER_FILES, MAX_CHILDREN, MAX_SPLIT_DEPTH, NO_SPLIT, LAYER_NAMES, isLayerName, JVM_SOURCE_ROOT, CONFIG_FILE_PATTERNS, segmentsOf, comparePaths, fileText, packageTitle;
 var init_derive = __esm({
   "src/blueprint/derive.ts"() {
     "use strict";
@@ -27790,6 +27790,8 @@ var init_derive = __esm({
     MAX_CHILDREN = 10;
     MAX_SPLIT_DEPTH = 6;
     NO_SPLIT = /* @__PURE__ */ new Set(["benchmarks", "benchmark", "bench", "examples", "example", "demo", "demos", "docs", "doc", "scripts", "e2e", "fixtures", "__fixtures__", "testdata", "migrations"]);
+    LAYER_NAMES = /* @__PURE__ */ new Set(["web", "frontend", "backend", "storage", "data", "persistence", "infra", "infrastructure", "controllers", "handlers"]);
+    isLayerName = (name) => Object.hasOwn(KIND_BY_SEGMENT, name) || LAYER_NAMES.has(name);
     JVM_SOURCE_ROOT = /(?:^|\/)src\/main\/(?:java|kotlin|scala)$/;
     CONFIG_FILE_PATTERNS = [
       /\.config\.[cm]?[jt]sx?$/i,

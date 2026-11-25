@@ -99,6 +99,9 @@ const MAX_CHILDREN = 10;
 const MAX_SPLIT_DEPTH = 6;
 /** Folders that hold one concern however many subfolders they have: never split per child. */
 const NO_SPLIT = new Set(["benchmarks", "benchmark", "bench", "examples", "example", "demo", "demos", "docs", "doc", "scripts", "e2e", "fixtures", "__fixtures__", "testdata", "migrations"]);
+/** Folder names that name a layer even though they imply no particular kind (every name in KIND_BY_SEGMENT counts too). */
+const LAYER_NAMES = new Set(["web", "frontend", "backend", "storage", "data", "persistence", "infra", "infrastructure", "controllers", "handlers"]);
+const isLayerName = (name: string): boolean => Object.hasOwn(KIND_BY_SEGMENT, name) || LAYER_NAMES.has(name);
 /** `src/main/java` and friends, at the repository root or inside a module of a multi-module build. */
 const JVM_SOURCE_ROOT = /(?:^|\/)src\/main\/(?:java|kotlin|scala)$/;
 
@@ -239,7 +242,7 @@ function clusterFiles(sourceFiles: readonly string[], maxFiles: number, maxCompo
   // each folder becomes a component however few files it holds.
   const smallRepository = sourceFiles.length <= maxFiles;
   const layered = (dir: string): boolean => smallRepository
-    && tree.children(dir).filter((sub) => Object.hasOwn(KIND_BY_SEGMENT, paths.basename(sub).toLowerCase())).length >= 2;
+    && tree.children(dir).filter((sub) => isLayerName(paths.basename(sub).toLowerCase())).length >= 2;
 
   const jvmBases = new Map<string, string>();
   const jvmChain = new Set<string>();
