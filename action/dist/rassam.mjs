@@ -27399,6 +27399,13 @@ function buildTree(sourceFiles) {
 function clusterFiles(sourceFiles, maxFiles, maxComponents) {
   const tree = buildTree(sourceFiles);
   const minSplit = Math.max(4, Math.round(maxFiles / 4));
+  const unwrap = (dir) => {
+    let target = dir;
+    while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+    return target;
+  };
+  const smallRepository = sourceFiles.length <= maxFiles;
+  const layered = (dir) => smallRepository && tree.children(dir).filter((sub) => Object.hasOwn(KIND_BY_SEGMENT, basename(sub).toLowerCase())).length >= 2;
   const jvmBases = /* @__PURE__ */ new Map();
   const jvmChain = /* @__PURE__ */ new Set();
   for (const dir of tree.directories()) {
@@ -27414,9 +27421,9 @@ function clusterFiles(sourceFiles, maxFiles, maxComponents) {
     }
   }
   const whole = (dir) => ({ directory: dir, shape: "whole", merged: [], size: tree.count(dir) });
-  const split = (dir, cap) => {
+  const split = (dir, cap, keepSmall = false) => {
     const subs = tree.children(dir);
-    let own2 = subs.filter((sub) => subs.length === 1 || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
+    let own2 = subs.filter((sub) => subs.length === 1 || keepSmall || tree.count(sub) >= MIN_FOLDER_FILES || jvmChain.has(sub));
     if (own2.length > cap) {
       const keep = new Set(
         own2.filter((sub) => tree.count(sub) >= minSplit || jvmChain.has(sub)).sort((left, right) => tree.count(right) - tree.count(left) || comparePaths(left, right)).slice(0, Math.max(1, cap - 1))
@@ -27432,12 +27439,12 @@ function clusterFiles(sourceFiles, maxFiles, maxComponents) {
     }
     return pieces;
   };
-  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)));
+  let clusters = split("", Math.max(2, Math.min(MAX_CHILDREN, maxComponents)), layered(""));
   const settled = /* @__PURE__ */ new Set();
   const splittable = (cluster) => {
     if (cluster.shape !== "whole" || settled.has(cluster.directory) || !tree.children(cluster.directory).length) return false;
     if (jvmChain.has(cluster.directory)) return true;
-    return cluster.size > maxFiles && segmentsOf(cluster.directory).length < MAX_SPLIT_DEPTH && !NO_SPLIT.has(basename(cluster.directory).toLowerCase());
+    return (cluster.size > maxFiles || layered(unwrap(cluster.directory))) && segmentsOf(cluster.directory).length < MAX_SPLIT_DEPTH && !NO_SPLIT.has(basename(cluster.directory).toLowerCase());
   };
   for (; ; ) {
     const next = clusters.filter(splittable).sort((left, right) => Number(jvmChain.has(right.directory)) - Number(jvmChain.has(left.directory)) || right.size - left.size || comparePaths(left.directory, right.directory))[0];
@@ -27448,11 +27455,11 @@ function clusterFiles(sourceFiles, maxFiles, maxComponents) {
       pieces = split(next.directory, MAX_CHILDREN);
       if (!(pieces.length >= 2 || pieces.length === 1 && pieces[0].shape === "whole")) continue;
     } else {
-      let target = next.directory;
-      while (!tree.direct(target).length && tree.children(target).length === 1) target = tree.children(target)[0];
+      const target = unwrap(next.directory);
       if (segmentsOf(target).length >= MAX_SPLIT_DEPTH || NO_SPLIT.has(basename(target).toLowerCase())) continue;
-      pieces = split(target, MAX_CHILDREN);
-      if (pieces.length < 2 || pieces.filter((piece) => piece.size >= minSplit).length < 2) continue;
+      const byLayer = layered(target);
+      pieces = split(target, MAX_CHILDREN, byLayer);
+      if (pieces.length < 2 || !byLayer && pieces.filter((piece) => piece.size >= minSplit).length < 2) continue;
     }
     if (clusters.length - 1 + pieces.length > maxComponents) continue;
     clusters = clusters.flatMap((cluster) => cluster === next ? pieces : [cluster]);

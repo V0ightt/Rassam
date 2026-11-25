@@ -202,6 +202,53 @@ describe("deriveBlueprint: libraries with many small folders", () => {
   });
 });
 
+describe("deriveBlueprint: small repositories", () => {
+  const ids = (draft: Blueprint) => draft.components.map((candidate) => candidate.id);
+
+  it("splits a small repository into the layers its folders name, one file each", () => {
+    const files = [
+      json("package.json", { name: "shop" }),
+      code("src/web/page.js", "import { getOrders } from '../api/orders.js';\n"),
+      code("src/api/orders.js", "import { query } from '../db/client.js';\n"),
+      code("src/db/client.js"),
+    ];
+    const draft = derive(files);
+    expect(ids(draft)).toEqual(["api", "db", "web"]);
+    expect(component(draft, "web")?.paths).toEqual(["src/web/**"]);
+    expect(component(draft, "db")?.kind).toBe("database");
+    expect(unmapped(draft, files)).toEqual([]);
+  });
+
+  it("splits layers at the repository root, and keeps siblings that are not named like a layer", () => {
+    const rootLayers = [code("web/a.ts"), code("api/b.ts"), code("db/c.ts")];
+    expect(ids(derive(rootLayers))).toEqual(["api", "db", "web"]);
+
+    const orbit = ["web", "api", "domain", "auth", "billing", "storage"].map((name) => code(`src/${name}/${name}.ts`));
+    const draft = derive(orbit);
+    expect(ids(draft)).toEqual(["api", "auth", "billing", "domain", "storage", "web"]);
+    expect(unmapped(draft, orbit)).toEqual([]);
+  });
+
+  it("leaves a small repository whole when no folder names a layer", () => {
+    const files = [code("src/foo/a.ts"), code("src/bar/b.ts"), code("src/baz/c.ts")];
+    expect(derive(files).components.filter((candidate) => candidate.kind !== "test")).toHaveLength(1);
+  });
+
+  it("does not split small layered folders inside a larger repository", () => {
+    const files = [
+      ...range(40).map((index) => code(`packages/big/f${index}.ts`)),
+      ...range(12).map((index) => code(`packages/small/f${index}.ts`)),
+      code("packages/feature/ui/a.tsx"),
+      code("packages/feature/api/b.ts"),
+      code("packages/feature/db/c.ts"),
+    ];
+    const draft = derive(files);
+    expect(component(draft, "feature")?.paths).toEqual(["packages/feature/**"]);
+    expect(draft.components.filter((candidate) => candidate.paths.some((path) => /^packages\/feature\/(?:ui|api|db)\//.test(path)))).toEqual([]);
+    expect(unmapped(draft, files)).toEqual([]);
+  });
+});
+
 describe("deriveBlueprint: invariants of a draft", () => {
   const files: SourceFile[] = [
     json("package.json", { name: "shop" }),
@@ -225,7 +272,9 @@ describe("deriveBlueprint: invariants of a draft", () => {
     expect(parseBlueprint(JSON.parse(serializeBlueprint(draft))).ok).toBe(true);
     for (const fact of [...draft.components, ...draft.dependencies, ...draft.rules]) expect(fact.provenance?.source).toBe("derived");
     expect(draft.rules.map((rule) => rule.id)).toEqual(["no-component-cycles", "tests-are-leaves"]);
-    expect(component(draft, "shop")).toMatchObject({ name: "Shop", paths: ["src/**"] });
+    // A small repository is split where its folders name layers (ui, domain).
+    expect(draft.components.map((candidate) => candidate.id)).toEqual(["domain", "infra", "ui", "tests"]);
+    expect(draft.dependencies.map((dependency) => `${dependency.from}->${dependency.to}`)).toEqual(expect.arrayContaining(["ui->domain", "domain->infra"]));
     const report = runCheck({ files, blueprint: draft });
     expect(report.findings.filter((finding) => finding.severity === "error")).toEqual([]);
   });

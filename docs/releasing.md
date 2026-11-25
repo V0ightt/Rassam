@@ -16,11 +16,19 @@ The package name is `PACKAGE_NAME` in `src/blueprint/constants.ts` (today `@v0ig
 
 ### npm
 
-1. Use the npm account that owns the scope (`v0ightt` for `@v0ightt/rassam`, or an npm organization of that name) and turn on two-factor authentication.
+1. Use the npm account that owns the scope (`v0ightt` for `@v0ightt/rassam`, or an npm organization of that name; do not convert that user into an organization) and turn on two-factor authentication. npm refuses to publish without it. npm only offers security keys, but a USB key is not needed: Windows Hello (a PIN is enough), Touch ID or a phone over Bluetooth all count. If the browser's prompt asks for a USB key, cancel it once to get the list of other options. Keep the recovery codes away from that device.
 2. **Create the package with its first version by hand.** npm can only trust a workflow for a package that already exists, so the very first version cannot come from the workflow. Use the tarball the workflow built, so the GitHub release and npm serve the same bytes:
-   1. Do the per-release steps below for the first version and push its tag. Reject the `npm` deployment when it asks for approval (or let the publish job fail: there is no trusted publisher yet).
-   2. Download the `release` artifact from that run and publish the tarball inside it: `npm publish ./v0ightt-rassam-X.Y.Z.tgz --access public`. This version has no provenance statement; every later one has.
-   3. Re-run the failed jobs. The publish job sees the identical version on npm and skips it, then the GitHub release is created.
+   1. Do the per-release steps below for the first version and push its tag. When the build job passes, the run waits for approval of the `npm` deployment. Leave it waiting.
+   2. Download the `release` artifact from that run and publish the tarball inside it:
+
+      ```bash
+      gh run download <run id> --repo V0ightt/Rassam --name release --dir .pack/release-vX.Y.Z
+      npm login
+      npm publish ./.pack/release-vX.Y.Z/files/v0ightt-rassam-X.Y.Z.tgz --access public --provenance=false
+      ```
+
+      `--provenance=false` is required: the package asks for a provenance statement, which only a CI run can produce, so a publish from your machine fails without it. This version has no provenance statement; every later one has.
+   3. Wait until `npm view @v0ightt/rassam@X.Y.Z dist.integrity` shows the version (npm can take several minutes), then approve the waiting deployment. The publish job sees the identical version on npm and skips it, and the GitHub release is created. Approving earlier makes the publish job try to publish itself and fail; if that happens, re-run the failed jobs once the version shows up.
 3. **Add the trusted publisher shortly before the next release.** A new trusted publisher expires if no publish uses it within 2 days, so set it up when the next tag is ready. On npmjs.com, open the package → Settings → Trusted publishing → GitHub Actions, and enter exactly (every field is case-sensitive):
    - Organization or user: `V0ightt`
    - Repository: `Rassam`

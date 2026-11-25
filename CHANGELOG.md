@@ -4,6 +4,13 @@ All notable changes are documented here. Rassam follows Semantic Versioning once
 
 ## Unreleased
 
+### Fixed
+
+- A small repository is no longer drafted as one component. When it has at most 40 source files and its folders name layers (`src/web`, `src/api`, `src/db`), `rassam init` and the Studio make each of those folders a component however few files it holds, so there is something to put a rule between. Larger repositories draft as before.
+- The release guide's first manual publish: `--provenance=false`, two-factor authentication without a USB key, and when to approve the waiting deployment.
+
+## 0.4.0 (2026-11-25)
+
 ### Added
 
 - **Rassam Blueprint** (format v0.1): an open, human-owned architecture contract at `.rassam/blueprint.json` with components, intent, declared dependencies, six rule kinds (`forbid`, `allow-only`, `layers`, `no-cycles`, `protect`, `secret-access`), invariants, decisions, provenance and human sign-offs. Spec in `docs/blueprint-spec.md`, JSON Schema in `schema/`.
